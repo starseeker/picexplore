@@ -18,6 +18,7 @@ set(STB_DIR ${CMAKE_SOURCE_DIR}/third_party/stb)
 set(EPEG_DIR ${CMAKE_SOURCE_DIR}/third_party/epeg)
 set(LMDB_DIR ${CMAKE_SOURCE_DIR}/third_party/lmdb/libraries/liblmdb)
 set(CXXOPTS_DIR ${CMAKE_SOURCE_DIR}/third_party/cxxopts)
+set(STRUETYPE_DIR ${CMAKE_SOURCE_DIR}/third_party/struetype)
 
 # xxHash - compile the source
 add_library(xxhash STATIC ${XXHASH_DIR}/xxhash.c)
@@ -49,6 +50,19 @@ target_include_directories(image_thumb_db PRIVATE
 )
 target_link_libraries(image_thumb_db xxhash lmdb epeg_static)
 target_compile_options(image_thumb_db PRIVATE -g)
+
+# New thumb_gallery_pdf executable
+add_executable(thumb_gallery_pdf thumb_gallery_pdf.cpp)
+target_include_directories(thumb_gallery_pdf PRIVATE 
+    ${XXHASH_DIR}
+    ${STB_DIR} 
+    ${LMDB_DIR}
+    ${CXXOPTS_DIR}/include
+    ${STRUETYPE_DIR}
+    ${STRUETYPE_DIR}/examples
+)
+target_link_libraries(thumb_gallery_pdf xxhash lmdb)
+target_compile_options(thumb_gallery_pdf PRIVATE -g)
 
 # Local Variables:
 # tab-width: 8
