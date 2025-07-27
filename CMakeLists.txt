@@ -48,7 +48,7 @@ target_include_directories(image_thumb_db PRIVATE
     ${CXXOPTS_DIR}/include
     ${EPEG_DIR}/src/lib
 )
-target_link_libraries(image_thumb_db xxhash lmdb epeg_static)
+target_link_libraries(image_thumb_db xxhash lmdb epeg_static ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
 target_compile_options(image_thumb_db PRIVATE -g)
 
 # New thumb_gallery_pdf executable
