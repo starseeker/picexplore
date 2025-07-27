@@ -16,3 +16,9 @@
 [submodule "third_party/struetype"]
 	path = third_party/struetype
 	url = https://github.com/starseeker/struetype
+[submodule "third_party/libjpeg-turbo"]
+	path = third_party/libjpeg-turbo
+	url = https://github.com/libjpeg-turbo/libjpeg-turbo.git
+[submodule "third_party/libexif"]
+	path = third_party/libexif
+	url = https://github.com/libexif/libexif.git
