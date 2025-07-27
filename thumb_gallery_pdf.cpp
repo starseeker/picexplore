@@ -79,19 +79,7 @@ std::string extract_hash_from_key(const char* key, size_t key_size) {
 }
 
 // Load image data and determine aspect ratio from largest thumbnail
-bool load_image_info(MDB_env* env, const std::string& hash, ImageInfo& info) {
-    MDB_txn* txn;
-    MDB_dbi dbi;
-    
-    if (mdb_txn_begin(env, nullptr, MDB_RDONLY, &txn) != 0) {
-        return false;
-    }
-    
-    if (mdb_dbi_open(txn, nullptr, 0, &dbi) != 0) {
-        mdb_txn_abort(txn);
-        return false;
-    }
-    
+bool load_image_info(MDB_txn* txn, MDB_dbi dbi, const std::string& hash, ImageInfo& info) {
     // Find largest thumbnail size available
     std::vector<int> sizes = {32, 64, 128, 256, 512, 1024};
     int best_size = 0;
@@ -108,8 +96,6 @@ bool load_image_info(MDB_env* env, const std::string& hash, ImageInfo& info) {
             best_data.assign((uint8_t*)data.mv_data, (uint8_t*)data.mv_data + data.mv_size);
         }
     }
-    
-    mdb_txn_abort(txn);
     
     if (best_size == 0) {
         return false;
@@ -225,7 +211,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        if (mdb_env_open(env, lmdb_path.c_str(), MDB_RDONLY, 0664) != 0) {
+        if (mdb_env_open(env, lmdb_path.c_str(), MDB_RDONLY | MDB_NOSUBDIR, 0664) != 0) {
             std::cerr << "Error: Failed to open LMDB database: " << lmdb_path << std::endl;
             mdb_env_close(env);
             return 1;
@@ -265,7 +251,7 @@ int main(int argc, char* argv[]) {
                 info.hash = hash;
                 info.path = std::string((char*)data.mv_data, data.mv_size);
                 
-                if (load_image_info(env, hash, info)) {
+                if (load_image_info(txn, dbi, hash, info)) {
                     images.push_back(std::move(info));
                 }
             }
