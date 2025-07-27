@@ -98,18 +98,12 @@ thumb_gallery_pdf --lmdb my_photos.db --output my_photo_gallery.pdf --row-height
 
 ### Prerequisites
 
-You need the following system packages installed:
+The project is now **fully self-contained** with all C/C++ dependencies included as git submodules. You only need:
 
 - CMake 3.12 or later
-- A C++17 compatible compiler (GCC, Clang)
-- libjpeg development headers (`libjpeg-dev` on Ubuntu/Debian)
-- libexif development headers (`libexif-dev` on Ubuntu/Debian)
-- pkg-config
+- A C++17 compatible compiler (GCC, Clang, MSVC)
 
-On Ubuntu/Debian:
-```bash
-sudo apt-get install cmake build-essential libjpeg-dev libexif-dev pkg-config
-```
+**No external libraries are required!** All dependencies including libjpeg-turbo, libexif, xxHash, stb, epeg, LMDB, cxxopts, and struetype are bundled as submodules.
 
 ### Build Steps
 
@@ -135,6 +129,19 @@ make
 This will build both executables:
 - `image_thumb_db` (image scanner and thumbnailer)
 - `thumb_gallery_pdf` (PDF gallery generator)
+
+### Advanced Configuration
+
+For advanced users who prefer to use system-installed libraries, you can enable them with CMake options:
+
+```bash
+cmake -DUSE_SYSTEM_JPEG=ON -DUSE_SYSTEM_EXIF=ON ..
+```
+
+When using system libraries, you'll need to install the development headers:
+- On Ubuntu/Debian: `sudo apt-get install libjpeg-dev libexif-dev pkg-config`
+- On CentOS/RHEL: `sudo yum install libjpeg-turbo-devel libexif-devel pkgconfig`
+- On macOS: `brew install jpeg libexif pkg-config`
 
 ## Supported Image Formats
 
