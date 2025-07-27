@@ -1,0 +1,15 @@
+[submodule "third_party/xxHash"]
+	path = third_party/xxHash
+	url = https://github.com/Cyan4973/xxHash.git
+[submodule "third_party/stb"]
+	path = third_party/stb
+	url = https://github.com/nothings/stb.git
+[submodule "third_party/epeg"]
+	path = third_party/epeg
+	url = https://github.com/mattes/epeg.git
+[submodule "third_party/lmdb"]
+	path = third_party/lmdb
+	url = https://github.com/LMDB/lmdb.git
+[submodule "third_party/cxxopts"]
+	path = third_party/cxxopts
+	url = https://github.com/jarro2783/cxxopts.git

@@ -85,6 +85,51 @@ rebuild_cache:
 rebuild_cache/fast: rebuild_cache
 .PHONY : rebuild_cache/fast
 
+# Special rule for the target list_install_components
+list_install_components:
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Available install components are: \"Unspecified\""
+.PHONY : list_install_components
+
+# Special rule for the target list_install_components
+list_install_components/fast: list_install_components
+.PHONY : list_install_components/fast
+
+# Special rule for the target install
+install: preinstall
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Install the project..."
+	/usr/local/bin/cmake -P cmake_install.cmake
+.PHONY : install
+
+# Special rule for the target install
+install/fast: preinstall/fast
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Install the project..."
+	/usr/local/bin/cmake -P cmake_install.cmake
+.PHONY : install/fast
+
+# Special rule for the target install/local
+install/local: preinstall
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing only the local directory..."
+	/usr/local/bin/cmake -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake
+.PHONY : install/local
+
+# Special rule for the target install/local
+install/local/fast: preinstall/fast
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing only the local directory..."
+	/usr/local/bin/cmake -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake
+.PHONY : install/local/fast
+
+# Special rule for the target install/strip
+install/strip: preinstall
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing the project stripped..."
+	/usr/local/bin/cmake -DCMAKE_INSTALL_DO_STRIP=1 -P cmake_install.cmake
+.PHONY : install/strip
+
+# Special rule for the target install/strip
+install/strip/fast: preinstall/fast
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing the project stripped..."
+	/usr/local/bin/cmake -DCMAKE_INSTALL_DO_STRIP=1 -P cmake_install.cmake
+.PHONY : install/strip/fast
+
 # The main all target
 all: cmake_check_build_system
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/runner/work/picexplore/picexplore/build/CMakeFiles /home/runner/work/picexplore/picexplore/build//CMakeFiles/progress.marks
@@ -117,6 +162,32 @@ depend:
 .PHONY : depend
 
 #=============================================================================
+# Target rules for targets named xxhash
+
+# Build rule for target.
+xxhash: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 xxhash
+.PHONY : xxhash
+
+# fast build rule for target.
+xxhash/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/xxhash.dir/build.make CMakeFiles/xxhash.dir/build
+.PHONY : xxhash/fast
+
+#=============================================================================
+# Target rules for targets named lmdb
+
+# Build rule for target.
+lmdb: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lmdb
+.PHONY : lmdb
+
+# fast build rule for target.
+lmdb/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lmdb.dir/build.make CMakeFiles/lmdb.dir/build
+.PHONY : lmdb/fast
+
+#=============================================================================
 # Target rules for targets named justified_layout_test
 
 # Build rule for target.
@@ -128,6 +199,56 @@ justified_layout_test: cmake_check_build_system
 justified_layout_test/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/justified_layout_test.dir/build.make CMakeFiles/justified_layout_test.dir/build
 .PHONY : justified_layout_test/fast
+
+#=============================================================================
+# Target rules for targets named image_thumb_db
+
+# Build rule for target.
+image_thumb_db: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 image_thumb_db
+.PHONY : image_thumb_db
+
+# fast build rule for target.
+image_thumb_db/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/image_thumb_db.dir/build.make CMakeFiles/image_thumb_db.dir/build
+.PHONY : image_thumb_db/fast
+
+#=============================================================================
+# Target rules for targets named epeg_static
+
+# Build rule for target.
+epeg_static: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 epeg_static
+.PHONY : epeg_static
+
+# fast build rule for target.
+epeg_static/fast:
+	$(MAKE) $(MAKESILENT) -f epeg_build/CMakeFiles/epeg_static.dir/build.make epeg_build/CMakeFiles/epeg_static.dir/build
+.PHONY : epeg_static/fast
+
+image_thumb_db.o: image_thumb_db.cpp.o
+.PHONY : image_thumb_db.o
+
+# target to build an object file
+image_thumb_db.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/image_thumb_db.dir/build.make CMakeFiles/image_thumb_db.dir/image_thumb_db.cpp.o
+.PHONY : image_thumb_db.cpp.o
+
+image_thumb_db.i: image_thumb_db.cpp.i
+.PHONY : image_thumb_db.i
+
+# target to preprocess a source file
+image_thumb_db.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/image_thumb_db.dir/build.make CMakeFiles/image_thumb_db.dir/image_thumb_db.cpp.i
+.PHONY : image_thumb_db.cpp.i
+
+image_thumb_db.s: image_thumb_db.cpp.s
+.PHONY : image_thumb_db.s
+
+# target to generate assembly for a file
+image_thumb_db.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/image_thumb_db.dir/build.make CMakeFiles/image_thumb_db.dir/image_thumb_db.cpp.s
+.PHONY : image_thumb_db.cpp.s
 
 justified_layout_test.o: justified_layout_test.cpp.o
 .PHONY : justified_layout_test.o
@@ -153,6 +274,78 @@ justified_layout_test.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/justified_layout_test.dir/build.make CMakeFiles/justified_layout_test.dir/justified_layout_test.cpp.s
 .PHONY : justified_layout_test.cpp.s
 
+third_party/lmdb/libraries/liblmdb/mdb.o: third_party/lmdb/libraries/liblmdb/mdb.c.o
+.PHONY : third_party/lmdb/libraries/liblmdb/mdb.o
+
+# target to build an object file
+third_party/lmdb/libraries/liblmdb/mdb.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lmdb.dir/build.make CMakeFiles/lmdb.dir/third_party/lmdb/libraries/liblmdb/mdb.c.o
+.PHONY : third_party/lmdb/libraries/liblmdb/mdb.c.o
+
+third_party/lmdb/libraries/liblmdb/mdb.i: third_party/lmdb/libraries/liblmdb/mdb.c.i
+.PHONY : third_party/lmdb/libraries/liblmdb/mdb.i
+
+# target to preprocess a source file
+third_party/lmdb/libraries/liblmdb/mdb.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lmdb.dir/build.make CMakeFiles/lmdb.dir/third_party/lmdb/libraries/liblmdb/mdb.c.i
+.PHONY : third_party/lmdb/libraries/liblmdb/mdb.c.i
+
+third_party/lmdb/libraries/liblmdb/mdb.s: third_party/lmdb/libraries/liblmdb/mdb.c.s
+.PHONY : third_party/lmdb/libraries/liblmdb/mdb.s
+
+# target to generate assembly for a file
+third_party/lmdb/libraries/liblmdb/mdb.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lmdb.dir/build.make CMakeFiles/lmdb.dir/third_party/lmdb/libraries/liblmdb/mdb.c.s
+.PHONY : third_party/lmdb/libraries/liblmdb/mdb.c.s
+
+third_party/lmdb/libraries/liblmdb/midl.o: third_party/lmdb/libraries/liblmdb/midl.c.o
+.PHONY : third_party/lmdb/libraries/liblmdb/midl.o
+
+# target to build an object file
+third_party/lmdb/libraries/liblmdb/midl.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lmdb.dir/build.make CMakeFiles/lmdb.dir/third_party/lmdb/libraries/liblmdb/midl.c.o
+.PHONY : third_party/lmdb/libraries/liblmdb/midl.c.o
+
+third_party/lmdb/libraries/liblmdb/midl.i: third_party/lmdb/libraries/liblmdb/midl.c.i
+.PHONY : third_party/lmdb/libraries/liblmdb/midl.i
+
+# target to preprocess a source file
+third_party/lmdb/libraries/liblmdb/midl.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lmdb.dir/build.make CMakeFiles/lmdb.dir/third_party/lmdb/libraries/liblmdb/midl.c.i
+.PHONY : third_party/lmdb/libraries/liblmdb/midl.c.i
+
+third_party/lmdb/libraries/liblmdb/midl.s: third_party/lmdb/libraries/liblmdb/midl.c.s
+.PHONY : third_party/lmdb/libraries/liblmdb/midl.s
+
+# target to generate assembly for a file
+third_party/lmdb/libraries/liblmdb/midl.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lmdb.dir/build.make CMakeFiles/lmdb.dir/third_party/lmdb/libraries/liblmdb/midl.c.s
+.PHONY : third_party/lmdb/libraries/liblmdb/midl.c.s
+
+third_party/xxHash/xxhash.o: third_party/xxHash/xxhash.c.o
+.PHONY : third_party/xxHash/xxhash.o
+
+# target to build an object file
+third_party/xxHash/xxhash.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/xxhash.dir/build.make CMakeFiles/xxhash.dir/third_party/xxHash/xxhash.c.o
+.PHONY : third_party/xxHash/xxhash.c.o
+
+third_party/xxHash/xxhash.i: third_party/xxHash/xxhash.c.i
+.PHONY : third_party/xxHash/xxhash.i
+
+# target to preprocess a source file
+third_party/xxHash/xxhash.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/xxhash.dir/build.make CMakeFiles/xxhash.dir/third_party/xxHash/xxhash.c.i
+.PHONY : third_party/xxHash/xxhash.c.i
+
+third_party/xxHash/xxhash.s: third_party/xxHash/xxhash.c.s
+.PHONY : third_party/xxHash/xxhash.s
+
+# target to generate assembly for a file
+third_party/xxHash/xxhash.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/xxhash.dir/build.make CMakeFiles/xxhash.dir/third_party/xxHash/xxhash.c.s
+.PHONY : third_party/xxHash/xxhash.c.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -160,11 +353,31 @@ help:
 	@echo "... clean"
 	@echo "... depend"
 	@echo "... edit_cache"
+	@echo "... install"
+	@echo "... install/local"
+	@echo "... install/strip"
+	@echo "... list_install_components"
 	@echo "... rebuild_cache"
+	@echo "... epeg_static"
+	@echo "... image_thumb_db"
 	@echo "... justified_layout_test"
+	@echo "... lmdb"
+	@echo "... xxhash"
+	@echo "... image_thumb_db.o"
+	@echo "... image_thumb_db.i"
+	@echo "... image_thumb_db.s"
 	@echo "... justified_layout_test.o"
 	@echo "... justified_layout_test.i"
 	@echo "... justified_layout_test.s"
+	@echo "... third_party/lmdb/libraries/liblmdb/mdb.o"
+	@echo "... third_party/lmdb/libraries/liblmdb/mdb.i"
+	@echo "... third_party/lmdb/libraries/liblmdb/mdb.s"
+	@echo "... third_party/lmdb/libraries/liblmdb/midl.o"
+	@echo "... third_party/lmdb/libraries/liblmdb/midl.i"
+	@echo "... third_party/lmdb/libraries/liblmdb/midl.s"
+	@echo "... third_party/xxHash/xxhash.o"
+	@echo "... third_party/xxHash/xxhash.i"
+	@echo "... third_party/xxHash/xxhash.s"
 .PHONY : help
 
 
