@@ -218,20 +218,7 @@ bool DatabaseManager::get_key_data(const std::string& key, std::vector<uint8_t>&
     return false;
 }
 
-int DatabaseManager::calculate_scale_factor(int image_width, int image_height, int target_width, int target_height) {
-    if (target_width == 0 || target_height == 0) return 1;
-    int scale_x = image_width / target_width;
-    int scale_y = image_height / target_height;
-    int scale_factor = std::max(scale_x, scale_y);
-    
-    // Round to nearest valid scale factor (1, 2, 4, 8)
-    if (scale_factor <= 1) return 1;
-    else if (scale_factor <= 2) return 2;
-    else if (scale_factor <= 4) return 4;
-    else return 8;
-}
-
-std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::string& filepath, int scale_factor, int* actual_width, int* actual_height) {
+std::vector<uint8_t> DatabaseManager::decode_jpeg_full_rgb(const std::string& filepath, int* actual_width, int* actual_height) {
     // Load file into memory
     std::ifstream file(filepath, std::ios::binary);
     if (!file) {
@@ -248,20 +235,17 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
     file.read(reinterpret_cast<char*>(file_data.data.data()), file_size);
     file_data.offset = 0;
     
-    // Initialize picojpeg with the specified scale factor
+    // Initialize picojpeg for full resolution decoding
     pjpeg_image_info_t image_info;
-    unsigned char status = pjpeg_decode_init_scale(&image_info, pjpeg_need_bytes_callback, &file_data, scale_factor);
+    unsigned char status = pjpeg_decode_init(&image_info, pjpeg_need_bytes_callback, &file_data, 0);
     if (status != 0) {
         fprintf(stderr, "Error: PicoJPEG decode init failed for '%s' (status: %d)\n", filepath.c_str(), status);
         return {};
     }
     
-    // Calculate output dimensions
-    int block_size = 8 / scale_factor;
-    if (block_size < 1) block_size = 1;
-    
-    int output_width = image_info.m_MCUSPerRow * block_size;
-    int output_height = image_info.m_MCUSPerCol * block_size;
+    // Use full image dimensions
+    int output_width = image_info.m_width;
+    int output_height = image_info.m_height;
     
     if (actual_width) *actual_width = output_width;
     if (actual_height) *actual_height = output_height;
@@ -281,13 +265,13 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
                 return {};
             }
             
-            // Copy MCU data to output RGB buffer
-            int dst_x = mcu_x * block_size;
-            int dst_y = mcu_y * block_size;
+            // Copy MCU data to output RGB buffer (full 8x8 blocks)
+            int dst_x = mcu_x * 8;
+            int dst_y = mcu_y * 8;
             
-            for (int by = 0; by < block_size; by++) {
-                for (int bx = 0; bx < block_size; bx++) {
-                    int src_idx = by * 8 + bx; // Source is always 8-pixel stride
+            for (int by = 0; by < 8; by++) {
+                for (int bx = 0; bx < 8; bx++) {
+                    int src_idx = by * 8 + bx;
                     int dst_idx = ((dst_y + by) * output_width + (dst_x + bx)) * 3;
                     
                     if (dst_idx + 2 < rgb_data.size()) {
@@ -323,45 +307,37 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
     bool thumbnails_generated = true;
     
     if (ext == ".jpg" || ext == ".jpeg") {
-        // For JPEG files, use picojpeg with optimized scale factor grouping
-        std::map<int, std::vector<int>> scale_groups; // scale_factor -> list of thumb_sizes
+        // For JPEG files, decode at full resolution then resize
+        int actual_width, actual_height;
+        std::vector<uint8_t> full_rgb = decode_jpeg_full_rgb(filepath, &actual_width, &actual_height);
         
-        // Group thumbnail sizes by their optimal scale factor
-        for (int thumb_size : thumb_sizes) {
-            // Calculate thumbnail dimensions maintaining aspect ratio
-            double aspect_ratio = (double)width / height;
-            int thumb_width, thumb_height;
-            
-            if (width > height) {
-                thumb_width = thumb_size;
-                thumb_height = (int)(thumb_size / aspect_ratio);  
-            } else {
-                thumb_height = thumb_size;
-                thumb_width = (int)(thumb_size * aspect_ratio);
-            }
-            
-            // Skip if image is already smaller than thumbnail size
-            if (width <= thumb_width && height <= thumb_height) {
-                continue;
-            }
-            
-            int scale_factor = calculate_scale_factor(width, height, thumb_width, thumb_height);
-            scale_groups[scale_factor].push_back(thumb_size);
-        }
-        
-        // Process each scale factor group
-        for (const auto& group : scale_groups) {
-            int scale_factor = group.first;
-            const std::vector<int>& sizes = group.second;
-            
-            // Decode once for this scale factor
-            int actual_width, actual_height;
-            std::vector<uint8_t> rgb_thumb = decode_jpeg_thumbnail_rgb(filepath, scale_factor, &actual_width, &actual_height);
-            
-            if (!rgb_thumb.empty()) {
-                // Use this RGB data for all thumbnail sizes in this group
-                for (int thumb_size : sizes) {
-                    std::vector<uint8_t> thumb_data = encode_jpeg(rgb_thumb.data(), actual_width, actual_height, 90);
+        if (!full_rgb.empty()) {
+            // Generate thumbnails by resizing the full resolution image
+            for (int thumb_size : thumb_sizes) {
+                // Calculate thumbnail dimensions maintaining aspect ratio
+                double aspect_ratio = (double)actual_width / actual_height;
+                int thumb_width, thumb_height;
+                
+                if (actual_width > actual_height) {
+                    thumb_width = thumb_size;
+                    thumb_height = (int)(thumb_size / aspect_ratio);  
+                } else {
+                    thumb_height = thumb_size;
+                    thumb_width = (int)(thumb_size * aspect_ratio);
+                }
+                
+                // Skip if image is already smaller than thumbnail size
+                if (actual_width <= thumb_width && actual_height <= thumb_height) {
+                    continue;
+                }
+                
+                // Resize using stb_image_resize
+                std::vector<uint8_t> resized_rgb(thumb_width * thumb_height * 3);
+                if (stbir_resize_uint8_linear(full_rgb.data(), actual_width, actual_height, 0,
+                                            resized_rgb.data(), thumb_width, thumb_height, 0, STBIR_RGB)) {
+                    
+                    // Encode as JPEG
+                    std::vector<uint8_t> thumb_data = encode_jpeg(resized_rgb.data(), thumb_width, thumb_height, 90);
                     
                     if (!thumb_data.empty()) {
                         std::string thumb_key = hash + ":" + std::to_string(thumb_size);
@@ -373,13 +349,15 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
                         fprintf(stderr, "Error: Failed to encode JPEG thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
                         thumbnails_generated = false;
                     }
+                } else {
+                    fprintf(stderr, "Error: Failed to resize image for '%s' (size %d)\n", filepath.c_str(), thumb_size);
+                    thumbnails_generated = false;
                 }
-            } else {
-                // Failed to decode with picojpeg, fall back to stb_image for these sizes  
-                fprintf(stderr, "Warning: JPEG decoding failed for '%s' (scale factor %d), falling back to STB\n", filepath.c_str(), scale_factor);
-                thumbnails_generated = false;
-                break;
             }
+        } else {
+            // Failed to decode with picojpeg, fall back to stb_image
+            fprintf(stderr, "Warning: JPEG decoding failed for '%s', falling back to STB\n", filepath.c_str());
+            thumbnails_generated = false;
         }
     } else {
         // For non-JPEG files, set flag to use fallback processing
@@ -534,45 +512,37 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
     bool thumbnails_generated = true;
     
     if (ext == ".jpg" || ext == ".jpeg") {
-        // For JPEG files, use picojpeg with optimized scale factor grouping
-        std::map<int, std::vector<int>> scale_groups; // scale_factor -> list of thumb_sizes
+        // For JPEG files, decode at full resolution then resize
+        int actual_width, actual_height;
+        std::vector<uint8_t> full_rgb = decode_jpeg_full_rgb(filepath, &actual_width, &actual_height);
         
-        // Group thumbnail sizes by their optimal scale factor
-        for (int thumb_size : thumb_sizes) {
-            // Calculate thumbnail dimensions maintaining aspect ratio
-            double aspect_ratio = (double)width / height;
-            int thumb_width, thumb_height;
-            
-            if (width > height) {
-                thumb_width = thumb_size;
-                thumb_height = (int)(thumb_size / aspect_ratio);  
-            } else {
-                thumb_height = thumb_size;
-                thumb_width = (int)(thumb_size * aspect_ratio);
-            }
-            
-            // Skip if image is already smaller than thumbnail size
-            if (width <= thumb_width && height <= thumb_height) {
-                continue;
-            }
-            
-            int scale_factor = calculate_scale_factor(width, height, thumb_width, thumb_height);
-            scale_groups[scale_factor].push_back(thumb_size);
-        }
-        
-        // Process each scale factor group
-        for (const auto& group : scale_groups) {
-            int scale_factor = group.first;
-            const std::vector<int>& sizes = group.second;
-            
-            // Decode once for this scale factor
-            int actual_width, actual_height;
-            std::vector<uint8_t> rgb_thumb = decode_jpeg_thumbnail_rgb(filepath, scale_factor, &actual_width, &actual_height);
-            
-            if (!rgb_thumb.empty()) {
-                // Use this RGB data for all thumbnail sizes in this group
-                for (int thumb_size : sizes) {
-                    std::vector<uint8_t> thumb_data = encode_jpeg(rgb_thumb.data(), actual_width, actual_height, 90);
+        if (!full_rgb.empty()) {
+            // Generate thumbnails by resizing the full resolution image
+            for (int thumb_size : thumb_sizes) {
+                // Calculate thumbnail dimensions maintaining aspect ratio
+                double aspect_ratio = (double)actual_width / actual_height;
+                int thumb_width, thumb_height;
+                
+                if (actual_width > actual_height) {
+                    thumb_width = thumb_size;
+                    thumb_height = (int)(thumb_size / aspect_ratio);  
+                } else {
+                    thumb_height = thumb_size;
+                    thumb_width = (int)(thumb_size * aspect_ratio);
+                }
+                
+                // Skip if image is already smaller than thumbnail size
+                if (actual_width <= thumb_width && actual_height <= thumb_height) {
+                    continue;
+                }
+                
+                // Resize using stb_image_resize
+                std::vector<uint8_t> resized_rgb(thumb_width * thumb_height * 3);
+                if (stbir_resize_uint8_linear(full_rgb.data(), actual_width, actual_height, 0,
+                                            resized_rgb.data(), thumb_width, thumb_height, 0, STBIR_RGB)) {
+                    
+                    // Encode as JPEG
+                    std::vector<uint8_t> thumb_data = encode_jpeg(resized_rgb.data(), thumb_width, thumb_height, 90);
                     
                     if (!thumb_data.empty()) {
                         std::string thumb_key = std::string(hash_str) + ":" + std::to_string(thumb_size);
@@ -581,13 +551,15 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
                         fprintf(stderr, "Error: Failed to encode JPEG thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
                         thumbnails_generated = false;
                     }
+                } else {
+                    fprintf(stderr, "Error: Failed to resize image for '%s' (size %d)\n", filepath.c_str(), thumb_size);
+                    thumbnails_generated = false;
                 }
-            } else {
-                // Failed to decode with picojpeg, fall back to stb_image for these sizes  
-                fprintf(stderr, "Warning: JPEG decoding failed for '%s' (scale factor %d), falling back to STB\n", filepath.c_str(), scale_factor);
-                thumbnails_generated = false;
-                break;
             }
+        } else {
+            // Failed to decode with picojpeg, fall back to stb_image
+            fprintf(stderr, "Warning: JPEG decoding failed for '%s', falling back to STB\n", filepath.c_str());
+            thumbnails_generated = false;
         }
     } else {
         // For non-JPEG files, set flag to use fallback processing

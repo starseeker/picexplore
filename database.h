@@ -109,9 +109,8 @@ private:
     // Thumbnail generation
     bool generate_thumbnails(const std::string& filepath, const std::string& hash, 
                            unsigned char* image_data, int width, int height, int channels);
-    std::vector<uint8_t> decode_jpeg_thumbnail_rgb(const std::string& filepath, int scale_factor, 
-                                                  int* actual_width, int* actual_height);
-    int calculate_scale_factor(int image_width, int image_height, int target_width, int target_height);
+    std::vector<uint8_t> decode_jpeg_full_rgb(const std::string& filepath, 
+                                             int* actual_width, int* actual_height);
     
     // Database operations
     bool begin_transaction();

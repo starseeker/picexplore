@@ -53,7 +53,7 @@ picscan [OPTIONS]
 
 **Features:**
 - **Multi-format support**: JPEG, PNG, BMP, TGA
-- **Efficient thumbnailing**: Uses optimized JPEG decoding for JPEG sources, stb_image for others
+- **High-quality thumbnailing**: Uses full-resolution decoding followed by high-quality software resizing for all formats
 - **Content-based deduplication**: Prevents duplicate processing using xxHash
 - **Multiple thumbnail sizes**: 32, 64, 128, 256, 512, 1024 px maximum dimension
 - **Robust error handling**: Gracefully skips corrupt or unreadable images
@@ -121,18 +121,28 @@ This will build the unified executable:
 
 ## Supported Image Formats
 
-- **JPEG** (.jpg, .jpeg) - Native support with epeg for efficient thumbnailing
+- **JPEG** (.jpg, .jpeg) - Full resolution decoding with high-quality software resizing for thumbnails
 - **PNG** (.png) - Full support with automatic JPEG thumbnail conversion
 - **BMP** (.bmp) - Full support with automatic JPEG thumbnail conversion  
 - **TGA** (.tga) - Full support with automatic JPEG thumbnail conversion
 
 All formats support grayscale, RGB, and RGBA color modes.
 
+## Image Processing Details
+
+The application uses a consistent pipeline for all image formats:
+
+1. **Full Resolution Decoding**: All images (including JPEGs) are decoded at their original resolution
+2. **High-Quality Resizing**: Thumbnails are generated using stb_image_resize with linear interpolation
+3. **JPEG Encoding**: All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
+
+This approach ensures consistent, high-quality thumbnails across all supported formats and provides maximum flexibility for layout algorithms.
+
 ## Performance Notes
 
 - **Fast scanning**: Optimized for processing large image collections
 - **Content-based deduplication**: Identical images (by content) are processed only once
-- **Efficient thumbnailing**: JPEG sources use optimized decoding for fast processing
+- **High-quality thumbnailing**: Full resolution decoding ensures optimal thumbnail quality for all formats
 - **Lightning-fast database**: LMDB provides high-performance storage and retrieval
 - **Memory efficient**: Processes images one at a time with proper cleanup
 - **Status reporting**: Real-time progress updates every 10 seconds
