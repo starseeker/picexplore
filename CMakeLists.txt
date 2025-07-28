@@ -52,11 +52,11 @@ endif()
 # If pkg-config found it but gave partial info, use manual detection
 if(MLPACK_FOUND AND NOT MLPACK_LIBRARIES)
     # Use pkg-config info
-    execute_process(COMMAND pkg-config --libs mlpack 
-                   OUTPUT_VARIABLE MLPACK_LIBRARIES 
+    execute_process(COMMAND pkg-config --libs mlpack
+                   OUTPUT_VARIABLE MLPACK_LIBRARIES
                    OUTPUT_STRIP_TRAILING_WHITESPACE)
-    execute_process(COMMAND pkg-config --cflags mlpack 
-                   OUTPUT_VARIABLE MLPACK_CFLAGS 
+    execute_process(COMMAND pkg-config --cflags mlpack
+                   OUTPUT_VARIABLE MLPACK_CFLAGS
                    OUTPUT_STRIP_TRAILING_WHITESPACE)
     # Extract include dirs from cflags
     string(REGEX MATCHALL "-I[^ ]*" MLPACK_INCLUDE_DIRS "${MLPACK_CFLAGS}")
@@ -94,9 +94,9 @@ target_compile_options(justified_layout_test PRIVATE -g)
 # New unified picscan executable
 if(JPEG_FOUND)
     add_executable(picscan picscan.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
-    target_include_directories(picscan PRIVATE 
+    target_include_directories(picscan PRIVATE
         ${XXHASH_DIR}
-        ${STB_DIR} 
+        ${STB_DIR}
         ${LMDB_DIR}
         ${CXXOPTS_DIR}/include
         ${STRUETYPE_DIR}
@@ -114,9 +114,9 @@ endif()
 # Similarity search components (only build if mlpack is available)
 if(MLPACK_FOUND)
     message(STATUS "Found mlpack, building similarity search components")
-    
+
     # Image similarity index library
-    add_library(similarity_index STATIC 
+    add_library(similarity_index STATIC
         similarity/image_similarity_index.cpp
     )
     target_include_directories(similarity_index PRIVATE
@@ -127,11 +127,11 @@ if(MLPACK_FOUND)
         ${MLPACK_INCLUDE_DIRS}
         .
     )
-    target_link_libraries(similarity_index 
+    target_link_libraries(similarity_index
         xxhash lmdb ${MLPACK_LIBRARIES} ${JPEG_LIBRARIES}
     )
     target_compile_options(similarity_index PRIVATE -g)
-    
+
     # Similarity search command line tool
     add_executable(simfind similarity/simfind.cpp)
     target_include_directories(simfind PRIVATE
@@ -141,31 +141,32 @@ if(MLPACK_FOUND)
     )
     target_link_libraries(simfind similarity_index)
     target_compile_options(simfind PRIVATE -g)
-    
+
 else()
     message(WARNING "mlpack not found, skipping similarity search components")
     message(STATUS "Install libmlpack-dev to enable similarity search features")
 endif()
 
 # GUI test application
+
 if(JPEG_FOUND)
-    add_executable(gui_test gui/gui_test.cpp gui/Fl_JustifiedLayout.cpp database.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
-    target_include_directories(gui_test PRIVATE 
-        ${XXHASH_DIR}
-        ${STB_DIR} 
-        ${LMDB_DIR}
-        ${CXXOPTS_DIR}/include
-        ${STRUETYPE_DIR}
-        ${STRUETYPE_DIR}/examples
-        ${CONCURRENTQUEUE_DIR}
-        ${CMAKE_SOURCE_DIR}/third_party
-        ${JPEG_INCLUDE_DIRS}
-        ${FLTK_DIR}
+  add_executable(gui_test gui/gui_test.cpp gui/Fl_JustifiedLayout.cpp database.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
+  target_include_directories(gui_test PRIVATE
+    ${XXHASH_DIR}
+    ${STB_DIR}
+    ${LMDB_DIR}
+    ${CXXOPTS_DIR}/include
+    ${STRUETYPE_DIR}
+    ${STRUETYPE_DIR}/examples
+    ${CONCURRENTQUEUE_DIR}
+    ${CMAKE_SOURCE_DIR}/third_party
+    ${JPEG_INCLUDE_DIRS}
+    ${FLTK_DIR}
     )
-    target_link_libraries(gui_test xxhash lmdb fltk ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
-    target_compile_options(gui_test PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
+  target_link_libraries(gui_test xxhash lmdb fltk ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
+  target_compile_options(gui_test PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
 else()
-    message(WARNING "libjpeg not found, skipping gui_test executable")
+  message(WARNING "libjpeg not found, skipping gui_test executable")
 endif()
 
 # Local Variables:
