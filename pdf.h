@@ -30,6 +30,34 @@
 #include "utils.h"
 #include "justified_layout.hpp"
 
+// PDF and layout configuration options
+struct PDFOptions {
+    // Page dimensions (inches)
+    double page_width_inches = 8.5;
+    double page_height_inches = 11.0;
+    
+    // DPI settings
+    double page_dpi = 300.0;
+    
+    // Page margin (inches)
+    double page_margin_inches = 0.5;
+    
+    // Layout settings (pixels)
+    int row_height = 150;          // Target row height
+    int margin = 10;               // Spacing between images
+    int pad_top = 0;               // Layout padding top
+    int pad_bottom = 0;            // Layout padding bottom
+    int pad_left = 0;              // Layout padding left
+    int pad_right = 0;             // Layout padding right
+    
+    // Computed values (pixels)
+    int page_width_px() const { return static_cast<int>(page_width_inches * page_dpi); }
+    int page_height_px() const { return static_cast<int>(page_height_inches * page_dpi); }
+    int page_margin_px() const { return static_cast<int>(page_margin_inches * page_dpi); }
+    int layout_width_px() const { return page_width_px() - (2 * page_margin_px()); }
+    int layout_height_px() const { return page_height_px() - (2 * page_margin_px()); }
+};
+
 // PDF generator class
 class PDFGenerator {
 public:
@@ -37,28 +65,13 @@ public:
     ~PDFGenerator();
     
     bool generate_pdf(const std::vector<ImageInfo>& images, const std::string& output_path,
-                     Timer& timer, StatusReporter& reporter, 
-                     int row_height = 150, int margin = 10,
-                     int pad_top = 0, int pad_bottom = 0, int pad_left = 0, int pad_right = 0);
+                     Timer& timer, StatusReporter& reporter, const PDFOptions& options);
 
 private:
-    // Layout configuration
-    static constexpr double PAGE_WIDTH_INCHES = 8.5;
-    static constexpr double PAGE_HEIGHT_INCHES = 11.0;
-    static constexpr double PAGE_DPI = 300.0;
-    static constexpr double PAGE_MARGIN_INCHES = 0.5;
-    
-    static constexpr int PAGE_WIDTH_PX = static_cast<int>(PAGE_WIDTH_INCHES * PAGE_DPI);
-    static constexpr int PAGE_HEIGHT_PX = static_cast<int>(PAGE_HEIGHT_INCHES * PAGE_DPI);
-    static constexpr int PAGE_MARGIN_PX = static_cast<int>(PAGE_MARGIN_INCHES * PAGE_DPI);
-    static constexpr int LAYOUT_WIDTH_PX = PAGE_WIDTH_PX - (2 * PAGE_MARGIN_PX);
-    static constexpr int LAYOUT_HEIGHT_PX = PAGE_HEIGHT_PX - (2 * PAGE_MARGIN_PX);
-    
     // Layout and rendering functions
     std::vector<std::vector<size_t>> calculate_pagination(const std::vector<ImageInfo>& images,
                                                         std::vector<std::vector<Item>>& boxes_per_page,
-                                                        int row_height, int margin,
-                                                        int pad_top, int pad_bottom, int pad_left, int pad_right);
+                                                        const PDFOptions& options);
     
     std::vector<uint8_t> resize_image_to_fit(const std::vector<uint8_t>& image_data,
                                            int src_width, int src_height,
