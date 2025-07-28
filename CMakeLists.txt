@@ -21,11 +21,13 @@ else()
     # Unix-like systems: Use pkg-config or find_package
     find_package(PkgConfig)
     if(PkgConfig_FOUND)
-        pkg_check_modules(JPEG REQUIRED libjpeg)
+        pkg_check_modules(JPEG libjpeg)
     else()
-        find_package(JPEG REQUIRED)
-        set(JPEG_LIBRARIES ${JPEG_LIBRARIES})
-        set(JPEG_INCLUDE_DIRS ${JPEG_INCLUDE_DIR})
+        find_package(JPEG)
+        if(JPEG_FOUND)
+            set(JPEG_LIBRARIES ${JPEG_LIBRARIES})
+            set(JPEG_INCLUDE_DIRS ${JPEG_INCLUDE_DIR})
+        endif()
     endif()
 endif()
 
@@ -90,20 +92,24 @@ add_executable(justified_layout_test justified_layout_test.cpp)
 target_compile_options(justified_layout_test PRIVATE -g)
 
 # New unified picscan executable
-add_executable(picscan picscan.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
-target_include_directories(picscan PRIVATE 
-    ${XXHASH_DIR}
-    ${STB_DIR} 
-    ${LMDB_DIR}
-    ${CXXOPTS_DIR}/include
-    ${STRUETYPE_DIR}
-    ${STRUETYPE_DIR}/examples
-    ${CONCURRENTQUEUE_DIR}
-    ${CMAKE_SOURCE_DIR}/third_party
-    ${JPEG_INCLUDE_DIRS}
-.)
-target_link_libraries(picscan xxhash lmdb ${JPEG_LIBRARIES})
-target_compile_options(picscan PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
+if(JPEG_FOUND)
+    add_executable(picscan picscan.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
+    target_include_directories(picscan PRIVATE 
+        ${XXHASH_DIR}
+        ${STB_DIR} 
+        ${LMDB_DIR}
+        ${CXXOPTS_DIR}/include
+        ${STRUETYPE_DIR}
+        ${STRUETYPE_DIR}/examples
+        ${CONCURRENTQUEUE_DIR}
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${JPEG_INCLUDE_DIRS}
+    .)
+    target_link_libraries(picscan xxhash lmdb ${JPEG_LIBRARIES})
+    target_compile_options(picscan PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
+else()
+    message(WARNING "libjpeg not found, skipping picscan executable")
+endif()
 
 # Similarity search components (only build if mlpack is available)
 if(MLPACK_FOUND)
@@ -142,21 +148,25 @@ else()
 endif()
 
 # GUI test application
-add_executable(gui_test gui/gui_test.cpp gui/Fl_JustifiedLayout.cpp database.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
-target_include_directories(gui_test PRIVATE 
-    ${XXHASH_DIR}
-    ${STB_DIR} 
-    ${LMDB_DIR}
-    ${CXXOPTS_DIR}/include
-    ${STRUETYPE_DIR}
-    ${STRUETYPE_DIR}/examples
-    ${CONCURRENTQUEUE_DIR}
-    ${CMAKE_SOURCE_DIR}/third_party
-    ${JPEG_INCLUDE_DIRS}
-    ${FLTK_DIR}
-)
-target_link_libraries(gui_test xxhash lmdb fltk ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
-target_compile_options(gui_test PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
+if(JPEG_FOUND)
+    add_executable(gui_test gui/gui_test.cpp gui/Fl_JustifiedLayout.cpp database.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
+    target_include_directories(gui_test PRIVATE 
+        ${XXHASH_DIR}
+        ${STB_DIR} 
+        ${LMDB_DIR}
+        ${CXXOPTS_DIR}/include
+        ${STRUETYPE_DIR}
+        ${STRUETYPE_DIR}/examples
+        ${CONCURRENTQUEUE_DIR}
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${JPEG_INCLUDE_DIRS}
+        ${FLTK_DIR}
+    )
+    target_link_libraries(gui_test xxhash lmdb fltk ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
+    target_compile_options(gui_test PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
+else()
+    message(WARNING "libjpeg not found, skipping gui_test executable")
+endif()
 
 # Local Variables:
 # tab-width: 8
