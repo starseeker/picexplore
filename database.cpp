@@ -208,6 +208,7 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
     // Load file into memory
     std::ifstream file(filepath, std::ios::binary);
     if (!file) {
+        fprintf(stderr, "Error: Failed to open file for JPEG decoding: '%s'\n", filepath.c_str());
         return {};
     }
     
@@ -224,6 +225,7 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
     pjpeg_image_info_t image_info;
     unsigned char status = pjpeg_decode_init_scale(&image_info, pjpeg_need_bytes_callback, &file_data, scale_factor);
     if (status != 0) {
+        fprintf(stderr, "Error: PicoJPEG decode init failed for '%s' (status: %d)\n", filepath.c_str(), status);
         return {};
     }
     
@@ -248,6 +250,7 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
                 if (status == PJPG_NO_MORE_BLOCKS) {
                     break;
                 }
+                fprintf(stderr, "Error: PicoJPEG MCU decode failed for '%s' (status: %d)\n", filepath.c_str(), status);
                 return {};
             }
             
@@ -336,14 +339,17 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
                     if (!thumb_data.empty()) {
                         std::string thumb_key = hash + ":" + std::to_string(thumb_size);
                         if (!store_key_data(thumb_key, thumb_data)) {
+                            fprintf(stderr, "Error: Failed to store thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
                             thumbnails_generated = false;
                         }
                     } else {
+                        fprintf(stderr, "Error: Failed to encode JPEG thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
                         thumbnails_generated = false;
                     }
                 }
             } else {
                 // Failed to decode with picojpeg, fall back to stb_image for these sizes  
+                fprintf(stderr, "Warning: JPEG decoding failed for '%s' (scale factor %d), falling back to STB\n", filepath.c_str(), scale_factor);
                 thumbnails_generated = false;
                 break;
             }
@@ -413,7 +419,11 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
                 thumb_data = encode_jpeg(resized_rgb.data(), thumb_width, thumb_height, 90);
                 if (!thumb_data.empty()) {
                     thumb_success = true;
+                } else {
+                    fprintf(stderr, "Error: Failed to encode JPEG thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
                 }
+            } else {
+                fprintf(stderr, "Error: Failed to resize image for '%s' (size %d)\n", filepath.c_str(), thumb_size);
             }
             
             if (need_free_rgb) {
@@ -423,6 +433,7 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
             if (thumb_success && !thumb_data.empty()) {
                 std::string thumb_key = hash + ":" + std::to_string(thumb_size);
                 if (!store_key_data(thumb_key, thumb_data)) {
+                    fprintf(stderr, "Error: Failed to store thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
                     thumbnails_generated = false;
                 }
             } else {
@@ -481,6 +492,16 @@ int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, 
         int width, height, channels;
         unsigned char* image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 0);
         if (!image_data) {
+            fprintf(stderr, "Error: Failed to load image '%s': %s\n", filepath.c_str(), stbi_failure_reason());
+            skipped_count++;
+            timer.stop("Image Loading");
+            continue;
+        }
+        
+        // Check for zero width or height
+        if (width <= 0 || height <= 0) {
+            fprintf(stderr, "Error: Invalid image dimensions for '%s': %dx%d\n", filepath.c_str(), width, height);
+            stbi_image_free(image_data);
             skipped_count++;
             timer.stop("Image Loading");
             continue;
@@ -579,6 +600,7 @@ bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) 
                                             &width, &height, &channels, 3);
 
     if (!pixels) {
+        fprintf(stderr, "Error: Failed to load thumbnail from memory for hash '%s': %s\n", hash.c_str(), stbi_failure_reason());
         return false;
     }
 
@@ -633,6 +655,8 @@ std::vector<ImageInfo> DatabaseManager::get_all_images() {
             
             if (load_image_info(hash, info)) {
                 images.push_back(std::move(info));
+            } else {
+                fprintf(stderr, "Warning: Failed to load image info for '%s' (hash: %s)\n", info.path.c_str(), hash.c_str());
             }
             
             // Restore transaction state
