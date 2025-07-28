@@ -213,17 +213,21 @@ void Fl_JustifiedLayout::calculate_layout() {
     // Calculate visible range based on scroll offset
     visible_start_idx_ = 0;
     visible_end_idx_ = static_cast<int>(layout_items_.size()) - 1;
-    
-    // Simple visibility calculation - can be optimized
+
+    // Visibility calculation
+    bool found_first = false;
     for (size_t i = 0; i < layout_items_.size(); ++i) {
-        const auto& item = layout_items_[i];
-        int item_top = static_cast<int>(item.t - scroll_offset_);
-        int item_bottom = item_top + static_cast<int>(item.h);
-        
-        if (item_bottom >= 0 && item_top <= h()) {
-            if (visible_start_idx_ == 0 && i > 0) visible_start_idx_ = i;
-            visible_end_idx_ = i;
-        }
+	    const auto& item = layout_items_[i];
+	    int item_top = static_cast<int>(item.t - scroll_offset_);
+	    int item_bottom = item_top + static_cast<int>(item.h);
+
+	    if (item_bottom >= 0 && item_top <= h()) {
+		    if (!found_first) {
+			    visible_start_idx_ = static_cast<int>(i);
+			    found_first = true;
+		    }
+		    visible_end_idx_ = static_cast<int>(i);
+	    }
     }
 }
 

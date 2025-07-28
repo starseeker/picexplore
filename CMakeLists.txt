@@ -142,7 +142,7 @@ else()
 endif()
 
 # GUI test application
-add_executable(gui_test gui/gui_test.cpp gui/Fl_JustifiedLayout.cpp database.cpp utils.cpp stb_impl.cpp)
+add_executable(gui_test gui/gui_test.cpp gui/Fl_JustifiedLayout.cpp database.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
 target_include_directories(gui_test PRIVATE 
     ${XXHASH_DIR}
     ${STB_DIR} 
@@ -151,11 +151,12 @@ target_include_directories(gui_test PRIVATE
     ${STRUETYPE_DIR}
     ${STRUETYPE_DIR}/examples
     ${CONCURRENTQUEUE_DIR}
+    ${CMAKE_SOURCE_DIR}/third_party
+    ${JPEG_INCLUDE_DIRS}
     ${FLTK_DIR}
-    .
 )
 target_link_libraries(gui_test xxhash lmdb fltk ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
-target_compile_options(gui_test PRIVATE -g)
+target_compile_options(gui_test PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
 
 # Local Variables:
 # tab-width: 8
