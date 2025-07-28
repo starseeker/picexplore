@@ -11,7 +11,7 @@
 #include <iostream>
 #include <algorithm>
 #include <cstring>
-#include "../stb_image.h"
+#include "stb_image.h"
 
 Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* label)
     : Fl_Widget(X, Y, W, H, label)
