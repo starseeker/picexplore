@@ -28,6 +28,8 @@
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
+#include <fstream>
+#include <map>
 
 // Third-party dependencies
 #include "cxxopts.hpp"      // Command line parsing
@@ -39,7 +41,7 @@
 #include "stb_image_resize2.h" // Image resizing
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h" // Image writing
-#include "Epeg.h"          // JPEG thumbnailing
+#include "picojpeg.h"       // JPEG decoding
 
 namespace fs = std::filesystem;
 
@@ -59,6 +61,120 @@ std::vector<uint8_t> encode_jpeg(const unsigned char* rgb_data, int width, int h
     }
     
     return {}; // Empty vector on failure
+}
+
+// Helper structure for file data callback for picojpeg
+struct FileData {
+    std::vector<uint8_t> data;
+    size_t offset;
+};
+
+// Callback function for picojpeg to read file data
+unsigned char pjpeg_need_bytes_callback(unsigned char* pBuf, unsigned char buf_size, unsigned char *pBytes_actually_read, void *pCallback_data) {
+    FileData* file_data = static_cast<FileData*>(pCallback_data);
+    
+    size_t bytes_available = file_data->data.size() - file_data->offset;
+    size_t bytes_to_read = std::min((size_t)buf_size, bytes_available);
+    
+    if (bytes_to_read > 0) {
+        std::memcpy(pBuf, file_data->data.data() + file_data->offset, bytes_to_read);
+        file_data->offset += bytes_to_read;
+    }
+    
+    *pBytes_actually_read = (unsigned char)bytes_to_read;
+    return 0;
+}
+
+// Function to calculate the appropriate scale factor for a target size
+int calculate_scale_factor(int image_width, int image_height, int target_width, int target_height) {
+    int scale_x = image_width / target_width;
+    int scale_y = image_height / target_height;
+    int scale_factor = std::max(scale_x, scale_y);
+    
+    // Round to nearest valid scale factor (1, 2, 4, 8)
+    if (scale_factor <= 1) return 1;
+    else if (scale_factor <= 2) return 2;
+    else if (scale_factor <= 4) return 4;
+    else return 8;
+}
+
+// Improved function to decode JPEG with picojpeg and generate RGB thumbnail data
+std::vector<uint8_t> decode_jpeg_thumbnail_rgb(const std::string& filepath, int scale_factor, int* actual_width, int* actual_height) {
+    // Load file into memory
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file) {
+        return {};
+    }
+    
+    FileData file_data;
+    file.seekg(0, std::ios::end);
+    size_t file_size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    
+    file_data.data.resize(file_size);
+    file.read(reinterpret_cast<char*>(file_data.data.data()), file_size);
+    file_data.offset = 0;
+    
+    // Initialize picojpeg with the specified scale factor
+    pjpeg_image_info_t image_info;
+    unsigned char status = pjpeg_decode_init_scale(&image_info, pjpeg_need_bytes_callback, &file_data, scale_factor);
+    if (status != 0) {
+        return {};
+    }
+    
+    // Calculate output dimensions
+    int block_size = 8 / scale_factor;
+    if (block_size < 1) block_size = 1;
+    
+    int output_width = image_info.m_MCUSPerRow * block_size;
+    int output_height = image_info.m_MCUSPerCol * block_size;
+    
+    if (actual_width) *actual_width = output_width;
+    if (actual_height) *actual_height = output_height;
+    
+    // Allocate RGB output buffer
+    std::vector<uint8_t> rgb_data(output_width * output_height * 3);
+    
+    // Decode MCUs
+    for (int mcu_y = 0; mcu_y < image_info.m_MCUSPerCol; mcu_y++) {
+        for (int mcu_x = 0; mcu_x < image_info.m_MCUSPerRow; mcu_x++) {
+            status = pjpeg_decode_mcu();
+            if (status != 0) {
+                if (status == PJPG_NO_MORE_BLOCKS) {
+                    break;
+                }
+                return {};
+            }
+            
+            // Copy MCU data to output RGB buffer
+            int dst_x = mcu_x * block_size;
+            int dst_y = mcu_y * block_size;
+            
+            for (int by = 0; by < block_size; by++) {
+                for (int bx = 0; bx < block_size; bx++) {
+                    int src_idx = by * 8 + bx; // Source is always 8-pixel stride
+                    int dst_idx = ((dst_y + by) * output_width + (dst_x + bx)) * 3;
+                    
+                    if (dst_idx + 2 < rgb_data.size()) {
+                        if (image_info.m_comps == 1) {
+                            // Grayscale
+                            unsigned char y = image_info.m_pMCUBufR[src_idx];
+                            rgb_data[dst_idx + 0] = y;
+                            rgb_data[dst_idx + 1] = y;
+                            rgb_data[dst_idx + 2] = y;
+                        } else {
+                            // Color
+                            rgb_data[dst_idx + 0] = image_info.m_pMCUBufR[src_idx];
+                            rgb_data[dst_idx + 1] = image_info.m_pMCUBufG[src_idx];
+                            rgb_data[dst_idx + 2] = image_info.m_pMCUBufB[src_idx];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return rgb_data;
 }
 
 int main(int argc, char* argv[]) {
@@ -218,53 +334,113 @@ int main(int argc, char* argv[]) {
                         
                         // Generate and store thumbnails
                         bool thumbnails_generated = true;
-                        for (int thumb_size : thumb_sizes) {
-                            // Calculate thumbnail dimensions maintaining aspect ratio
-                            double aspect_ratio = (double)width / height;
-                            int thumb_width, thumb_height;
+                        
+                        if (ext == ".jpg" || ext == ".jpeg") {
+                            // For JPEG files, use picojpeg with optimized scale factor grouping
+                            std::map<int, std::vector<int>> scale_groups; // scale_factor -> list of thumb_sizes
                             
-                            if (width > height) {
-                                thumb_width = thumb_size;
-                                thumb_height = (int)(thumb_size / aspect_ratio);
-                            } else {
-                                thumb_height = thumb_size;
-                                thumb_width = (int)(thumb_size * aspect_ratio);
-                            }
-                            
-                            // Skip if image is already smaller than thumbnail size
-                            if (width <= thumb_width && height <= thumb_height) {
-                                if (verbose) {
-                                    std::cout << "  Skipping " << thumb_size << "px thumbnail (original is smaller)" << std::endl;
+                            // Group thumbnail sizes by their optimal scale factor
+                            for (int thumb_size : thumb_sizes) {
+                                // Calculate thumbnail dimensions maintaining aspect ratio
+                                double aspect_ratio = (double)width / height;
+                                int thumb_width, thumb_height;
+                                
+                                if (width > height) {
+                                    thumb_width = thumb_size;
+                                    thumb_height = (int)(thumb_size / aspect_ratio);
+                                } else {
+                                    thumb_height = thumb_size;
+                                    thumb_width = (int)(thumb_size * aspect_ratio);
                                 }
-                                continue;
-                            }
-                            
-                            // Use epeg for JPEG thumbnails if source is JPEG
-                            std::vector<uint8_t> thumb_data;
-                            bool thumb_success = false;
-                            
-                            if (ext == ".jpg" || ext == ".jpeg") {
-                                // Use epeg for efficient JPEG thumbnailing
-                                Epeg_Image *im = epeg_file_open(filepath.c_str());
-                                if (im) {
-                                    epeg_decode_size_set(im, thumb_width, thumb_height);
-                                    epeg_quality_set(im, 90);
-                                    
-                                    // Write to memory buffer
-                                    unsigned char *thumb_buffer;
-                                    int thumb_buffer_size;
-                                    epeg_memory_output_set(im, &thumb_buffer, &thumb_buffer_size);
-                                    if (epeg_encode(im) == 0) {
-                                        thumb_data.assign(thumb_buffer, thumb_buffer + thumb_buffer_size);
-                                        thumb_success = true;
-                                        free(thumb_buffer);
+                                
+                                // Skip if image is already smaller than thumbnail size
+                                if (width <= thumb_width && height <= thumb_height) {
+                                    if (verbose) {
+                                        std::cout << "  Skipping " << thumb_size << "px thumbnail (original is smaller)" << std::endl;
                                     }
-                                    epeg_close(im);
+                                    continue;
                                 }
+                                
+                                int scale_factor = calculate_scale_factor(width, height, thumb_width, thumb_height);
+                                scale_groups[scale_factor].push_back(thumb_size);
                             }
                             
-                            // Fallback: use stb_image_resize for non-JPEG or if epeg failed
-                            if (!thumb_success) {
+                            // Process each scale factor group
+                            for (const auto& group : scale_groups) {
+                                int scale_factor = group.first;
+                                const std::vector<int>& sizes = group.second;
+                                
+                                // Decode once for this scale factor
+                                int actual_width, actual_height;
+                                std::vector<uint8_t> rgb_thumb = decode_jpeg_thumbnail_rgb(filepath, scale_factor, &actual_width, &actual_height);
+                                
+                                if (!rgb_thumb.empty()) {
+                                    // Use this RGB data for all thumbnail sizes in this group
+                                    for (int thumb_size : sizes) {
+                                        // For now, use the decoded image as-is (could be resized further if needed)
+                                        std::vector<uint8_t> thumb_data = encode_jpeg(rgb_thumb.data(), actual_width, actual_height, 90);
+                                        
+                                        if (!thumb_data.empty()) {
+                                            // Store thumbnail in LMDB
+                                            std::string thumb_key = std::string(hash_str) + ":" + std::to_string(thumb_size);
+                                            MDB_val t_key, t_data;
+                                            t_key.mv_data = (void*)thumb_key.c_str();
+                                            t_key.mv_size = thumb_key.length();
+                                            t_data.mv_data = thumb_data.data();
+                                            t_data.mv_size = thumb_data.size();
+                                            
+                                            rc = mdb_put(txn, dbi, &t_key, &t_data, 0);
+                                            if (rc != 0) {
+                                                std::cerr << "Error: Failed to store " << thumb_size << "px thumbnail: " << mdb_strerror(rc) << std::endl;
+                                                thumbnails_generated = false;
+                                            } else if (verbose) {
+                                                std::cout << "  Generated " << thumb_size << "px thumbnail (" << thumb_data.size() << " bytes)" << std::endl;
+                                            }
+                                        } else {
+                                            thumbnails_generated = false;
+                                        }
+                                    }
+                                } else {
+                                    // Failed to decode with picojpeg, fall back to stb_image for these sizes
+                                    for (int thumb_size : sizes) {
+                                        thumbnails_generated = false; // Will trigger fallback processing below
+                                    }
+                                    break; // Exit the scale group loop to use fallback
+                                }
+                            }
+                        } else {
+                            // For non-JPEG files, set flag to use fallback processing
+                            thumbnails_generated = false;
+                        }
+                        
+                        // Fallback processing for non-JPEG files or if picojpeg failed
+                        if (!thumbnails_generated) {
+                            thumbnails_generated = true; // Reset the flag
+                            for (int thumb_size : thumb_sizes) {
+                                // Calculate thumbnail dimensions maintaining aspect ratio
+                                double aspect_ratio = (double)width / height;
+                                int thumb_width, thumb_height;
+                                
+                                if (width > height) {
+                                    thumb_width = thumb_size;
+                                    thumb_height = (int)(thumb_size / aspect_ratio);
+                                } else {
+                                    thumb_height = thumb_size;
+                                    thumb_width = (int)(thumb_size * aspect_ratio);
+                                }
+                                
+                                // Skip if image is already smaller than thumbnail size
+                                if (width <= thumb_width && height <= thumb_height) {
+                                    if (verbose) {
+                                        std::cout << "  Skipping " << thumb_size << "px thumbnail (original is smaller)" << std::endl;
+                                    }
+                                    continue;
+                                }
+                                
+                                // Use stb_image_resize for non-JPEG or fallback
+                                std::vector<uint8_t> thumb_data;
+                                bool thumb_success = false;
+                                
                                 // Convert to RGB if needed
                                 unsigned char* rgb_data = nullptr;
                                 bool need_free_rgb = false;
@@ -306,23 +482,25 @@ int main(int argc, char* argv[]) {
                                 if (need_free_rgb) {
                                     free(rgb_data);
                                 }
-                            }
-                            
-                            if (thumb_success && !thumb_data.empty()) {
-                                // Store thumbnail in LMDB
-                                std::string thumb_key = std::string(hash_str) + ":" + std::to_string(thumb_size);
-                                MDB_val t_key, t_data;
-                                t_key.mv_data = (void*)thumb_key.c_str();
-                                t_key.mv_size = thumb_key.length();
-                                t_data.mv_data = thumb_data.data();
-                                t_data.mv_size = thumb_data.size();
                                 
-                                rc = mdb_put(txn, dbi, &t_key, &t_data, 0);
-                                if (rc != 0) {
-                                    std::cerr << "Error: Failed to store " << thumb_size << "px thumbnail: " << mdb_strerror(rc) << std::endl;
+                                if (thumb_success && !thumb_data.empty()) {
+                                    // Store thumbnail in LMDB
+                                    std::string thumb_key = std::string(hash_str) + ":" + std::to_string(thumb_size);
+                                    MDB_val t_key, t_data;
+                                    t_key.mv_data = (void*)thumb_key.c_str();
+                                    t_key.mv_size = thumb_key.length();
+                                    t_data.mv_data = thumb_data.data();
+                                    t_data.mv_size = thumb_data.size();
+                                    
+                                    rc = mdb_put(txn, dbi, &t_key, &t_data, 0);
+                                    if (rc != 0) {
+                                        std::cerr << "Error: Failed to store " << thumb_size << "px thumbnail: " << mdb_strerror(rc) << std::endl;
+                                        thumbnails_generated = false;
+                                    } else if (verbose) {
+                                        std::cout << "  Generated " << thumb_size << "px thumbnail (" << thumb_data.size() << " bytes)" << std::endl;
+                                    }
+                                } else {
                                     thumbnails_generated = false;
-                                } else if (verbose) {
-                                    std::cout << "  Generated " << thumb_size << "px thumbnail (" << thumb_data.size() << " bytes)" << std::endl;
                                 }
                             }
                         }
