@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
+#include <fstream>
 
 // Third-party dependencies
 #include "cxxopts.hpp"      // Command line parsing
@@ -39,7 +40,7 @@
 #include "stb_image_resize2.h" // Image resizing
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h" // Image writing
-#include "Epeg.h"          // JPEG thumbnailing
+#include "picojpeg.h"       // JPEG decoding
 
 namespace fs = std::filesystem;
 
@@ -59,6 +60,125 @@ std::vector<uint8_t> encode_jpeg(const unsigned char* rgb_data, int width, int h
     }
     
     return {}; // Empty vector on failure
+}
+
+// Helper structure for file data callback for picojpeg
+struct FileData {
+    std::vector<uint8_t> data;
+    size_t offset;
+};
+
+// Callback function for picojpeg to read file data
+unsigned char pjpeg_need_bytes_callback(unsigned char* pBuf, unsigned char buf_size, unsigned char *pBytes_actually_read, void *pCallback_data) {
+    FileData* file_data = static_cast<FileData*>(pCallback_data);
+    
+    size_t bytes_available = file_data->data.size() - file_data->offset;
+    size_t bytes_to_read = std::min((size_t)buf_size, bytes_available);
+    
+    if (bytes_to_read > 0) {
+        std::memcpy(pBuf, file_data->data.data() + file_data->offset, bytes_to_read);
+        file_data->offset += bytes_to_read;
+    }
+    
+    *pBytes_actually_read = (unsigned char)bytes_to_read;
+    return 0;
+}
+
+// Function to decode JPEG with picojpeg and generate RGB thumbnail data
+std::vector<uint8_t> decode_jpeg_thumbnail_rgb(const std::string& filepath, int target_width, int target_height, int* actual_width, int* actual_height) {
+    // Load file into memory
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file) {
+        return {};
+    }
+    
+    FileData file_data;
+    file.seekg(0, std::ios::end);
+    size_t file_size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    
+    file_data.data.resize(file_size);
+    file.read(reinterpret_cast<char*>(file_data.data.data()), file_size);
+    file_data.offset = 0;
+    
+    // Initialize picojpeg to get image dimensions
+    pjpeg_image_info_t image_info;
+    unsigned char status = pjpeg_decode_init_scale(&image_info, pjpeg_need_bytes_callback, &file_data, 1);
+    if (status != 0) {
+        return {};
+    }
+    
+    // Calculate appropriate scale factor
+    int scale_x = image_info.m_width / target_width;
+    int scale_y = image_info.m_height / target_height;
+    int scale_factor = std::max(scale_x, scale_y);
+    
+    // Round to nearest valid scale factor (1, 2, 4, 8)
+    if (scale_factor <= 1) scale_factor = 1;
+    else if (scale_factor <= 2) scale_factor = 2;
+    else if (scale_factor <= 4) scale_factor = 4;
+    else scale_factor = 8;
+    
+    // Reset file data and reinitialize with proper scale
+    file_data.offset = 0;
+    status = pjpeg_decode_init_scale(&image_info, pjpeg_need_bytes_callback, &file_data, scale_factor);
+    if (status != 0) {
+        return {};
+    }
+    
+    // Calculate output dimensions
+    int block_size = 8 / scale_factor;
+    if (block_size < 1) block_size = 1;
+    
+    int output_width = image_info.m_MCUSPerRow * block_size;
+    int output_height = image_info.m_MCUSPerCol * block_size;
+    
+    if (actual_width) *actual_width = output_width;
+    if (actual_height) *actual_height = output_height;
+    
+    // Allocate RGB output buffer
+    std::vector<uint8_t> rgb_data(output_width * output_height * 3);
+    
+    // Decode MCUs
+    for (int mcu_y = 0; mcu_y < image_info.m_MCUSPerCol; mcu_y++) {
+        for (int mcu_x = 0; mcu_x < image_info.m_MCUSPerRow; mcu_x++) {
+            status = pjpeg_decode_mcu();
+            if (status != 0) {
+                if (status == PJPG_NO_MORE_BLOCKS) {
+                    break;
+                }
+                return {};
+            }
+            
+            // Copy MCU data to output RGB buffer
+            int dst_x = mcu_x * block_size;
+            int dst_y = mcu_y * block_size;
+            
+            for (int by = 0; by < block_size; by++) {
+                for (int bx = 0; bx < block_size; bx++) {
+                    int src_idx = by * 8 + bx; // Source is always 8-pixel stride
+                    int dst_idx = ((dst_y + by) * output_width + (dst_x + bx)) * 3;
+                    
+                    if (dst_idx + 2 < rgb_data.size()) {
+                        if (image_info.m_comps == 1) {
+                            // Grayscale
+                            unsigned char y = image_info.m_pMCUBufR[src_idx];
+                            rgb_data[dst_idx + 0] = y;
+                            rgb_data[dst_idx + 1] = y;
+                            rgb_data[dst_idx + 2] = y;
+                        } else {
+                            // Color
+                            rgb_data[dst_idx + 0] = image_info.m_pMCUBufR[src_idx];
+                            rgb_data[dst_idx + 1] = image_info.m_pMCUBufG[src_idx];
+                            rgb_data[dst_idx + 2] = image_info.m_pMCUBufB[src_idx];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return rgb_data;
 }
 
 int main(int argc, char* argv[]) {
@@ -239,31 +359,24 @@ int main(int argc, char* argv[]) {
                                 continue;
                             }
                             
-                            // Use epeg for JPEG thumbnails if source is JPEG
+                            // Use picojpeg for JPEG thumbnails if source is JPEG
                             std::vector<uint8_t> thumb_data;
                             bool thumb_success = false;
                             
                             if (ext == ".jpg" || ext == ".jpeg") {
-                                // Use epeg for efficient JPEG thumbnailing
-                                Epeg_Image *im = epeg_file_open(filepath.c_str());
-                                if (im) {
-                                    epeg_decode_size_set(im, thumb_width, thumb_height);
-                                    epeg_quality_set(im, 90);
-                                    
-                                    // Write to memory buffer
-                                    unsigned char *thumb_buffer;
-                                    int thumb_buffer_size;
-                                    epeg_memory_output_set(im, &thumb_buffer, &thumb_buffer_size);
-                                    if (epeg_encode(im) == 0) {
-                                        thumb_data.assign(thumb_buffer, thumb_buffer + thumb_buffer_size);
+                                // Use picojpeg for efficient JPEG thumbnailing
+                                int actual_width, actual_height;
+                                std::vector<uint8_t> rgb_thumb = decode_jpeg_thumbnail_rgb(filepath, thumb_width, thumb_height, &actual_width, &actual_height);
+                                if (!rgb_thumb.empty()) {
+                                    // Encode RGB data as JPEG
+                                    thumb_data = encode_jpeg(rgb_thumb.data(), actual_width, actual_height, 90);
+                                    if (!thumb_data.empty()) {
                                         thumb_success = true;
-                                        free(thumb_buffer);
                                     }
-                                    epeg_close(im);
                                 }
                             }
                             
-                            // Fallback: use stb_image_resize for non-JPEG or if epeg failed
+                            // Fallback: use stb_image_resize for non-JPEG or if picojpeg failed
                             if (!thumb_success) {
                                 // Convert to RGB if needed
                                 unsigned char* rgb_data = nullptr;

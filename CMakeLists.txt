@@ -15,7 +15,6 @@ pkg_check_modules(EXIF REQUIRED libexif)
 # Third-party dependencies paths
 set(XXHASH_DIR ${CMAKE_SOURCE_DIR}/third_party/xxHash)
 set(STB_DIR ${CMAKE_SOURCE_DIR}/third_party/stb)
-set(EPEG_DIR ${CMAKE_SOURCE_DIR}/third_party/epeg)
 set(LMDB_DIR ${CMAKE_SOURCE_DIR}/third_party/lmdb/libraries/liblmdb)
 set(CXXOPTS_DIR ${CMAKE_SOURCE_DIR}/third_party/cxxopts)
 set(STRUETYPE_DIR ${CMAKE_SOURCE_DIR}/third_party/struetype)
@@ -29,12 +28,6 @@ target_include_directories(xxhash PUBLIC ${XXHASH_DIR})
 add_library(lmdb STATIC ${LMDB_DIR}/mdb.c ${LMDB_DIR}/midl.c)
 target_include_directories(lmdb PUBLIC ${LMDB_DIR})
 target_compile_definitions(lmdb PRIVATE MDB_MAXKEYSIZE=511)
-
-# Epeg - use the existing CMakeLists.txt (requires libjpeg and libexif)
-set(BUILD_STATIC_LIB ON CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)  
-set(BUILD_PROGRAM OFF CACHE BOOL "" FORCE)
-add_subdirectory(${EPEG_DIR} epeg_build)
 
 # PicoJPEG - compile the source
 add_library(picojpeg STATIC ${PICOJPEG_DIR}/picojpeg.c)
@@ -51,9 +44,9 @@ target_include_directories(image_thumb_db PRIVATE
     ${STB_DIR} 
     ${LMDB_DIR}
     ${CXXOPTS_DIR}/include
-    ${EPEG_DIR}/src/lib
+    ${PICOJPEG_DIR}
 )
-target_link_libraries(image_thumb_db xxhash lmdb epeg_static ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
+target_link_libraries(image_thumb_db xxhash lmdb picojpeg ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
 target_compile_options(image_thumb_db PRIVATE -g)
 
 # New thumb_gallery_pdf executable
