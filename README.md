@@ -63,7 +63,7 @@ picscan [OPTIONS]
 
 **Features:**
 - **Multi-format support**: JPEG, PNG, BMP, TGA
-- **Efficient thumbnailing**: Uses optimized JPEG decoding for JPEG sources, stb_image for others
+- **Efficient JPEG thumbnailing**: Uses DCT-domain downscaling during decode for optimal performance and memory usage
 - **Content-based deduplication**: Prevents duplicate processing using xxHash
 - **Multiple thumbnail sizes**: 32, 64, 128, 256, 512, 1024 px maximum dimension
 - **Robust error handling**: Gracefully skips corrupt or unreadable images
@@ -137,18 +137,36 @@ This will build the unified executable:
 
 ## Supported Image Formats
 
-- **JPEG** (.jpg, .jpeg) - Native support with epeg for efficient thumbnailing
+- **JPEG** (.jpg, .jpeg) - Efficient DCT-domain downscaling during decode for optimal thumbnail generation
 - **PNG** (.png) - Full support with automatic JPEG thumbnail conversion
 - **BMP** (.bmp) - Full support with automatic JPEG thumbnail conversion  
 - **TGA** (.tga) - Full support with automatic JPEG thumbnail conversion
 
 All formats support grayscale, RGB, and RGBA color modes.
 
+## Image Processing Details
+
+The application uses an optimized pipeline designed for efficiency and quality:
+
+### JPEG Processing (Optimized)
+1. **DCT-Domain Downscaling**: JPEGs are decoded using picojpeg with DCT-domain scaling (scale factors 1, 2, 4, 8)
+2. **Scale Factor Grouping**: Thumbnails are grouped by optimal scale factor to minimize decode operations
+3. **Single Decode Per Group**: Each scale factor group requires only one decode operation
+4. **JPEG Encoding**: All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
+
+### Non-JPEG Processing  
+1. **Full Resolution Decoding**: PNG, BMP, TGA images are decoded at their original resolution using stb_image
+2. **High-Quality Resizing**: Thumbnails are generated using stb_image_resize with linear interpolation
+3. **JPEG Encoding**: All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
+
+This approach optimizes performance and memory usage for JPEG files (which typically represent the majority of images in photo collections) while maintaining high quality for all supported formats.
+
 ## Performance Notes
 
 - **Fast scanning**: Optimized for processing large image collections
 - **Content-based deduplication**: Identical images (by content) are processed only once
-- **Efficient thumbnailing**: JPEG sources use optimized decoding for fast processing
+- **Efficient JPEG processing**: DCT-domain downscaling minimizes memory usage and decode time
+- **Scale factor optimization**: Groups thumbnails by scale factor to minimize JPEG decode operations
 - **Lightning-fast database**: LMDB provides high-performance storage and retrieval
 - **Memory efficient**: Processes images one at a time with proper cleanup
 - **Status reporting**: Real-time progress updates every 10 seconds
