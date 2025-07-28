@@ -506,7 +506,10 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
         bool allocated_rgb = false;
         
         if (channels == 3) {
-            rgb_data = image_data;
+            // For RGB data, create a copy for transformation
+            rgb_data = (unsigned char*)malloc(width * height * 3);
+            allocated_rgb = true;
+            memcpy(rgb_data, image_data, width * height * 3);
         } else {
             // Convert to RGB for orientation processing
             rgb_data = (unsigned char*)malloc(width * height * 3);
@@ -517,7 +520,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
                     // Grayscale to RGB
                     rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i];
                 } else if (channels == 2) {
-                    // Grayscale + Alpha to RGB (ignore alpha)
+                    // Grayscale + Alpha to RGB (ignore alpha)  
                     rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i*2];
                 } else if (channels == 4) {
                     // RGBA to RGB (ignore alpha)
@@ -531,12 +534,10 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
         // Apply orientation transformation
         apply_orientation_transform(rgb_data, width, height, orientation);
         
-        // Update image_data if we converted or need to update the original
-        if (allocated_rgb) {
-            stbi_image_free(image_data);
-            image_data = rgb_data;
-            channels = 3;
-        }
+        // Replace the original image data
+        stbi_image_free(image_data);
+        image_data = rgb_data;
+        channels = 3;
     }
     
     // Compute content hash
@@ -1235,7 +1236,19 @@ void DatabaseManager::apply_orientation_transform(unsigned char* data, int& widt
         case 7:
         case 8: {
             // These require 90-degree rotations, which change dimensions
-            std::vector<unsigned char> rotated_data(width * height * channels);
+            int new_width, new_height;
+            
+            if (orientation == 6 || orientation == 8) {
+                // 90-degree rotations swap dimensions
+                new_width = height;
+                new_height = width;
+            } else {
+                // Transpose operations keep dimensions
+                new_width = height;
+                new_height = width;
+            }
+            
+            std::vector<unsigned char> rotated_data(new_width * new_height * channels);
             
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
@@ -1251,7 +1264,7 @@ void DatabaseManager::apply_orientation_transform(unsigned char* data, int& widt
                             dst_x = height - 1 - y;
                             dst_y = x;
                             break;
-                        case 7: // Transpose + vertical flip
+                        case 7: // Transpose + vertical flip  
                             dst_x = height - 1 - y;
                             dst_y = width - 1 - x;
                             break;
@@ -1261,14 +1274,7 @@ void DatabaseManager::apply_orientation_transform(unsigned char* data, int& widt
                             break;
                     }
                     
-                    int dst_idx;
-                    if (orientation == 6 || orientation == 8) {
-                        // For 90-degree rotations, swap width and height
-                        dst_idx = (dst_y * height + dst_x) * channels;
-                    } else {
-                        // For transpose operations
-                        dst_idx = (dst_y * height + dst_x) * channels;
-                    }
+                    int dst_idx = (dst_y * new_width + dst_x) * channels;
                     
                     for (int c = 0; c < channels; c++) {
                         rotated_data[dst_idx + c] = original_data[src_idx + c];
@@ -1279,10 +1285,9 @@ void DatabaseManager::apply_orientation_transform(unsigned char* data, int& widt
             // Copy rotated data back
             std::copy(rotated_data.begin(), rotated_data.end(), data);
             
-            // Swap dimensions for 90-degree rotations
-            if (orientation == 6 || orientation == 8) {
-                std::swap(width, height);
-            }
+            // Update dimensions
+            width = new_width;
+            height = new_height;
             break;
         }
     }
