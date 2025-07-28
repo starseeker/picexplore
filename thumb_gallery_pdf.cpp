@@ -34,12 +34,12 @@
 
 // Third-party dependencies
 #include "cxxopts.hpp"      // Command line parsing
-#include "lmdb.h"          // Lightning Memory-Mapped Database
+#include "lmdb.h"           // Lightning Memory-Mapped Database
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"     // Image loading
+#include "stb_image.h"      // Image loading
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include "stb_image_resize2.h" // Image resizing
-#include "pdfimg.hpp"      // PDF output
+#include "pdfimg.hpp"       // PDF output
 
 // Local includes
 #include "justified_layout.hpp"
@@ -52,12 +52,12 @@ const double PAGE_HEIGHT_INCHES = 11.0;
 const double PAGE_DPI = 300.0;
 const double PAGE_MARGIN_INCHES = 0.5;
 
-const int PAGE_WIDTH_PX = static_cast<int>(PAGE_WIDTH_INCHES * PAGE_DPI);  // 2550
-const int PAGE_HEIGHT_PX = static_cast<int>(PAGE_HEIGHT_INCHES * PAGE_DPI); // 3300
-const int PAGE_MARGIN_PX = static_cast<int>(PAGE_MARGIN_INCHES * PAGE_DPI); // 150
+const int PAGE_WIDTH_PX = static_cast<int>(PAGE_WIDTH_INCHES * PAGE_DPI);      // 2550
+const int PAGE_HEIGHT_PX = static_cast<int>(PAGE_HEIGHT_INCHES * PAGE_DPI);    // 3300
+const int PAGE_MARGIN_PX = static_cast<int>(PAGE_MARGIN_INCHES * PAGE_DPI);    // 150
 
-const int LAYOUT_WIDTH_PX = PAGE_WIDTH_PX - (2 * PAGE_MARGIN_PX);  // 2250
-const int LAYOUT_HEIGHT_PX = PAGE_HEIGHT_PX - (2 * PAGE_MARGIN_PX); // 3000
+const int LAYOUT_WIDTH_PX = PAGE_WIDTH_PX - (2 * PAGE_MARGIN_PX);              // 2250
+const int LAYOUT_HEIGHT_PX = PAGE_HEIGHT_PX - (2 * PAGE_MARGIN_PX);            // 3000
 
 struct ImageInfo {
     std::string path;
@@ -84,96 +84,96 @@ bool load_image_info(MDB_txn* txn, MDB_dbi dbi, const std::string& hash, ImageIn
     std::vector<int> sizes = {32, 64, 128, 256, 512, 1024};
     int best_size = 0;
     std::vector<uint8_t> best_data;
-    
+
     for (int size : sizes) {
         std::string thumb_key = hash + ":" + std::to_string(size);
         MDB_val key, data;
         key.mv_data = (void*)thumb_key.c_str();
         key.mv_size = thumb_key.length();
-        
+
         if (mdb_get(txn, dbi, &key, &data) == 0) {
             best_size = size;
             best_data.assign((uint8_t*)data.mv_data, (uint8_t*)data.mv_data + data.mv_size);
         }
     }
-    
+
     if (best_size == 0) {
         return false;
     }
-    
+
     // Load thumbnail image to get dimensions and aspect ratio
     int width, height, channels;
-    stbi_uc* pixels = stbi_load_from_memory(best_data.data(), best_data.size(), 
-                                          &width, &height, &channels, 3);
-    
+    stbi_uc* pixels = stbi_load_from_memory(best_data.data(), best_data.size(),
+                                            &width, &height, &channels, 3);
+
     if (!pixels) {
         return false;
     }
-    
+
     info.best_thumb_size = best_size;
     info.thumb_data = std::move(best_data);
     info.thumb_width = width;
     info.thumb_height = height;
     info.aspect_ratio = static_cast<double>(width) / height;
-    
+
     stbi_image_free(pixels);
     return true;
 }
 
 // Resize image data to fit within target dimensions, maintaining aspect ratio
 std::vector<uint8_t> resize_image_to_fit(const std::vector<uint8_t>& image_data,
-                                        int src_width, int src_height,
-                                        int target_width, int target_height) {
+                                         int src_width, int src_height,
+                                         int target_width, int target_height) {
     // Load original image
     int width, height, channels;
     stbi_uc* pixels = stbi_load_from_memory(image_data.data(), image_data.size(),
-                                          &width, &height, &channels, 3);
+                                            &width, &height, &channels, 3);
     if (!pixels) {
         return {};
     }
-    
+
     // Calculate scale to fit within target bounds
     double scale_x = static_cast<double>(target_width) / width;
     double scale_y = static_cast<double>(target_height) / height;
     double scale = std::min(scale_x, scale_y);
-    
+
     int new_width = static_cast<int>(width * scale);
     int new_height = static_cast<int>(height * scale);
-    
+
     // Resize image
     std::vector<uint8_t> resized(new_width * new_height * 3);
     if (!stbir_resize_uint8_linear(pixels, width, height, 0,
-                                  resized.data(), new_width, new_height, 0, STBIR_RGB)) {
+                                   resized.data(), new_width, new_height, 0, STBIR_RGB)) {
         stbi_image_free(pixels);
         return {};
     }
-    
+
     stbi_image_free(pixels);
     return resized;
 }
 
 // Composite image into page buffer at specified position
 void composite_image(std::vector<uint8_t>& page_buffer, int page_width, int page_height,
-                    const std::vector<uint8_t>& image_data, int img_width, int img_height,
-                    int x, int y, int box_width, int box_height) {
+                     const std::vector<uint8_t>& image_data, int img_width, int img_height,
+                     int x, int y, int box_width, int box_height) {
     // Center image within the box
     int offset_x = x + (box_width - img_width) / 2;
     int offset_y = y + (box_height - img_height) / 2;
-    
+
     for (int row = 0; row < img_height; row++) {
         int page_y = offset_y + row;
         if (page_y < 0 || page_y >= page_height) continue;
-        
+
         int page_row_start = page_y * page_width * 3;
         int img_row_start = row * img_width * 3;
-        
+
         for (int col = 0; col < img_width; col++) {
             int page_x = offset_x + col;
             if (page_x < 0 || page_x >= page_width) continue;
-            
+
             int page_pixel = page_row_start + page_x * 3;
             int img_pixel = img_row_start + col * 3;
-            
+
             page_buffer[page_pixel] = image_data[img_pixel];         // R
             page_buffer[page_pixel + 1] = image_data[img_pixel + 1]; // G
             page_buffer[page_pixel + 2] = image_data[img_pixel + 2]; // B
@@ -184,7 +184,7 @@ void composite_image(std::vector<uint8_t>& page_buffer, int page_width, int page
 int main(int argc, char* argv[]) {
     try {
         cxxopts::Options options("thumb_gallery_pdf", "Generate justified-layout PDF image gallery from LMDB thumbnails");
-        
+
         options.add_options()
             ("h,help", "Print usage")
             ("lmdb", "Input LMDB database path", cxxopts::value<std::string>())
@@ -250,7 +250,7 @@ int main(int argc, char* argv[]) {
                 ImageInfo info;
                 info.hash = hash;
                 info.path = std::string((char*)data.mv_data, data.mv_size);
-                
+
                 if (load_image_info(txn, dbi, hash, info)) {
                     images.push_back(std::move(info));
                 }
@@ -267,7 +267,7 @@ int main(int argc, char* argv[]) {
         }
 
         // Sort images alphabetically by path
-        std::sort(images.begin(), images.end(), 
+        std::sort(images.begin(), images.end(),
                  [](const ImageInfo& a, const ImageInfo& b) {
                      return a.path < b.path;
                  });
@@ -292,104 +292,133 @@ int main(int argc, char* argv[]) {
             items.push_back(item);
         }
 
-        // Calculate pages needed
-        std::vector<std::vector<Item>> pages;
-        size_t current_item = 0;
+        // --- Updated Pagination and Layout Logic ---
+        // Track exact mapping from boxes to images to keep indices in sync
 
-        while (current_item < items.size()) {
-            // Try to fit as many rows as possible on this page
-            std::vector<Item> page_items;
+        std::vector<std::vector<size_t>> image_indices_per_page; // indices into images vector for each page
+        std::vector<std::vector<Item>> boxes_per_page;           // layout boxes for each page
+
+        size_t image_idx = 0;
+        while (image_idx < items.size()) {
+            std::vector<Item> page_boxes;
+            std::vector<size_t> page_indices;
             double current_y = 0;
 
-            while (current_y < LAYOUT_HEIGHT_PX && current_item < items.size()) {
-                // Calculate a subset that fits in remaining space
-                std::vector<Item> remaining_items(items.begin() + current_item, items.end());
-                
-                // Temporarily set max rows to prevent overflow
+            while (current_y < LAYOUT_HEIGHT_PX && image_idx < items.size()) {
+                size_t remaining = items.size() - image_idx;
+                std::vector<Item> remaining_items(items.begin() + image_idx, items.end());
+
+                // Use maxRows to be as greedy as possible
                 LayoutCfg temp_cfg = layout_cfg;
                 temp_cfg.maxRows = std::max(1, static_cast<int>((LAYOUT_HEIGHT_PX - current_y) / row_height));
-                
                 JustifiedLayout layout(remaining_items, temp_cfg);
-                
+
                 if (layout.boxes().empty()) break;
-                
-                // Check if layout fits in remaining space
-                if (current_y + layout.height() <= LAYOUT_HEIGHT_PX) {
-                    // All boxes fit, adjust positions
-                    for (auto box : layout.boxes()) {
+
+                // Determine how many boxes (i.e., images) will actually fit in the current page vertically
+                double layout_h = layout.height();
+                size_t nboxes = layout.boxes().size();
+
+                if (current_y + layout_h <= LAYOUT_HEIGHT_PX) {
+                    // All rows fit
+                    for (size_t b = 0; b < nboxes; ++b) {
+                        Item box = layout.boxes()[b];
                         box.t += current_y;
-                        page_items.push_back(box);
+                        page_boxes.push_back(box);
+                        page_indices.push_back(image_idx + b);
                     }
-                    current_item += layout.boxes().size();
-                    current_y += layout.height();
+                    image_idx += nboxes;
+                    current_y += layout_h;
                 } else {
-                    // Only partial fit - break and start new page
-                    if (page_items.empty()) {
-                        // Force at least one row even if it overflows
-                        temp_cfg.maxRows = 1;
-                        JustifiedLayout single_row_layout(remaining_items, temp_cfg);
-                        for (auto box : single_row_layout.boxes()) {
-                            box.t += current_y;
-                            page_items.push_back(box);
+                    // Try to fit rows one at a time
+                    size_t rows_fit = 0;
+                    double h_fit = 0;
+                    std::vector<Item> fit_boxes;
+                    std::vector<size_t> fit_indices;
+
+                    // We'll need to build up row-by-row, using maxRows=1 for each
+                    size_t local_idx = 0;
+                    double test_y = current_y;
+                    while (test_y < LAYOUT_HEIGHT_PX && (image_idx + local_idx) < items.size()) {
+                        LayoutCfg row_cfg = layout_cfg;
+                        row_cfg.maxRows = 1;
+                        std::vector<Item> row_items(items.begin() + image_idx + local_idx, items.end());
+                        JustifiedLayout row_layout(row_items, row_cfg);
+                        if (row_layout.boxes().empty()) break;
+                        double row_h = row_layout.height();
+                        if (test_y + row_h > LAYOUT_HEIGHT_PX) break;
+                        // Add this row
+                        for (size_t rb = 0; rb < row_layout.boxes().size(); ++rb) {
+                            Item box = row_layout.boxes()[rb];
+                            box.t += test_y;
+                            fit_boxes.push_back(box);
+                            fit_indices.push_back(image_idx + local_idx + rb);
                         }
-                        current_item += single_row_layout.boxes().size();
+                        local_idx += row_layout.boxes().size();
+                        test_y += row_h;
+                        rows_fit++;
                     }
-                    break;
+                    if (!fit_boxes.empty()) {
+                        for (size_t b = 0; b < fit_boxes.size(); ++b) {
+                            page_boxes.push_back(fit_boxes[b]);
+                            page_indices.push_back(fit_indices[b]);
+                        }
+                        image_idx += fit_boxes.size();
+                        current_y = test_y;
+                    }
+                    break; // Done with this page
                 }
             }
 
-            if (!page_items.empty()) {
-                pages.push_back(page_items);
+            if (!page_boxes.empty() && !page_indices.empty()) {
+                boxes_per_page.push_back(page_boxes);
+                image_indices_per_page.push_back(page_indices);
             }
         }
 
-        std::cout << "Layout calculated: " << pages.size() << " pages" << std::endl;
+        std::cout << "Layout calculated: " << boxes_per_page.size() << " pages" << std::endl;
 
-        // Generate PDF
+        // --- Render PDF using tracked indices ---
         pdfimg::PDFDocument pdf;
-        size_t global_item_idx = 0;  // Track global item index across all pages
 
-        for (size_t page_idx = 0; page_idx < pages.size(); page_idx++) {
-            std::cout << "Rendering page " << (page_idx + 1) << " with " << pages[page_idx].size() << " images" << std::endl;
+        for (size_t page_idx = 0; page_idx < boxes_per_page.size(); ++page_idx) {
+            std::cout << "Rendering page " << (page_idx + 1) << " with " << boxes_per_page[page_idx].size() << " images" << std::endl;
 
             // Create page buffer (white background)
             std::vector<uint8_t> page_buffer(PAGE_WIDTH_PX * PAGE_HEIGHT_PX * 3, 255);
 
-            // Render images on this page
-            for (size_t item_idx = 0; item_idx < pages[page_idx].size(); item_idx++) {
-                const Item& box = pages[page_idx][item_idx];
-                const ImageInfo& img = images[global_item_idx + item_idx];
+            for (size_t item_idx = 0; item_idx < boxes_per_page[page_idx].size(); ++item_idx) {
+                size_t img_idx = image_indices_per_page[page_idx][item_idx];
+                if (img_idx >= images.size()) {
+                    std::cerr << "Error: Calculated image index out of range" << std::endl;
+                    continue;
+                }
+                const Item& box = boxes_per_page[page_idx][item_idx];
+                const ImageInfo& img = images[img_idx];
 
-                // Calculate actual position with page margins
                 int x = PAGE_MARGIN_PX + static_cast<int>(box.l);
                 int y = PAGE_MARGIN_PX + static_cast<int>(box.t);
                 int w = static_cast<int>(box.w);
                 int h = static_cast<int>(box.h);
 
-                // Resize image to fit the box
-                std::vector<uint8_t> resized = resize_image_to_fit(img.thumb_data, 
-                                                                 img.thumb_width, img.thumb_height,
-                                                                 w, h);
+                std::vector<uint8_t> resized = resize_image_to_fit(
+                    img.thumb_data, img.thumb_width, img.thumb_height, w, h
+                );
                 if (!resized.empty()) {
-                    // Get resized dimensions
                     double scale = std::min(static_cast<double>(w) / img.thumb_width,
-                                          static_cast<double>(h) / img.thumb_height);
+                                            static_cast<double>(h) / img.thumb_height);
                     int resized_w = static_cast<int>(img.thumb_width * scale);
                     int resized_h = static_cast<int>(img.thumb_height * scale);
 
                     composite_image(page_buffer, PAGE_WIDTH_PX, PAGE_HEIGHT_PX,
-                                  resized, resized_w, resized_h, x, y, w, h);
+                                    resized, resized_w, resized_h, x, y, w, h);
                 }
             }
 
-            // Add page to PDF
             pdf.add_image_page(page_buffer.data(), PAGE_WIDTH_PX, PAGE_HEIGHT_PX,
-                             PAGE_WIDTH_PX * 3, true, pdfimg::CompressionType::None, PAGE_DPI);
-            
-            global_item_idx += pages[page_idx].size();
+                               PAGE_WIDTH_PX * 3, true, pdfimg::CompressionType::None, PAGE_DPI);
         }
 
-        // Write PDF file
         if (!pdf.save(output_path)) {
             std::cerr << "Error: Failed to write PDF file: " << output_path << std::endl;
             mdb_env_close(env);
