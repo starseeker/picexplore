@@ -219,7 +219,7 @@ static uint8 gMCUOrg[6];
 static pjpeg_need_bytes_callback_t g_pNeedBytesCallback;
 static void *g_pCallback_data;
 static uint8 gCallbackStatus;
-static uint8 gReduce;
+static uint8 gScaleFactor;  // 1=full, 2=1/2, 4=1/4, 8=1/8
 //------------------------------------------------------------------------------
 static void fillInBuf(void)
 {
@@ -1905,6 +1905,249 @@ static void transformBlock(uint8 mcuBlock)
    }      
 }
 //------------------------------------------------------------------------------
+// Scaled transform functions for partial decoding
+//------------------------------------------------------------------------------
+
+// 1/2 scale: 4x4 IDCT (processes 4x4 coefficients, outputs 4x4 pixels)
+static void idct4x4(void)
+{
+   int16 tmp0, tmp1, tmp2, tmp3;
+   int16 tmp10, tmp11, tmp12, tmp13;
+   int16 *src = gCoeffBuf;
+   int i;
+
+   // Transform rows (4x4)
+   for (i = 0; i < 4; i++, src += 8) 
+   {
+      // Even part: process coefficients 0,2
+      tmp0 = src[0];
+      tmp2 = src[2];
+      
+      tmp10 = tmp0 + tmp2;
+      tmp12 = tmp0 - tmp2;
+      
+      // Odd part: process coefficients 1,3  
+      tmp1 = src[1];
+      tmp3 = src[3];
+      
+      // Use scaled coefficients for approximate IDCT  
+      // For simplicity, use the same coefficient - this can be optimized later
+      tmp11 = imul_b1_b3(tmp1 + tmp3);
+      tmp13 = imul_b1_b3(tmp1 - tmp3);
+      
+      src[0] = tmp10 + tmp11;
+      src[1] = tmp12 + tmp13;
+      src[2] = tmp12 - tmp13;
+      src[3] = tmp10 - tmp11;
+   }
+   
+   // Transform columns (4x4)
+   src = gCoeffBuf;
+   for (i = 0; i < 4; i++, src++) 
+   {
+      // Even part
+      tmp0 = src[0*8];
+      tmp2 = src[2*8];
+      
+      tmp10 = tmp0 + tmp2;
+      tmp12 = tmp0 - tmp2;
+      
+      // Odd part
+      tmp1 = src[1*8];
+      tmp3 = src[3*8];
+      
+      tmp11 = imul_b1_b3(tmp1 + tmp3);
+      tmp13 = imul_b1_b3(tmp1 - tmp3);
+      
+      src[0*8] = (tmp10 + tmp11) >> PJPG_DCT_SCALE_BITS;
+      src[1*8] = (tmp12 + tmp13) >> PJPG_DCT_SCALE_BITS;
+      src[2*8] = (tmp12 - tmp13) >> PJPG_DCT_SCALE_BITS;
+      src[3*8] = (tmp10 - tmp11) >> PJPG_DCT_SCALE_BITS;
+   }
+}
+
+// 1/4 scale: 2x2 IDCT (processes 2x2 coefficients, outputs 2x2 pixels)
+static void idct2x2(void)
+{
+   int16 tmp0, tmp1, tmp2, tmp3;
+   int16 *src = gCoeffBuf;
+   
+   // 2x2 transform - much simpler
+   tmp0 = src[0];  // DC
+   tmp1 = src[1];  // AC horizontal
+   tmp2 = src[8];  // AC vertical  
+   tmp3 = src[9];  // AC diagonal
+   
+   // 2x2 IDCT matrix application
+   src[0] = (tmp0 + tmp1 + tmp2 + tmp3) >> PJPG_DCT_SCALE_BITS;
+   src[1] = (tmp0 - tmp1 + tmp2 - tmp3) >> PJPG_DCT_SCALE_BITS;
+   src[8] = (tmp0 + tmp1 - tmp2 - tmp3) >> PJPG_DCT_SCALE_BITS;
+   src[9] = (tmp0 - tmp1 - tmp2 + tmp3) >> PJPG_DCT_SCALE_BITS;
+}
+
+// Transform block for 1/2 scale (outputs 4x4 pixels)  
+static void transformBlockScale2(uint8 mcuBlock)
+{
+   uint8 r, c;
+   int16 *pSrc = gCoeffBuf;
+   
+   idct4x4();
+   
+   switch (gScanType)
+   {
+      case PJPG_GRAYSCALE:
+      {
+         // Copy 4x4 Y block
+         for (r = 0; r < 4; r++)
+         {
+            for (c = 0; c < 4; c++)
+            {
+               gMCUBufR[r*8 + c] = clamp(pSrc[r*8 + c] + 128);
+            }
+         }
+         break;
+      }
+      case PJPG_YH1V1:
+      {
+         // MCU size: 8x8, 3 blocks per MCU
+         switch (mcuBlock)
+         {
+            case 0:
+            {
+               // Y component - copy 4x4 to all 3 buffers initially
+               for (r = 0; r < 4; r++)
+               {
+                  for (c = 0; c < 4; c++)
+                  {
+                     uint8 y = clamp(pSrc[r*8 + c] + 128);
+                     gMCUBufR[r*8 + c] = y;
+                     gMCUBufG[r*8 + c] = y;
+                     gMCUBufB[r*8 + c] = y;
+                  }
+               }
+               break;
+            }
+            case 1:
+            {
+               // Cb component - apply to 4x4 area
+               for (r = 0; r < 4; r++)
+               {
+                  for (c = 0; c < 4; c++)
+                  {
+                     int16 cb = pSrc[r*8 + c];
+                     int16 cbG = ((cb * 88U) >> 8U) - 44U;
+                     int16 cbB = (cb + ((cb * 198U) >> 8U)) - 227U;
+                     gMCUBufG[r*8 + c] = subAndClamp(gMCUBufG[r*8 + c], cbG);
+                     gMCUBufB[r*8 + c] = addAndClamp(gMCUBufB[r*8 + c], cbB);
+                  }
+               }
+               break;
+            }
+            case 2:
+            {
+               // Cr component - apply to 4x4 area
+               for (r = 0; r < 4; r++)
+               {
+                  for (c = 0; c < 4; c++)
+                  {
+                     int16 cr = pSrc[r*8 + c];
+                     int16 crR = (cr + ((cr * 103U) >> 8U)) - 179;
+                     int16 crG = ((cr * 183U) >> 8U) - 91;
+                     gMCUBufR[r*8 + c] = addAndClamp(gMCUBufR[r*8 + c], crR);
+                     gMCUBufG[r*8 + c] = subAndClamp(gMCUBufG[r*8 + c], crG);
+                  }
+               }
+               break;
+            }
+         }
+         break;
+      }
+      // TODO: Add other scan types (YH2V1, YH1V2, YH2V2) 
+   }
+}
+
+// Transform block for 1/4 scale (outputs 2x2 pixels)
+static void transformBlockScale4(uint8 mcuBlock)
+{
+   uint8 r, c;
+   int16 *pSrc = gCoeffBuf;
+   
+   idct2x2();
+   
+   switch (gScanType)
+   {
+      case PJPG_GRAYSCALE:
+      {
+         // Copy 2x2 Y block
+         for (r = 0; r < 2; r++)
+         {
+            for (c = 0; c < 2; c++)
+            {
+               gMCUBufR[r*8 + c] = clamp(pSrc[r*8 + c] + 128);
+            }
+         }
+         break;
+      }
+      case PJPG_YH1V1:
+      {
+         // MCU size: 8x8, 3 blocks per MCU
+         switch (mcuBlock)
+         {
+            case 0:
+            {
+               // Y component - copy 2x2 to all 3 buffers initially
+               for (r = 0; r < 2; r++)
+               {
+                  for (c = 0; c < 2; c++)
+                  {
+                     uint8 y = clamp(pSrc[r*8 + c] + 128);
+                     gMCUBufR[r*8 + c] = y;
+                     gMCUBufG[r*8 + c] = y;
+                     gMCUBufB[r*8 + c] = y;
+                  }
+               }
+               break;
+            }
+            case 1:
+            {
+               // Cb component - apply to 2x2 area
+               for (r = 0; r < 2; r++)
+               {
+                  for (c = 0; c < 2; c++)
+                  {
+                     int16 cb = pSrc[r*8 + c];
+                     int16 cbG = ((cb * 88U) >> 8U) - 44U;
+                     int16 cbB = (cb + ((cb * 198U) >> 8U)) - 227U;
+                     gMCUBufG[r*8 + c] = subAndClamp(gMCUBufG[r*8 + c], cbG);
+                     gMCUBufB[r*8 + c] = addAndClamp(gMCUBufB[r*8 + c], cbB);
+                  }
+               }
+               break;
+            }
+            case 2:
+            {
+               // Cr component - apply to 2x2 area
+               for (r = 0; r < 2; r++)
+               {
+                  for (c = 0; c < 2; c++)
+                  {
+                     int16 cr = pSrc[r*8 + c];
+                     int16 crR = (cr + ((cr * 103U) >> 8U)) - 179;
+                     int16 crG = ((cr * 183U) >> 8U) - 91;
+                     gMCUBufR[r*8 + c] = addAndClamp(gMCUBufR[r*8 + c], crR);
+                     gMCUBufG[r*8 + c] = subAndClamp(gMCUBufG[r*8 + c], crG);
+                  }
+               }
+               break;
+            }
+         }
+         break;
+      }
+      // TODO: Add other scan types (YH2V1, YH1V2, YH2V2)
+   }
+}
+
+//------------------------------------------------------------------------------
 static void transformBlockReduce(uint8 mcuBlock)
 {
    uint8 c = clamp(PJPG_DESCALE(gCoeffBuf[0]) + 128);
@@ -2155,22 +2398,34 @@ static uint8 decodeNextMCU(void)
 
       compACTab = gCompACTab[componentID];
 
-      if (gReduce)
+      if (gScaleFactor > 1)
       {
-         // Decode, but throw out the AC coefficients in reduce mode.
+         // Determine which coefficients to decode based on scale factor
+         uint8 maxCoeff;
+         if (gScaleFactor == 8)
+            maxCoeff = 1;  // DC only
+         else if (gScaleFactor == 4)
+            maxCoeff = 4;  // 2x2 coefficients: 0,1,8,9
+         else if (gScaleFactor == 2)
+            maxCoeff = 16; // 4x4 coefficients: first 4 rows and cols
+         else
+            maxCoeff = 64; // shouldn't happen with scale > 1
+            
+         // Decode AC coefficients, but only store the ones we need
          for (k = 1; k < 64; k++)
          {
             s = huffDecode(compACTab ? &gHuffTab3 : &gHuffTab2, compACTab ? gHuffVal3 : gHuffVal2);
 
             numExtraBits = s & 0xF;
-            if (numExtraBits)
-               getBits2(numExtraBits);
-
             r = s >> 4;
             s &= 15;
 
             if (s)
             {
+               uint16 extraBits = 0;
+               if (numExtraBits)
+                  extraBits = getBits2(numExtraBits);
+
                if (r)
                {
                   if ((k + r) > 63)
@@ -2178,6 +2433,30 @@ static uint8 decodeNextMCU(void)
 
                   k = (uint8)(k + r);
                }
+
+               // Only store coefficients we need for the desired scale
+               if (gScaleFactor == 4)
+               {
+                  // For 1/4 scale, only store coefficients at positions 1, 8, 9
+                  if (k == 1 || k == 8 || k == 9)
+                  {
+                     int16 ac = huffExtend(extraBits, numExtraBits);
+                     gCoeffBuf[ZAG[k]] = ac * pQ[k];
+                  }
+               }
+               else if (gScaleFactor == 2)
+               {
+                  // For 1/2 scale, store coefficients in first 4x4 region
+                  uint8 zigPos = ZAG[k];
+                  uint8 row = zigPos >> 3;
+                  uint8 col = zigPos & 7;
+                  if (row < 4 && col < 4)
+                  {
+                     int16 ac = huffExtend(extraBits, numExtraBits);
+                     gCoeffBuf[zigPos] = ac * pQ[k];
+                  }
+               }
+               // For 1/8 scale, we don't store any AC coefficients
             }
             else
             {
@@ -2193,7 +2472,13 @@ static uint8 decodeNextMCU(void)
             }
          }
 
-         transformBlockReduce(mcuBlock); 
+         // Call appropriate transform function based on scale factor
+         if (gScaleFactor == 8)
+            transformBlockReduce(mcuBlock);
+         else if (gScaleFactor == 4)
+            transformBlockScale4(mcuBlock);
+         else if (gScaleFactor == 2)
+            transformBlockScale2(mcuBlock);
       }
       else
       {
@@ -2297,7 +2582,52 @@ unsigned char pjpeg_decode_init(pjpeg_image_info_t *pInfo, pjpeg_need_bytes_call
    g_pNeedBytesCallback = pNeed_bytes_callback;
    g_pCallback_data = pCallback_data;
    gCallbackStatus = 0;
-   gReduce = reduce;
+   gScaleFactor = reduce ? 8 : 1;  // Backward compatibility
+    
+   status = init();
+   if ((status) || (gCallbackStatus))
+      return gCallbackStatus ? gCallbackStatus : status;
+   
+   status = locateSOFMarker();
+   if ((status) || (gCallbackStatus))
+      return gCallbackStatus ? gCallbackStatus : status;
+
+   status = initFrame();
+   if ((status) || (gCallbackStatus))
+      return gCallbackStatus ? gCallbackStatus : status;
+
+   status = initScan();
+   if ((status) || (gCallbackStatus))
+      return gCallbackStatus ? gCallbackStatus : status;
+
+   pInfo->m_width = gImageXSize; pInfo->m_height = gImageYSize; pInfo->m_comps = gCompsInFrame;
+   pInfo->m_scanType = gScanType;
+   pInfo->m_MCUSPerRow = gMaxMCUSPerRow; pInfo->m_MCUSPerCol = gMaxMCUSPerCol;
+   pInfo->m_MCUWidth = gMaxMCUXSize; pInfo->m_MCUHeight = gMaxMCUYSize;
+   pInfo->m_pMCUBufR = gMCUBufR; pInfo->m_pMCUBufG = gMCUBufG; pInfo->m_pMCUBufB = gMCUBufB;
+      
+   return 0;
+}
+//------------------------------------------------------------------------------
+// New scaled decoding API
+unsigned char pjpeg_decode_init_scale(pjpeg_image_info_t *pInfo, pjpeg_need_bytes_callback_t pNeed_bytes_callback, void *pCallback_data, unsigned char scale_factor)
+{
+   uint8 status;
+   
+   // Validate scale factor - must be power of 2: 1, 2, 4, or 8
+   if (scale_factor != 1 && scale_factor != 2 && scale_factor != 4 && scale_factor != 8)
+      return PJPG_UNSUPPORTED_MODE;
+   
+   pInfo->m_width = 0; pInfo->m_height = 0; pInfo->m_comps = 0;
+   pInfo->m_MCUSPerRow = 0; pInfo->m_MCUSPerCol = 0;
+   pInfo->m_scanType = PJPG_GRAYSCALE;
+   pInfo->m_MCUWidth = 0; pInfo->m_MCUHeight = 0;
+   pInfo->m_pMCUBufR = (unsigned char*)0; pInfo->m_pMCUBufG = (unsigned char*)0; pInfo->m_pMCUBufB = (unsigned char*)0;
+
+   g_pNeedBytesCallback = pNeed_bytes_callback;
+   g_pCallback_data = pCallback_data;
+   gCallbackStatus = 0;
+   gScaleFactor = scale_factor;
     
    status = init();
    if ((status) || (gCallbackStatus))
