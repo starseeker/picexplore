@@ -128,4 +128,8 @@ private:
     bool process_image_file(const std::string& filepath, 
                           std::vector<WriteTask>& write_tasks,
                           Timer& timer, bool& should_skip);
+    
+    // EXIF orientation helpers
+    int get_exif_orientation(const std::string& filepath);
+    void apply_orientation_transform(unsigned char* data, int& width, int& height, int orientation);
 };

@@ -89,6 +89,47 @@ gui_test --directory ~/Pictures
 gui_test  # Open empty window, use File menu to load content
 ```
 
+### simfind (NEW)
+Content-based image similarity search tool that works with picscan databases.
+
+**Usage:**
+```bash
+simfind [OPTIONS]
+```
+
+**Options:**
+- `-q, --query PATH`: Path to query image (JPEG file)
+- `-d, --database PATH`: Path to picscan LMDB database
+- `-t, --threshold N`: Similarity score threshold (0.0-1.0, default: 0.7)
+- `-n, --max-results N`: Maximum number of results (0 = unlimited, default: 100)
+- `-m, --model PATH`: Path to ONNX model file (optional)
+- `-c, --cache PATH`: Path to feature cache database (optional)
+- `--no-cache`: Disable feature caching
+- `-v, --verbose`: Enable verbose output
+
+**Examples:**
+```bash
+# Find similar images with default threshold
+simfind --query photo.jpg --database images.db
+
+# Find highly similar images only
+simfind --query photo.jpg --database images.db --threshold 0.9
+
+# Get all similar images above threshold
+simfind --query photo.jpg --database images.db --threshold 0.5 --max-results 0
+
+# Use verbose output to see timing information
+simfind --query photo.jpg --database images.db --verbose
+```
+
+**Features:**
+- **Fast similarity search**: Uses largest available thumbnails (up to 1024px) for quick processing
+- **Content-based features**: Currently uses color histograms and texture analysis (64 dimensions)
+- **Extensible design**: Ready for ONNX Runtime integration with MobileNetV2/V3 models
+- **Feature caching**: Optional LMDB-based caching of computed feature vectors
+- **Efficient indexing**: Uses mlpack for fast nearest neighbor search
+- **Robust output**: One file path per line, sorted by similarity (most similar first)
+
 ### picscan
 Unified image scanner and PDF gallery generator that combines the functionality of the previous separate tools.
 
@@ -119,6 +160,7 @@ picscan [OPTIONS]
 **Features:**
 - **Multi-format support**: JPEG, PNG, BMP, TGA
 - **Efficient JPEG thumbnailing**: Uses DCT-domain downscaling during decode for optimal performance and memory usage
+- **EXIF orientation support**: Automatically reads and applies EXIF orientation data for correct thumbnail display using TinyEXIF
 - **Content-based deduplication**: Prevents duplicate processing using xxHash
 - **Multiple thumbnail sizes**: 32, 64, 128, 256, 512, 1024 px maximum dimension
 - **Robust error handling**: Gracefully skips corrupt or unreadable images
@@ -147,6 +189,14 @@ picscan --pdf gallery.pdf --layout-pad-top 30 --layout-pad-bottom 30 --layout-pa
 picscan --directory ~/Pictures --pdf my_photo_gallery.pdf --verbose
 
 # The PDF gallery is now ready to view!
+
+# NEW: Find similar images using content-based similarity
+simfind --query ~/Pictures/vacation_photo.jpg --database images.db --threshold 0.8
+
+# Find highly similar images and copy them to a folder
+simfind --query sample.jpg --database images.db --threshold 0.9 | while read -r img; do
+    cp "$img" similar_images/
+done
 ```
 
 ## Building
@@ -158,7 +208,6 @@ You need the following system packages installed:
 - CMake 3.12 or later
 - A C++17 compatible compiler (GCC, Clang)
 - libjpeg-turbo development headers (`libjpeg-turbo8-dev` on Ubuntu/Debian)
-- libexif development headers (`libexif-dev` on Ubuntu/Debian)
 - pkg-config
 
 **For GUI application (gui_test):**
@@ -174,6 +223,19 @@ sudo apt-get install cmake build-essential libjpeg-turbo8-dev libexif-dev pkg-co
 
 # Additional GUI dependencies
 sudo apt-get install libx11-dev libxext-dev libxft-dev libxinerama-dev libfontconfig1-dev libgl1-mesa-dev libglu1-mesa-dev
+
+**For similarity search features (optional):**
+- mlpack development headers (`libmlpack-dev` on Ubuntu/Debian)
+- ensmallen development headers (`libensmallen-dev` on Ubuntu/Debian)
+```
+
+On Ubuntu/Debian:
+```bash
+# Required packages
+sudo apt-get install cmake build-essential libjpeg-turbo8-dev pkg-config
+
+# Optional packages for similarity search
+sudo apt-get install libmlpack-dev libensmallen-dev
 ```
 
 ### Build Steps
@@ -197,9 +259,10 @@ cmake ..
 make
 ```
 
-This will build the unified executable:
+This will build the executable(s):
 - `picscan` (unified image scanner and PDF gallery generator)
 - `gui_test` (FLTK-based GUI for interactive thumbnail viewing)
+- `simfind` (image similarity search tool - only if mlpack is available)
 
 ## Supported Image Formats
 
@@ -215,15 +278,19 @@ All formats support grayscale, RGB, and RGBA color modes.
 The application uses an optimized pipeline designed for efficiency and quality:
 
 ### JPEG Processing (Optimized)
-1. **DCT-Domain Downscaling**: JPEGs are decoded using libjpeg-turbo with DCT-domain scaling (scale factors 1/1, 1/2, 1/4, 1/8)
-2. **Scale Factor Grouping**: Thumbnails are grouped by optimal scale factor to minimize decode operations
-3. **Single Decode Per Group**: Each scale factor group requires only one decode operation
-4. **JPEG Encoding**: All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
+1. **EXIF Orientation Reading**: Uses TinyEXIF to read EXIF orientation data from JPEG files
+2. **Orientation Correction**: Applies appropriate rotations and flips to ensure correct thumbnail orientation
+3. **DCT-Domain Downscaling**: JPEGs are decoded using libjpeg-turbo with DCT-domain scaling (scale factors 1/1, 1/2, 1/4, 1/8)
+4. **Scale Factor Grouping**: Thumbnails are grouped by optimal scale factor to minimize decode operations
+5. **Single Decode Per Group**: Each scale factor group requires only one decode operation
+6. **JPEG Encoding**: All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
 
 ### Non-JPEG Processing  
-1. **Full Resolution Decoding**: PNG, BMP, TGA images are decoded at their original resolution using stb_image
-2. **High-Quality Resizing**: Thumbnails are generated using stb_image_resize with linear interpolation
-3. **JPEG Encoding**: All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
+1. **EXIF Orientation Reading**: Uses TinyEXIF to read EXIF orientation data where available
+2. **Orientation Correction**: Applies appropriate rotations and flips to ensure correct thumbnail orientation
+3. **Full Resolution Decoding**: PNG, BMP, TGA images are decoded at their original resolution using stb_image
+4. **High-Quality Resizing**: Thumbnails are generated using stb_image_resize with linear interpolation
+5. **JPEG Encoding**: All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
 
 This approach optimizes performance and memory usage for JPEG files (which typically represent the majority of images in photo collections) while maintaining high quality for all supported formats.
 

@@ -8,9 +8,58 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find required system packages
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(JPEG REQUIRED libjpeg)
-pkg_check_modules(EXIF REQUIRED libexif)
+if(WIN32)
+    # Windows: Use find_library and find_path for libjpeg
+    find_path(JPEG_INCLUDE_DIR jpeglib.h)
+    find_library(JPEG_LIBRARY NAMES jpeg libjpeg)
+    if(NOT JPEG_INCLUDE_DIR OR NOT JPEG_LIBRARY)
+        message(FATAL_ERROR "libjpeg not found. Please install libjpeg-turbo or libjpeg.")
+    endif()
+    set(JPEG_LIBRARIES ${JPEG_LIBRARY})
+    set(JPEG_INCLUDE_DIRS ${JPEG_INCLUDE_DIR})
+else()
+    # Unix-like systems: Use pkg-config or find_package
+    find_package(PkgConfig)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(JPEG REQUIRED libjpeg)
+    else()
+        find_package(JPEG REQUIRED)
+        set(JPEG_LIBRARIES ${JPEG_LIBRARIES})
+        set(JPEG_INCLUDE_DIRS ${JPEG_INCLUDE_DIR})
+    endif()
+endif()
+
+# Find mlpack for similarity search
+find_package(PkgConfig)
+if (PKG_CONFIG_FOUND)
+    pkg_search_module(MLPACK mlpack)
+endif()
+
+# Also check manually
+if(NOT MLPACK_FOUND)
+    find_path(MLPACK_INCLUDE_DIR NAMES mlpack/mlpack.hpp)
+    find_library(MLPACK_LIBRARY NAMES mlpack)
+
+    if(MLPACK_INCLUDE_DIR AND MLPACK_LIBRARY)
+        set(MLPACK_FOUND TRUE)
+        set(MLPACK_LIBRARIES ${MLPACK_LIBRARY})
+        set(MLPACK_INCLUDE_DIRS ${MLPACK_INCLUDE_DIR})
+    endif()
+endif()
+
+# If pkg-config found it but gave partial info, use manual detection
+if(MLPACK_FOUND AND NOT MLPACK_LIBRARIES)
+    # Use pkg-config info
+    execute_process(COMMAND pkg-config --libs mlpack 
+                   OUTPUT_VARIABLE MLPACK_LIBRARIES 
+                   OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(COMMAND pkg-config --cflags mlpack 
+                   OUTPUT_VARIABLE MLPACK_CFLAGS 
+                   OUTPUT_STRIP_TRAILING_WHITESPACE)
+    # Extract include dirs from cflags
+    string(REGEX MATCHALL "-I[^ ]*" MLPACK_INCLUDE_DIRS "${MLPACK_CFLAGS}")
+    string(REGEX REPLACE "-I" "" MLPACK_INCLUDE_DIRS "${MLPACK_INCLUDE_DIRS}")
+endif()
 
 # Third-party dependencies paths
 set(XXHASH_DIR ${CMAKE_SOURCE_DIR}/third_party/xxHash)
@@ -41,7 +90,7 @@ add_executable(justified_layout_test justified_layout_test.cpp)
 target_compile_options(justified_layout_test PRIVATE -g)
 
 # New unified picscan executable
-add_executable(picscan picscan.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp)
+add_executable(picscan picscan.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
 target_include_directories(picscan PRIVATE 
     ${XXHASH_DIR}
     ${STB_DIR} 
@@ -50,9 +99,47 @@ target_include_directories(picscan PRIVATE
     ${STRUETYPE_DIR}
     ${STRUETYPE_DIR}/examples
     ${CONCURRENTQUEUE_DIR}
+    ${CMAKE_SOURCE_DIR}/third_party
+    ${JPEG_INCLUDE_DIRS}
 .)
-target_link_libraries(picscan xxhash lmdb ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
-target_compile_options(picscan PRIVATE -g)
+target_link_libraries(picscan xxhash lmdb ${JPEG_LIBRARIES})
+target_compile_options(picscan PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
+
+# Similarity search components (only build if mlpack is available)
+if(MLPACK_FOUND)
+    message(STATUS "Found mlpack, building similarity search components")
+    
+    # Image similarity index library
+    add_library(similarity_index STATIC 
+        similarity/image_similarity_index.cpp
+    )
+    target_include_directories(similarity_index PRIVATE
+        ${XXHASH_DIR}
+        ${STB_DIR}
+        ${LMDB_DIR}
+        ${CONCURRENTQUEUE_DIR}
+        ${MLPACK_INCLUDE_DIRS}
+        .
+    )
+    target_link_libraries(similarity_index 
+        xxhash lmdb ${MLPACK_LIBRARIES} ${JPEG_LIBRARIES}
+    )
+    target_compile_options(similarity_index PRIVATE -g)
+    
+    # Similarity search command line tool
+    add_executable(simfind similarity/simfind.cpp)
+    target_include_directories(simfind PRIVATE
+        ${CXXOPTS_DIR}/include
+        ${CONCURRENTQUEUE_DIR}
+        .
+    )
+    target_link_libraries(simfind similarity_index)
+    target_compile_options(simfind PRIVATE -g)
+    
+else()
+    message(WARNING "mlpack not found, skipping similarity search components")
+    message(STATUS "Install libmlpack-dev to enable similarity search features")
+endif()
 
 # GUI test application
 add_executable(gui_test gui/gui_test.cpp gui/Fl_JustifiedLayout.cpp database.cpp utils.cpp stb_impl.cpp)
