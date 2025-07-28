@@ -37,6 +37,50 @@ This will:
 ### picscan
 Unified image scanner and PDF gallery generator that combines the functionality of the previous separate tools.
 
+### simfind (NEW)
+Content-based image similarity search tool that works with picscan databases.
+
+**Usage:**
+```bash
+simfind [OPTIONS]
+```
+
+**Options:**
+- `-q, --query PATH`: Path to query image (JPEG file)
+- `-d, --database PATH`: Path to picscan LMDB database
+- `-t, --threshold N`: Similarity score threshold (0.0-1.0, default: 0.7)
+- `-n, --max-results N`: Maximum number of results (0 = unlimited, default: 100)
+- `-m, --model PATH`: Path to ONNX model file (optional)
+- `-c, --cache PATH`: Path to feature cache database (optional)
+- `--no-cache`: Disable feature caching
+- `-v, --verbose`: Enable verbose output
+
+**Examples:**
+```bash
+# Find similar images with default threshold
+simfind --query photo.jpg --database images.db
+
+# Find highly similar images only
+simfind --query photo.jpg --database images.db --threshold 0.9
+
+# Get all similar images above threshold
+simfind --query photo.jpg --database images.db --threshold 0.5 --max-results 0
+
+# Use verbose output to see timing information
+simfind --query photo.jpg --database images.db --verbose
+```
+
+**Features:**
+- **Fast similarity search**: Uses largest available thumbnails (up to 1024px) for quick processing
+- **Content-based features**: Currently uses color histograms and texture analysis (64 dimensions)
+- **Extensible design**: Ready for ONNX Runtime integration with MobileNetV2/V3 models
+- **Feature caching**: Optional LMDB-based caching of computed feature vectors
+- **Efficient indexing**: Uses mlpack for fast nearest neighbor search
+- **Robust output**: One file path per line, sorted by similarity (most similar first)
+
+### picscan
+Unified image scanner and PDF gallery generator that combines the functionality of the previous separate tools.
+
 **Usage:**
 ```bash
 picscan [OPTIONS]
@@ -93,6 +137,14 @@ picscan --pdf gallery.pdf --layout-pad-top 30 --layout-pad-bottom 30 --layout-pa
 picscan --directory ~/Pictures --pdf my_photo_gallery.pdf --verbose
 
 # The PDF gallery is now ready to view!
+
+# NEW: Find similar images using content-based similarity
+simfind --query ~/Pictures/vacation_photo.jpg --database images.db --threshold 0.8
+
+# Find highly similar images and copy them to a folder
+simfind --query sample.jpg --database images.db --threshold 0.9 | while read -r img; do
+    cp "$img" similar_images/
+done
 ```
 
 ## Building
@@ -106,9 +158,17 @@ You need the following system packages installed:
 - libjpeg-turbo development headers (`libjpeg-turbo8-dev` on Ubuntu/Debian)
 - pkg-config
 
+**For similarity search features (optional):**
+- mlpack development headers (`libmlpack-dev` on Ubuntu/Debian)
+- ensmallen development headers (`libensmallen-dev` on Ubuntu/Debian)
+
 On Ubuntu/Debian:
 ```bash
+# Required packages
 sudo apt-get install cmake build-essential libjpeg-turbo8-dev pkg-config
+
+# Optional packages for similarity search
+sudo apt-get install libmlpack-dev libensmallen-dev
 ```
 
 ### Build Steps
@@ -132,8 +192,9 @@ cmake ..
 make
 ```
 
-This will build the unified executable:
+This will build the executable(s):
 - `picscan` (unified image scanner and PDF gallery generator)
+- `simfind` (image similarity search tool - only if mlpack is available)
 
 ## Supported Image Formats
 
