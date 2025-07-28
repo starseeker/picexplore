@@ -127,10 +127,10 @@ void Fl_JustifiedLayout::draw() {
         const auto& item = layout_items_[i];
         const auto& img = images_[i];
         
-        int item_x = x() + static_cast<int>(item.left);
-        int item_y = y() + static_cast<int>(item.top - scroll_offset_);
-        int item_w = static_cast<int>(item.width);
-        int item_h = static_cast<int>(item.height);
+        int item_x = x() + static_cast<int>(item.l);
+        int item_y = y() + static_cast<int>(item.t - scroll_offset_);
+        int item_w = static_cast<int>(item.w);
+        int item_h = static_cast<int>(item.h);
         
         // Skip items outside visible area
         if (item_y + item_h < y() || item_y > y() + h()) continue;
@@ -197,19 +197,17 @@ void Fl_JustifiedLayout::calculate_layout() {
     
     if (layout_items_.empty()) {
         // Convert images to layout input format
-        std::vector<LayoutInput> input_items;
+        std::vector<Item> input_items;
         for (const auto& img : images_) {
-            LayoutInput item;
-            item.width = 200;  // Default width for placeholder
-            item.height = static_cast<int>(200 / img.aspect_ratio);
-            item.aspectRatio = img.aspect_ratio;
+            Item item;
+            item.ar = img.aspect_ratio;
             input_items.push_back(item);
         }
         
         // Calculate justified layout
-        auto result = justifiedLayout(input_items, layout_config_);
-        layout_items_ = result.items;
-        total_height_ = result.containerHeight;
+        JustifiedLayout layout(input_items, layout_config_);
+        layout_items_ = layout.boxes();
+        total_height_ = layout.height();
     }
     
     // Calculate visible range based on scroll offset
@@ -219,8 +217,8 @@ void Fl_JustifiedLayout::calculate_layout() {
     // Simple visibility calculation - can be optimized
     for (size_t i = 0; i < layout_items_.size(); ++i) {
         const auto& item = layout_items_[i];
-        int item_top = static_cast<int>(item.top - scroll_offset_);
-        int item_bottom = item_top + static_cast<int>(item.height);
+        int item_top = static_cast<int>(item.t - scroll_offset_);
+        int item_bottom = item_top + static_cast<int>(item.h);
         
         if (item_bottom >= 0 && item_top <= h()) {
             if (visible_start_idx_ == 0 && i > 0) visible_start_idx_ = i;
@@ -245,7 +243,7 @@ void Fl_JustifiedLayout::draw_thumbnail_placeholder(int x, int y, int w, int h, 
             w - 2 * THUMBNAIL_BORDER_WIDTH, h - 2 * THUMBNAIL_BORDER_WIDTH);
     
     // Draw placeholder content
-    fl_color(FL_DARK_GRAY);
+    fl_color(FL_DARK3);
     fl_font(FL_HELVETICA, 10);
     
     // Draw image info text (filename)
@@ -288,10 +286,10 @@ void Fl_JustifiedLayout::handle_click(int click_x, int click_y) {
     for (size_t i = visible_start_idx_; i <= visible_end_idx_ && i < layout_items_.size(); ++i) {
         const auto& item = layout_items_[i];
         
-        int item_x = static_cast<int>(item.left);
-        int item_y = static_cast<int>(item.top - scroll_offset_);
-        int item_w = static_cast<int>(item.width);
-        int item_h = static_cast<int>(item.height);
+        int item_x = static_cast<int>(item.l);
+        int item_y = static_cast<int>(item.t - scroll_offset_);
+        int item_w = static_cast<int>(item.w);
+        int item_h = static_cast<int>(item.h);
         
         if (rel_x >= item_x && rel_x < item_x + item_w &&
             rel_y >= item_y && rel_y < item_y + item_h) {

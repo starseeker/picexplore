@@ -125,7 +125,7 @@ private:
     
     // Layout calculation
     LayoutCfg layout_config_;
-    std::vector<LayoutItem> layout_items_;
+    std::vector<Item> layout_items_;
     double total_height_;
     int visible_start_idx_;
     int visible_end_idx_;
