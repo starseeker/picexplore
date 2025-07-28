@@ -35,6 +35,7 @@
 #include "stb_image_resize2.h"
 #include <jpeglib.h>
 #include <jerror.h>
+#include "TinyEXIF.h"
 
 #define MAX_DB_SIZE 549755813888
 
@@ -495,6 +496,48 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
         stbi_image_free(image_data);
         should_skip = true;
         return false;
+    }
+    
+    // Read EXIF orientation and apply transformation if needed
+    int orientation = get_exif_orientation(filepath);
+    if (orientation > 1) {
+        // Convert to RGB if not already (needed for orientation transforms)
+        unsigned char* rgb_data = nullptr;
+        bool allocated_rgb = false;
+        
+        if (channels == 3) {
+            // For RGB data, create a copy for transformation
+            rgb_data = (unsigned char*)malloc(width * height * 3);
+            allocated_rgb = true;
+            memcpy(rgb_data, image_data, width * height * 3);
+        } else {
+            // Convert to RGB for orientation processing
+            rgb_data = (unsigned char*)malloc(width * height * 3);
+            allocated_rgb = true;
+            
+            for (int i = 0; i < width * height; i++) {
+                if (channels == 1) {
+                    // Grayscale to RGB
+                    rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i];
+                } else if (channels == 2) {
+                    // Grayscale + Alpha to RGB (ignore alpha)  
+                    rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i*2];
+                } else if (channels == 4) {
+                    // RGBA to RGB (ignore alpha)
+                    rgb_data[i*3] = image_data[i*4];
+                    rgb_data[i*3+1] = image_data[i*4+1];
+                    rgb_data[i*3+2] = image_data[i*4+2];
+                }
+            }
+        }
+        
+        // Apply orientation transformation
+        apply_orientation_transform(rgb_data, width, height, orientation);
+        
+        // Replace the original image data
+        stbi_image_free(image_data);
+        image_data = rgb_data;
+        channels = 3;
     }
     
     // Compute content hash
@@ -1084,4 +1127,168 @@ std::vector<ImageInfo> DatabaseManager::get_all_images() {
              });
     
     return images;
+}
+
+// Get EXIF orientation from JPEG file
+int DatabaseManager::get_exif_orientation(const std::string& filepath) {
+    // Only process JPEG files
+    auto ext = fs::path(filepath).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext != ".jpg" && ext != ".jpeg") {
+        return 1; // Default orientation (no transform needed)
+    }
+    
+    // Read file into memory
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file.is_open()) {
+        return 1;
+    }
+    
+    // Get file size
+    file.seekg(0, std::ios::end);
+    size_t fileSize = file.tellg();
+    file.seekg(0, std::ios::beg);
+    
+    // Read entire file
+    std::vector<uint8_t> buffer(fileSize);
+    file.read(reinterpret_cast<char*>(buffer.data()), fileSize);
+    file.close();
+    
+    if (buffer.empty()) {
+        return 1;
+    }
+    
+    // Parse EXIF data using TinyEXIF
+    TinyEXIF::EXIFInfo exifInfo(buffer.data(), static_cast<unsigned>(buffer.size()));
+    
+    if (exifInfo.Orientation == 0) {
+        return 1; // Default orientation if not specified in EXIF
+    }
+    
+    return exifInfo.Orientation;
+}
+
+// Apply orientation transform to image data (rotates/flips the RGB data in-place)
+void DatabaseManager::apply_orientation_transform(unsigned char* data, int& width, int& height, int orientation) {
+    if (orientation <= 1 || orientation > 8) {
+        return; // No transform needed or invalid orientation
+    }
+    
+    int channels = 3; // Assuming RGB data
+    
+    // Create a copy of the original data for transformations that need it
+    std::vector<unsigned char> original_data;
+    bool needs_copy = (orientation >= 2); // All orientations except 1 need transformations
+    
+    if (needs_copy) {
+        original_data.assign(data, data + width * height * channels);
+    }
+    
+    switch (orientation) {
+        case 1:
+            // Normal - no transformation needed
+            break;
+            
+        case 2:
+            // Horizontal flip
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width / 2; x++) {
+                    int left_idx = (y * width + x) * channels;
+                    int right_idx = (y * width + (width - 1 - x)) * channels;
+                    
+                    // Swap pixels
+                    for (int c = 0; c < channels; c++) {
+                        std::swap(data[left_idx + c], data[right_idx + c]);
+                    }
+                }
+            }
+            break;
+            
+        case 3:
+            // 180 degree rotation
+            for (int i = 0; i < width * height / 2; i++) {
+                int src_idx = i * channels;
+                int dst_idx = (width * height - 1 - i) * channels;
+                
+                for (int c = 0; c < channels; c++) {
+                    std::swap(data[src_idx + c], data[dst_idx + c]);
+                }
+            }
+            break;
+            
+        case 4:
+            // Vertical flip
+            for (int y = 0; y < height / 2; y++) {
+                for (int x = 0; x < width; x++) {
+                    int top_idx = (y * width + x) * channels;
+                    int bottom_idx = ((height - 1 - y) * width + x) * channels;
+                    
+                    // Swap pixels
+                    for (int c = 0; c < channels; c++) {
+                        std::swap(data[top_idx + c], data[bottom_idx + c]);
+                    }
+                }
+            }
+            break;
+            
+        case 5:
+        case 6:
+        case 7:
+        case 8: {
+            // These require 90-degree rotations, which change dimensions
+            int new_width, new_height;
+            
+            if (orientation == 6 || orientation == 8) {
+                // 90-degree rotations swap dimensions
+                new_width = height;
+                new_height = width;
+            } else {
+                // Transpose operations keep dimensions
+                new_width = height;
+                new_height = width;
+            }
+            
+            std::vector<unsigned char> rotated_data(new_width * new_height * channels);
+            
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int src_idx = (y * width + x) * channels;
+                    int dst_x, dst_y;
+                    
+                    switch (orientation) {
+                        case 5: // Transpose + horizontal flip
+                            dst_x = y;
+                            dst_y = width - 1 - x;
+                            break;
+                        case 6: // 90 degree clockwise rotation
+                            dst_x = height - 1 - y;
+                            dst_y = x;
+                            break;
+                        case 7: // Transpose + vertical flip  
+                            dst_x = height - 1 - y;
+                            dst_y = width - 1 - x;
+                            break;
+                        case 8: // 90 degree counter-clockwise rotation
+                            dst_x = y;
+                            dst_y = width - 1 - x;
+                            break;
+                    }
+                    
+                    int dst_idx = (dst_y * new_width + dst_x) * channels;
+                    
+                    for (int c = 0; c < channels; c++) {
+                        rotated_data[dst_idx + c] = original_data[src_idx + c];
+                    }
+                }
+            }
+            
+            // Copy rotated data back
+            std::copy(rotated_data.begin(), rotated_data.end(), data);
+            
+            // Update dimensions
+            width = new_width;
+            height = new_height;
+            break;
+        }
+    }
 }
