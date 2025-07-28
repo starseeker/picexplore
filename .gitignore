@@ -28,3 +28,10 @@ Makefile
 
 # macOS
 .DS_Store
+
+# Test files and databases
+test_*.db
+test_*.db-lock
+test_*.pdf
+test_error_handling/
+test_1x1.png
