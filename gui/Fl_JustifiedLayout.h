@@ -26,11 +26,13 @@
 
 #include <FL/Fl_Widget.H>
 #include <FL/Fl_Scroll.H>
+#include <FL/Fl_RGB_Image.H>
 #include <string>
 #include <vector>
 #include <functional>
 #include <memory>
 #include <atomic>
+#include <unordered_map>
 #include "../database.h"
 #include "../justified_layout.hpp"
 
@@ -45,12 +47,12 @@ using SelectionCallback = std::function<void(const std::string& image_path, cons
 
 /**
  * FLTK widget that displays image thumbnails using justified layout algorithm.
- * 
+ *
  * Features (skeleton implementation):
  * - Displays placeholder boxes for images in justified layout
  * - API to set LMDB database path
  * - Async thumbnail generation queues (stubbed)
- * - Progress indication (stubbed) 
+ * - Progress indication (stubbed)
  * - Selection callbacks for thumbnail interaction
  * - Scrollable view with prefetch support (stubbed)
  */
@@ -58,20 +60,20 @@ class Fl_JustifiedLayout : public Fl_Widget {
 public:
     // Constructor
     Fl_JustifiedLayout(int X, int Y, int W, int H, const char* label = nullptr);
-    
+
     // Destructor
     virtual ~Fl_JustifiedLayout();
-    
+
     // Database management
     bool set_database_path(const std::string& db_path);
     bool set_directory_path(const std::string& dir_path); // Will scan/build new database
-    
+
     // Layout configuration
     void set_row_height(double height) { layout_config_.rh = height; relayout(); }
-    void set_spacing(double horizontal, double vertical) { 
-        layout_config_.sh = horizontal; 
-        layout_config_.sv = vertical; 
-        relayout(); 
+    void set_spacing(double horizontal, double vertical) {
+        layout_config_.sh = horizontal;
+        layout_config_.sv = vertical;
+        relayout();
     }
     void set_padding(double top, double right, double bottom, double left) {
         layout_config_.pt = top;
@@ -80,21 +82,21 @@ public:
         layout_config_.pl = left;
         relayout();
     }
-    
+
     // Callback management
     void set_progress_callback(ProgressCallback callback) { progress_callback_ = callback; }
     void set_selection_callback(SelectionCallback callback) { selection_callback_ = callback; }
-    
+
     // Async thumbnail generation control (stubbed for now)
     void start_background_generation();
     void stop_background_generation();
     bool is_generating() const { return generating_.load(); }
-    
+
     // Prefetch control (stubbed for now)
     void prefetch_visible_region();
     void prefetch_next_region();
     void prefetch_previous_region();
-    
+
     // FLTK widget overrides
     void draw() override;
     int handle(int event) override;
@@ -105,45 +107,53 @@ protected:
     void relayout();
     void calculate_layout();
     void clear_layout();
-    
-    // Thumbnail rendering (placeholder implementation)
+
+    // Thumbnail rendering
     void draw_thumbnail_placeholder(int x, int y, int w, int h, const ImageInfo& info);
+    void draw_thumbnail_image(int x, int y, int w, int h, const ImageInfo& info);
     void draw_selection_highlight(int x, int y, int w, int h);
-    
+
+    // Image decoding and caching
+    Fl_RGB_Image* load_thumbnail_image(const ImageInfo& info, int target_width, int target_height);
+    void clear_image_cache();
+
     // Event handling
     void handle_click(int x, int y);
     void handle_scroll(int dy);
-    
+
     // Database operations
     bool load_image_list();
-    
+
 private:
     // Database and image management
     std::unique_ptr<DatabaseManager> database_;
     std::vector<ImageInfo> images_;
     std::string current_db_path_;
-    
+
     // Layout calculation
     LayoutCfg layout_config_;
     std::vector<Item> layout_items_;
     double total_height_;
     int visible_start_idx_;
     int visible_end_idx_;
-    
+
     // Selection state
     int selected_index_;
-    
+
     // Async generation state (stubbed)
     std::atomic<bool> generating_;
     std::atomic<bool> should_stop_;
-    
+
     // Callbacks
     ProgressCallback progress_callback_;
     SelectionCallback selection_callback_;
-    
+
+    // Image cache for decoded thumbnails
+    std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> image_cache_;
+
     // Scroll state
     int scroll_offset_;
-    
+
     // Constants
     static constexpr int THUMBNAIL_BORDER_WIDTH = 2;
     static constexpr int DEFAULT_ROW_HEIGHT = 150;
