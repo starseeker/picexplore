@@ -6,15 +6,19 @@ Fast identification and display of JPEG, PNG, BMP, and TGA images with thumbnail
 
 ## Complete Workflow
 
-The complete image exploration workflow consists of two main steps:
+The complete image exploration workflow is now handled by a single unified tool called `picscan`:
 
-1. **Scan directory and create thumbnail database** using `image_thumb_db`
-2. **Generate PDF gallery from thumbnails** using `thumb_gallery_pdf`
-
-### Step 1: Scan Images and Create Database
+### Basic Usage
 
 ```bash
-image_thumb_db --directory /path/to/photos --output photos.db --verbose
+# Scan directory and build/update database:
+picscan --directory /path/to/photos
+
+# Generate PDF from existing database:
+picscan --pdf gallery.pdf
+
+# Scan directory and generate PDF in one step:
+picscan --directory /path/to/photos --pdf gallery.pdf
 ```
 
 This will:
@@ -23,73 +27,53 @@ This will:
 - Generate multiple JPEG thumbnails at sizes: 32, 64, 128, 256, 512, 1024 px (maximum dimension)
 - Store file paths, hashes, and thumbnails in an LMDB database
 - Skip duplicate images (same content hash) and corrupt/unreadable files gracefully
-
-### Step 2: Generate PDF Gallery
-
-```bash
-thumb_gallery_pdf --lmdb photos.db --output photo_gallery.pdf --row-height 200
-```
-
-This will:
-- Read thumbnails from the LMDB database
-- Use justified layout algorithm for optimal space usage
+- Generate multi-page PDF with justified layout algorithm for optimal space usage
 - Create 8.5x11" pages at 300 DPI with 0.5" margins
-- Generate multi-page PDF with all images sorted alphabetically by path
+- Display periodic status reports every 10 seconds
+- Show detailed timing summary for all major phases
 
 ## Tools
 
-### image_thumb_db
-Scans directories for images and creates LMDB database with thumbnails.
-See [README_image_thumb_db.md](README_image_thumb_db.md) for details.
+### picscan
+Unified image scanner and PDF gallery generator that combines the functionality of the previous separate tools.
 
 **Usage:**
 ```bash
-image_thumb_db [OPTIONS]
+picscan [OPTIONS]
 ```
 
 **Options:**
 - `-h, --help`: Show help message
-- `-d, --directory PATH`: Directory to scan for images (default: current directory)
-- `-o, --output PATH`: Output database path (default: `./images.db`)
+- `-d, --directory PATH`: Directory to scan for images
+- `--db PATH`: LMDB database path (default: `./images.db`)
+- `--pdf PATH`: PDF output file path
+- `--row-height N`: Target row height in pixels for PDF layout (default: 150)
+- `--margin N`: Layout margin between images in pixels for PDF (default: 10)
 - `-v, --verbose`: Enable verbose output with detailed information
 
 **Features:**
 - **Multi-format support**: JPEG, PNG, BMP, TGA
-- **Efficient thumbnailing**: Uses epeg for JPEG sources, stb_image for others
+- **Efficient thumbnailing**: Uses optimized JPEG decoding for JPEG sources, stb_image for others
 - **Content-based deduplication**: Prevents duplicate processing using xxHash
 - **Multiple thumbnail sizes**: 32, 64, 128, 256, 512, 1024 px maximum dimension
 - **Robust error handling**: Gracefully skips corrupt or unreadable images
 - **LMDB database**: Lightning-fast storage and retrieval
+- **Flexible operation**: Can scan only, generate PDF only, or both in one command
+- **Status reporting**: Periodic updates every 10 seconds during processing
+- **Performance instrumentation**: Detailed timing information for all major phases
+- **Justified layout**: Uses optimized layout algorithm for space-efficient PDF pages
 
-### thumb_gallery_pdf
-Generates justified-layout PDF image galleries from LMDB thumbnails.
-
-**Usage:**
-```bash
-thumb_gallery_pdf --lmdb /path/to/images.db --output gallery.pdf [options]
-```
-
-**Options:**
-- `--lmdb PATH`: Input LMDB database path (required)
-- `-o, --output PATH`: Output PDF file path (required)
-- `--row-height N`: Target row height in pixels (default: 150)
-- `--margin N`: Layout margin between images in pixels (default: 10)
-
-**Features:**
-- Reads thumbnails from LMDB database created by `image_thumb_db`
-- Uses justified layout algorithm for optimal space usage
-- Creates 8.5x11" pages at 300 DPI with 0.5" margins
-- Automatically scales images to fit layout boxes
-- Generates multi-page PDF with all images sorted alphabetically by path
-
-## Complete Example
+## Complete Examples
 
 ```bash
-# Step 1: Scan your photo directory and create thumbnail database
-image_thumb_db --directory ~/Pictures --output my_photos.db --verbose
+# Scan your photo directory and create thumbnail database
+picscan --directory ~/Pictures --verbose
 
-# Step 2: Generate PDF gallery from thumbnails
-thumb_gallery_pdf --lmdb my_photos.db --output my_photo_gallery.pdf --row-height 200
+# Generate PDF gallery from existing thumbnails  
+picscan --pdf my_photo_gallery.pdf --row-height 200
+
+# Do both operations in one command
+picscan --directory ~/Pictures --pdf my_photo_gallery.pdf --verbose
 
 # The PDF gallery is now ready to view!
 ```
@@ -132,9 +116,8 @@ cmake ..
 make
 ```
 
-This will build both executables:
-- `image_thumb_db` (image scanner and thumbnailer)
-- `thumb_gallery_pdf` (PDF gallery generator)
+This will build the unified executable:
+- `picscan` (unified image scanner and PDF gallery generator)
 
 ## Supported Image Formats
 
@@ -149,7 +132,9 @@ All formats support grayscale, RGB, and RGBA color modes.
 
 - **Fast scanning**: Optimized for processing large image collections
 - **Content-based deduplication**: Identical images (by content) are processed only once
-- **Efficient thumbnailing**: JPEG sources use epeg for fast downsampling
+- **Efficient thumbnailing**: JPEG sources use optimized decoding for fast processing
 - **Lightning-fast database**: LMDB provides high-performance storage and retrieval
 - **Memory efficient**: Processes images one at a time with proper cleanup
+- **Status reporting**: Real-time progress updates every 10 seconds
+- **Performance instrumentation**: Detailed timing breakdown of all processing phases
 
