@@ -38,6 +38,7 @@
 
 // Forward declarations
 class DatabaseManager;
+class Fl_JustifiedLayout_Content;
 
 // Progress callback for background thumbnail generation
 using ProgressCallback = std::function<void(int current, int total, const std::string& status)>;
@@ -48,15 +49,16 @@ using SelectionCallback = std::function<void(const std::string& image_path, cons
 /**
  * FLTK widget that displays image thumbnails using justified layout algorithm.
  *
- * Features (skeleton implementation):
- * - Displays placeholder boxes for images in justified layout
+ * Features:
+ * - Displays thumbnails for images in justified layout with native scrollbar
  * - API to set LMDB database path
- * - Async thumbnail generation queues (stubbed)
- * - Progress indication (stubbed)
+ * - Async thumbnail generation queues with priority support
+ * - Progress indication
  * - Selection callbacks for thumbnail interaction
- * - Scrollable view with prefetch support (stubbed)
+ * - Scrollable view with prefetch support
  */
-class Fl_JustifiedLayout : public Fl_Widget {
+class Fl_JustifiedLayout : public Fl_Scroll {
+    friend class Fl_JustifiedLayout_Content;
 public:
     // Constructor
     Fl_JustifiedLayout(int X, int Y, int W, int H, const char* label = nullptr);
@@ -119,12 +121,14 @@ protected:
 
     // Event handling
     void handle_click(int x, int y);
-    void handle_scroll(int dy);
 
     // Database operations
     bool load_image_list();
 
 private:
+    // Content widget for scrollable area
+    Fl_JustifiedLayout_Content* content_widget_;
+
     // Database and image management
     std::unique_ptr<DatabaseManager> database_;
     std::vector<ImageInfo> images_;
@@ -151,11 +155,22 @@ private:
     // Image cache for decoded thumbnails
     std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> image_cache_;
 
-    // Scroll state
-    int scroll_offset_;
-
     // Constants
     static constexpr int THUMBNAIL_BORDER_WIDTH = 2;
     static constexpr int DEFAULT_ROW_HEIGHT = 150;
     static constexpr int MIN_THUMBNAIL_SIZE = 50;
+};
+
+/**
+ * Internal content widget that handles the actual drawing of thumbnails.
+ * This is managed by the parent Fl_JustifiedLayout (Fl_Scroll) widget.
+ */
+class Fl_JustifiedLayout_Content : public Fl_Widget {
+public:
+    Fl_JustifiedLayout_Content(int X, int Y, int W, int H, Fl_JustifiedLayout* parent);
+    void draw() override;
+    int handle(int event) override;
+
+private:
+    Fl_JustifiedLayout* parent_;
 };

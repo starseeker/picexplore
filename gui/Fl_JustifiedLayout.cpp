@@ -14,7 +14,8 @@
 #include "stb_image.h"
 
 Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* label)
-    : Fl_Widget(X, Y, W, H, label)
+    : Fl_Scroll(X, Y, W, H, label)
+    , content_widget_(nullptr)
     , database_(nullptr)
     , layout_config_()
     , total_height_(0)
@@ -23,10 +24,9 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     , selected_index_(-1)
     , generating_(false)
     , should_stop_(false)
-    , scroll_offset_(0)
 {
-    // Initialize layout configuration with reasonable defaults
-    layout_config_.w = W - 20; // Leave some margin
+    // Initialize layout configuration with reasonable defaults  
+    layout_config_.w = W - 20; // Leave some margin for scrollbar
     layout_config_.rh = DEFAULT_ROW_HEIGHT;
     layout_config_.pt = layout_config_.pr = layout_config_.pb = layout_config_.pl = 10;
     layout_config_.sh = layout_config_.sv = 5;
@@ -34,6 +34,13 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     // Set widget color scheme
     color(FL_WHITE);
     selection_color(FL_BLUE);
+
+    // Configure scrollbar behavior
+    type(Fl_Scroll::VERTICAL);  // Only vertical scrolling
+
+    // Create content widget - initially small, will be resized in relayout()
+    content_widget_ = new Fl_JustifiedLayout_Content(X, Y, W, 100, this);
+    end(); // Important: end() to finalize the Fl_Scroll's children
 }
 
 Fl_JustifiedLayout::~Fl_JustifiedLayout() {
@@ -112,94 +119,48 @@ void Fl_JustifiedLayout::prefetch_previous_region() {
 }
 
 void Fl_JustifiedLayout::draw() {
-    // Clear background
-    fl_color(color());
-    fl_rectf(x(), y(), w(), h());
-
-    if (images_.empty()) {
-        // Draw "no images" message
-        fl_color(FL_BLACK);
-        fl_font(FL_HELVETICA, 14);
-        const char* msg = "No images to display. Set database or directory path.";
-        int tw = 0, th = 0;
-        fl_measure(msg, tw, th);
-        fl_draw(msg, x() + (w() - tw) / 2, y() + (h() - th) / 2);
-        return;
-    }
-
-    // Calculate visible items based on scroll offset
-    calculate_layout();
-
-    // Draw visible thumbnails
-    fl_push_clip(x(), y(), w(), h());
-
-    for (size_t i = visible_start_idx_; i <= visible_end_idx_ && i < layout_items_.size(); ++i) {
-        const auto& item = layout_items_[i];
-        const auto& img = images_[i];
-
-        int item_x = x() + static_cast<int>(item.l);
-        int item_y = y() + static_cast<int>(item.t - scroll_offset_);
-        int item_w = static_cast<int>(item.w);
-        int item_h = static_cast<int>(item.h);
-
-        // Skip items outside visible area
-        if (item_y + item_h < y() || item_y > y() + h()) continue;
-
-        // Draw selection highlight if selected
-        if (static_cast<int>(i) == selected_index_) {
-            draw_selection_highlight(item_x, item_y, item_w, item_h);
-        }
-
-        // Try to draw real thumbnail first, fallback to placeholder
-        draw_thumbnail_image(item_x, item_y, item_w, item_h, img);
-    }
-
-    fl_pop_clip();
-
-    // Draw progress indicator if generating
-    if (generating_.load()) {
-        fl_color(FL_YELLOW);
-        fl_rectf(x() + w() - 100, y() + 5, 95, 20);
-        fl_color(FL_BLACK);
-        fl_rect(x() + w() - 100, y() + 5, 95, 20);
-        fl_font(FL_HELVETICA, 10);
-        fl_draw("Generating...", x() + w() - 95, y() + 17);
-    }
+    // Fl_Scroll handles its own drawing and scrollbar management
+    // The content widget (Fl_JustifiedLayout_Content) handles the actual thumbnail drawing
+    Fl_Scroll::draw();
 }
 
 int Fl_JustifiedLayout::handle(int event) {
     switch (event) {
-        case FL_PUSH:
-            if (Fl::event_button() == FL_LEFT_MOUSE) {
-                handle_click(Fl::event_x(), Fl::event_y());
-                return 1;
-            }
-            break;
-
-        case FL_MOUSEWHEEL:
-            handle_scroll(Fl::event_dy() * 20);
-            return 1;
-
         case FL_FOCUS:
         case FL_UNFOCUS:
             return 1;
     }
 
-    return Fl_Widget::handle(event);
+    // Let Fl_Scroll handle scrolling and other events
+    // Click events are handled by the content widget
+    return Fl_Scroll::handle(event);
 }
 
 void Fl_JustifiedLayout::resize(int X, int Y, int W, int H) {
-    Fl_Widget::resize(X, Y, W, H);
-    layout_config_.w = W - 20; // Update layout width
+    Fl_Scroll::resize(X, Y, W, H);
+    layout_config_.w = W - 20; // Update layout width accounting for scrollbar
     relayout();
 }
 
 void Fl_JustifiedLayout::relayout() {
-    if (images_.empty()) return;
+    if (images_.empty()) {
+        if (content_widget_) {
+            content_widget_->resize(x(), y(), w(), h());
+        }
+        redraw();
+        return;
+    }
 
     clear_layout();
     clear_image_cache();  // Clear cache when layout changes
     calculate_layout();
+    
+    // Resize content widget to match the total layout height
+    if (content_widget_) {
+        int content_height = std::max(static_cast<int>(total_height_), h());
+        content_widget_->resize(x(), y(), w(), content_height);
+    }
+    
     redraw();
 }
 
@@ -221,24 +182,29 @@ void Fl_JustifiedLayout::calculate_layout() {
         total_height_ = layout.height();
     }
 
-    // Calculate visible range based on scroll offset
+    // Calculate visible range based on Fl_Scroll's current position
     visible_start_idx_ = 0;
     visible_end_idx_ = static_cast<int>(layout_items_.size()) - 1;
 
-    // Visibility calculation
+    // Get the current scroll position from Fl_Scroll
+    int scroll_y = yposition();
+    int viewport_height = h();
+
+    // Visibility calculation  
     bool found_first = false;
     for (size_t i = 0; i < layout_items_.size(); ++i) {
-	    const auto& item = layout_items_[i];
-	    int item_top = static_cast<int>(item.t - scroll_offset_);
-	    int item_bottom = item_top + static_cast<int>(item.h);
+        const auto& item = layout_items_[i];
+        int item_top = static_cast<int>(item.t);
+        int item_bottom = item_top + static_cast<int>(item.h);
 
-	    if (item_bottom >= 0 && item_top <= h()) {
-		    if (!found_first) {
-			    visible_start_idx_ = static_cast<int>(i);
-			    found_first = true;
-		    }
-		    visible_end_idx_ = static_cast<int>(i);
-	    }
+        // Check if item intersects with visible viewport
+        if (item_bottom >= scroll_y && item_top <= scroll_y + viewport_height) {
+            if (!found_first) {
+                visible_start_idx_ = static_cast<int>(i);
+                found_first = true;
+            }
+            visible_end_idx_ = static_cast<int>(i);
+        }
     }
 }
 
@@ -422,16 +388,18 @@ void Fl_JustifiedLayout::draw_selection_highlight(int x, int y, int w, int h) {
 }
 
 void Fl_JustifiedLayout::handle_click(int click_x, int click_y) {
-    // Convert click coordinates to widget-relative
-    int rel_x = click_x - x();
-    int rel_y = click_y - y();
+    if (!content_widget_) return;
+    
+    // Convert click coordinates to content widget-relative
+    int rel_x = click_x - content_widget_->x();
+    int rel_y = click_y - content_widget_->y();
 
     // Find clicked thumbnail
     for (size_t i = visible_start_idx_; i <= visible_end_idx_ && i < layout_items_.size(); ++i) {
         const auto& item = layout_items_[i];
 
         int item_x = static_cast<int>(item.l);
-        int item_y = static_cast<int>(item.t - scroll_offset_);
+        int item_y = static_cast<int>(item.t);
         int item_w = static_cast<int>(item.w);
         int item_h = static_cast<int>(item.h);
 
@@ -451,19 +419,6 @@ void Fl_JustifiedLayout::handle_click(int click_x, int click_y) {
             break;
         }
     }
-}
-
-void Fl_JustifiedLayout::handle_scroll(int dy) {
-    scroll_offset_ += dy;
-
-    // Clamp scroll offset
-    int max_scroll = std::max(0.0, total_height_ - h());
-    scroll_offset_ = std::max(0, std::min(scroll_offset_, max_scroll));
-
-    // Trigger prefetch for visible region
-    prefetch_visible_region();
-
-    redraw();
 }
 
 bool Fl_JustifiedLayout::load_image_list() {
@@ -518,4 +473,82 @@ bool Fl_JustifiedLayout::load_image_list() {
     relayout();
 
     return true;
+}
+
+// Fl_JustifiedLayout_Content implementation
+Fl_JustifiedLayout_Content::Fl_JustifiedLayout_Content(int X, int Y, int W, int H, Fl_JustifiedLayout* parent)
+    : Fl_Widget(X, Y, W, H), parent_(parent) {
+}
+
+void Fl_JustifiedLayout_Content::draw() {
+    if (!parent_) return;
+
+    // Clear background
+    fl_color(parent_->color());
+    fl_rectf(x(), y(), w(), h());
+
+    if (parent_->images_.empty()) {
+        // Draw "no images" message
+        fl_color(FL_BLACK);
+        fl_font(FL_HELVETICA, 14);
+        const char* msg = "No images to display. Set database or directory path.";
+        int tw = 0, th = 0;
+        fl_measure(msg, tw, th);
+        fl_draw(msg, x() + (w() - tw) / 2, y() + (h() - th) / 2);
+        return;
+    }
+
+    // Calculate visible items based on current scroll position
+    parent_->calculate_layout();
+
+    // Draw visible thumbnails
+    fl_push_clip(x(), y(), w(), h());
+
+    for (size_t i = parent_->visible_start_idx_; i <= parent_->visible_end_idx_ && i < parent_->layout_items_.size(); ++i) {
+        const auto& item = parent_->layout_items_[i];
+        const auto& img = parent_->images_[i];
+
+        int item_x = x() + static_cast<int>(item.l);
+        int item_y = y() + static_cast<int>(item.t);
+        int item_w = static_cast<int>(item.w);
+        int item_h = static_cast<int>(item.h);
+
+        // Skip items completely outside visible area
+        if (item_y + item_h < y() || item_y > y() + h()) continue;
+
+        // Draw selection highlight if selected
+        if (static_cast<int>(i) == parent_->selected_index_) {
+            parent_->draw_selection_highlight(item_x, item_y, item_w, item_h);
+        }
+
+        // Try to draw real thumbnail first, fallback to placeholder
+        parent_->draw_thumbnail_image(item_x, item_y, item_w, item_h, img);
+    }
+
+    fl_pop_clip();
+
+    // Draw progress indicator if generating
+    if (parent_->generating_.load()) {
+        fl_color(FL_YELLOW);
+        fl_rectf(x() + w() - 100, y() + 5, 95, 20);
+        fl_color(FL_BLACK);
+        fl_rect(x() + w() - 100, y() + 5, 95, 20);
+        fl_font(FL_HELVETICA, 10);  
+        fl_draw("Generating...", x() + w() - 95, y() + 17);
+    }
+}
+
+int Fl_JustifiedLayout_Content::handle(int event) {
+    if (!parent_) return 0;
+    
+    switch (event) {
+        case FL_PUSH:
+            if (Fl::event_button() == FL_LEFT_MOUSE) {
+                parent_->handle_click(Fl::event_x(), Fl::event_y());
+                return 1;
+            }
+            break;
+    }
+    
+    return Fl_Widget::handle(event);
 }
