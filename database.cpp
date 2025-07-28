@@ -36,6 +36,8 @@
 #include <jpeglib.h>
 #include <jerror.h>
 
+#define MAX_DB_SIZE 549755813888
+
 namespace fs = std::filesystem;
 DatabaseManager::DatabaseManager() : env_(nullptr), txn_(nullptr), dbi_(0), is_open_(false), stop_processing_(false) {
 }
@@ -55,7 +57,7 @@ bool DatabaseManager::open(const std::string& db_path) {
     }
     
     // Set map size to handle large databases (1GB)
-    rc = mdb_env_set_mapsize(env_, 1024 * 1024 * 1024);
+    rc = mdb_env_set_mapsize(env_, MAX_DB_SIZE);
     if (rc != 0) {
         mdb_env_close(env_);
         env_ = nullptr;
