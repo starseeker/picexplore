@@ -4,6 +4,33 @@ Program for exploring what images are present in a filesystem.
 
 Fast identification and display of JPEG, PNG, BMP, and TGA images with thumbnail generation and PDF gallery creation.
 
+## GUI Features (gui_test)
+
+The FLTK-based GUI application provides an interactive way to browse image thumbnails:
+
+### Current Features
+- **Justified Layout Display**: Thumbnails arranged using optimized justified layout algorithm
+- **Database Integration**: Open existing picscan LMDB databases or scan new directories  
+- **Interactive Selection**: Click thumbnails to select images
+- **Scrollable View**: Mouse wheel scrolling through large image collections
+- **Menu Interface**: File menu for opening databases/directories
+- **Placeholder Rendering**: Shows image filename and dimensions in placeholder boxes
+
+### Stubbed Features (Ready for Implementation)
+- **Async Thumbnail Generation**: Background loading with priority queues
+- **Progress Indication**: Visual feedback during thumbnail generation
+- **Prefetch Support**: Preload next/previous regions during scrolling
+- **Actual Thumbnail Display**: Replace placeholders with real image thumbnails
+
+### Controls
+- **Mouse wheel**: Scroll through thumbnails
+- **Left click**: Select thumbnail
+- **Ctrl+D**: Open database
+- **Ctrl+I**: Open directory
+- **Ctrl+G**: Start background generation (stub)
+- **Ctrl+S**: Stop background generation (stub)
+- **Ctrl+Q**: Quit application
+
 ## Complete Workflow
 
 The complete image exploration workflow is now handled by a single unified tool called `picscan`:
@@ -36,6 +63,31 @@ This will:
 
 ### picscan
 Unified image scanner and PDF gallery generator that combines the functionality of the previous separate tools.
+
+### gui_test (NEW)
+FLTK-based GUI application for visualizing image thumbnails from picscan databases in justified layout. Features include:
+- Interactive thumbnail display with justified layout
+- Support for opening LMDB databases or directories
+- Scrollable view with selection support
+- Placeholder for async thumbnail generation and progress indication
+- Menu-driven interface with keyboard shortcuts
+
+**Usage:**
+```bash
+gui_test [OPTIONS]
+```
+
+**Options:**
+- `-h, --help`: Show help message
+- `-d, --database PATH`: Open LMDB database at PATH
+- `-i, --directory PATH`: Open directory PATH (will scan/build database)
+
+**Examples:**
+```bash
+gui_test --database ./images.db
+gui_test --directory ~/Pictures
+gui_test  # Open empty window, use File menu to load content
+```
 
 ### simfind (NEW)
 Content-based image similarity search tool that works with picscan databases.
@@ -158,9 +210,24 @@ You need the following system packages installed:
 - libjpeg-turbo development headers (`libjpeg-turbo8-dev` on Ubuntu/Debian)
 - pkg-config
 
+**For GUI application (gui_test):**
+- FLTK dependencies:
+  - X11 development headers (`libx11-dev libxext-dev libxft-dev libxinerama-dev` on Ubuntu/Debian)
+  - FontConfig development headers (`libfontconfig1-dev` on Ubuntu/Debian) 
+  - OpenGL development headers (`libgl1-mesa-dev libglu1-mesa-dev` on Ubuntu/Debian)
+
+On Ubuntu/Debian:
+```bash
+# Core dependencies
+sudo apt-get install cmake build-essential libjpeg-turbo8-dev libexif-dev pkg-config
+
+# Additional GUI dependencies
+sudo apt-get install libx11-dev libxext-dev libxft-dev libxinerama-dev libfontconfig1-dev libgl1-mesa-dev libglu1-mesa-dev
+
 **For similarity search features (optional):**
 - mlpack development headers (`libmlpack-dev` on Ubuntu/Debian)
 - ensmallen development headers (`libensmallen-dev` on Ubuntu/Debian)
+```
 
 On Ubuntu/Debian:
 ```bash
@@ -194,6 +261,7 @@ make
 
 This will build the executable(s):
 - `picscan` (unified image scanner and PDF gallery generator)
+- `gui_test` (FLTK-based GUI for interactive thumbnail viewing)
 - `simfind` (image similarity search tool - only if mlpack is available)
 
 ## Supported Image Formats

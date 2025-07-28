@@ -68,6 +68,7 @@ set(LMDB_DIR ${CMAKE_SOURCE_DIR}/third_party/lmdb/libraries/liblmdb)
 set(CXXOPTS_DIR ${CMAKE_SOURCE_DIR}/third_party/cxxopts)
 set(STRUETYPE_DIR ${CMAKE_SOURCE_DIR}/third_party/struetype)
 set(CONCURRENTQUEUE_DIR ${CMAKE_SOURCE_DIR}/third_party/concurrentqueue)
+set(FLTK_DIR ${CMAKE_SOURCE_DIR}/third_party/fltk)
 
 # xxHash - compile the source
 add_library(xxhash STATIC ${XXHASH_DIR}/xxhash.c)
@@ -77,6 +78,12 @@ target_include_directories(xxhash PUBLIC ${XXHASH_DIR})
 add_library(lmdb STATIC ${LMDB_DIR}/mdb.c ${LMDB_DIR}/midl.c)
 target_include_directories(lmdb PUBLIC ${LMDB_DIR})
 target_compile_definitions(lmdb PRIVATE MDB_MAXKEYSIZE=511)
+
+# FLTK - build as part of this project
+option(OPTION_BUILD_EXAMPLES "Build example programs" OFF)
+option(FLTK_BUILD_TEST "Build test/demo programs" OFF)
+option(FLTK_BUILD_FLTK_OPTIONS "Build fltk-options" OFF)
+add_subdirectory(${FLTK_DIR} EXCLUDE_FROM_ALL)
 
 # Original executable
 add_executable(justified_layout_test justified_layout_test.cpp)
@@ -133,6 +140,22 @@ else()
     message(WARNING "mlpack not found, skipping similarity search components")
     message(STATUS "Install libmlpack-dev to enable similarity search features")
 endif()
+
+# GUI test application
+add_executable(gui_test gui/gui_test.cpp gui/Fl_JustifiedLayout.cpp database.cpp utils.cpp stb_impl.cpp)
+target_include_directories(gui_test PRIVATE 
+    ${XXHASH_DIR}
+    ${STB_DIR} 
+    ${LMDB_DIR}
+    ${CXXOPTS_DIR}/include
+    ${STRUETYPE_DIR}
+    ${STRUETYPE_DIR}/examples
+    ${CONCURRENTQUEUE_DIR}
+    ${FLTK_DIR}
+    .
+)
+target_link_libraries(gui_test xxhash lmdb fltk ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
+target_compile_options(gui_test PRIVATE -g)
 
 # Local Variables:
 # tab-width: 8
