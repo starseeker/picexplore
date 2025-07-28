@@ -59,7 +59,7 @@ unsigned char pjpeg_need_bytes_callback(unsigned char* pBuf, unsigned char buf_s
     return 0;
 }
 
-DatabaseManager::DatabaseManager() : env_(nullptr), txn_(nullptr), dbi_(0), is_open_(false) {
+DatabaseManager::DatabaseManager() : env_(nullptr), txn_(nullptr), dbi_(0), is_open_(false), stop_processing_(false) {
 }
 
 DatabaseManager::~DatabaseManager() {
@@ -84,7 +84,39 @@ bool DatabaseManager::open(const std::string& db_path) {
         return false;
     }
     
-    rc = mdb_env_open(env_, db_path.c_str(), MDB_NOSUBDIR, 0664);
+    // Check if this is a new database for bulk insert optimization
+    bool is_new_db = !std::filesystem::exists(db_path);
+    
+    unsigned int flags = MDB_NOSUBDIR;
+    if (is_new_db) {
+        flags |= MDB_NOSYNC; // Use MDB_NOSYNC for faster bulk insert on new DB
+    }
+    
+    rc = mdb_env_open(env_, db_path.c_str(), flags, 0664);
+    if (rc != 0) {
+        mdb_env_close(env_);
+        env_ = nullptr;
+        return false;
+    }
+    
+    // Open the DBI handle once for all transactions
+    MDB_txn* setup_txn;
+    rc = mdb_txn_begin(env_, nullptr, 0, &setup_txn);
+    if (rc != 0) {
+        mdb_env_close(env_);
+        env_ = nullptr;
+        return false;
+    }
+    
+    rc = mdb_dbi_open(setup_txn, nullptr, MDB_CREATE, &dbi_);
+    if (rc != 0) {
+        mdb_txn_abort(setup_txn);
+        mdb_env_close(env_);
+        env_ = nullptr;
+        return false;
+    }
+    
+    rc = mdb_txn_commit(setup_txn);
     if (rc != 0) {
         mdb_env_close(env_);
         env_ = nullptr;
@@ -115,13 +147,7 @@ bool DatabaseManager::begin_transaction() {
         return false;
     }
     
-    rc = mdb_dbi_open(txn_, nullptr, MDB_CREATE, &dbi_);
-    if (rc != 0) {
-        mdb_txn_abort(txn_);
-        txn_ = nullptr;
-        return false;
-    }
-    
+    // DBI is already opened in DatabaseManager::open(), so we don't need to open it again
     return true;
 }
 
@@ -446,8 +472,387 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
     return thumbnails_generated;
 }
 
-int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, StatusReporter& reporter) {
+bool DatabaseManager::process_image_file(const std::string& filepath, 
+                                        std::vector<WriteTask>& write_tasks,
+                                        Timer& timer, bool& should_skip) {
+    should_skip = false;
+    
+    // Load image with stb_image
+    int width, height, channels;
+    unsigned char* image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 0);
+    if (!image_data) {
+        fprintf(stderr, "Error: Failed to load image '%s': %s\n", filepath.c_str(), stbi_failure_reason());
+        should_skip = true;
+        return false;
+    }
+    
+    // Check for zero width or height
+    if (width <= 0 || height <= 0) {
+        fprintf(stderr, "Error: Invalid image dimensions for '%s': %dx%d\n", filepath.c_str(), width, height);
+        stbi_image_free(image_data);
+        should_skip = true;
+        return false;
+    }
+    
+    // Compute content hash
+    size_t data_size = width * height * channels;
+    XXH64_hash_t hash = XXH64(image_data, data_size, 0);
+    char hash_str[17];
+    snprintf(hash_str, sizeof(hash_str), "%016llx", (unsigned long long)hash);
+    
+    // Check if this hash already exists (duplicate detection)
+    std::string path_key = std::string(hash_str) + ":path";
+    std::string existing_path;
+    
+    // Thread-safe check for existing path
+    {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        if (!begin_transaction()) {
+            stbi_image_free(image_data);
+            should_skip = true;
+            return false;
+        }
+        
+        bool exists = get_key_value(path_key, existing_path);
+        abort_transaction();
+        
+        if (exists) {
+            stbi_image_free(image_data);
+            should_skip = true;
+            return true; // Not an error, just a duplicate
+        }
+    }
+    
+    // Store file path as write task
+    write_tasks.emplace_back(WriteTask::STORE_PATH, path_key, filepath);
+    
+    // Generate and store thumbnails
+    std::vector<int> thumb_sizes = {32, 64, 128, 256, 512, 1024};
+    auto ext = fs::path(filepath).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    
+    bool thumbnails_generated = true;
+    
+    if (ext == ".jpg" || ext == ".jpeg") {
+        // For JPEG files, use picojpeg with optimized scale factor grouping
+        std::map<int, std::vector<int>> scale_groups; // scale_factor -> list of thumb_sizes
+        
+        // Group thumbnail sizes by their optimal scale factor
+        for (int thumb_size : thumb_sizes) {
+            // Calculate thumbnail dimensions maintaining aspect ratio
+            double aspect_ratio = (double)width / height;
+            int thumb_width, thumb_height;
+            
+            if (width > height) {
+                thumb_width = thumb_size;
+                thumb_height = (int)(thumb_size / aspect_ratio);  
+            } else {
+                thumb_height = thumb_size;
+                thumb_width = (int)(thumb_size * aspect_ratio);
+            }
+            
+            // Skip if image is already smaller than thumbnail size
+            if (width <= thumb_width && height <= thumb_height) {
+                continue;
+            }
+            
+            int scale_factor = calculate_scale_factor(width, height, thumb_width, thumb_height);
+            scale_groups[scale_factor].push_back(thumb_size);
+        }
+        
+        // Process each scale factor group
+        for (const auto& group : scale_groups) {
+            int scale_factor = group.first;
+            const std::vector<int>& sizes = group.second;
+            
+            // Decode once for this scale factor
+            int actual_width, actual_height;
+            std::vector<uint8_t> rgb_thumb = decode_jpeg_thumbnail_rgb(filepath, scale_factor, &actual_width, &actual_height);
+            
+            if (!rgb_thumb.empty()) {
+                // Use this RGB data for all thumbnail sizes in this group
+                for (int thumb_size : sizes) {
+                    std::vector<uint8_t> thumb_data = encode_jpeg(rgb_thumb.data(), actual_width, actual_height, 90);
+                    
+                    if (!thumb_data.empty()) {
+                        std::string thumb_key = std::string(hash_str) + ":" + std::to_string(thumb_size);
+                        write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, thumb_key, thumb_data);
+                    } else {
+                        fprintf(stderr, "Error: Failed to encode JPEG thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
+                        thumbnails_generated = false;
+                    }
+                }
+            } else {
+                // Failed to decode with picojpeg, fall back to stb_image for these sizes  
+                fprintf(stderr, "Warning: JPEG decoding failed for '%s' (scale factor %d), falling back to STB\n", filepath.c_str(), scale_factor);
+                thumbnails_generated = false;
+                break;
+            }
+        }
+    } else {
+        // For non-JPEG files, set flag to use fallback processing
+        thumbnails_generated = false;
+    }
+    
+    // Fallback processing for non-JPEG files or if picojpeg failed
+    if (!thumbnails_generated) {
+        thumbnails_generated = true; // Reset the flag
+        for (int thumb_size : thumb_sizes) {
+            // Calculate thumbnail dimensions maintaining aspect ratio
+            double aspect_ratio = (double)width / height;
+            int thumb_width, thumb_height;
+            
+            if (width > height) {
+                thumb_width = thumb_size;
+                thumb_height = (int)(thumb_size / aspect_ratio);
+            } else {
+                thumb_height = thumb_size;
+                thumb_width = (int)(thumb_size * aspect_ratio);
+            }
+            
+            // Skip if image is already smaller than thumbnail size
+            if (width <= thumb_width && height <= thumb_height) {
+                continue;
+            }
+            
+            // Use stb_image_resize for non-JPEG or fallback
+            std::vector<uint8_t> thumb_data;
+            bool thumb_success = false;
+            
+            // Convert to RGB if needed
+            unsigned char* rgb_data = nullptr;
+            bool need_free_rgb = false;
+            
+            if (channels == 3) {
+                rgb_data = image_data;
+            } else {
+                rgb_data = (unsigned char*)malloc(width * height * 3);
+                need_free_rgb = true;
+                
+                for (int i = 0; i < width * height; i++) {
+                    if (channels == 1) {
+                        // Grayscale to RGB
+                        rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i];
+                    } else if (channels == 2) {
+                        // Grayscale + Alpha to RGB (ignore alpha)
+                        rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i*2];
+                    } else if (channels == 4) {
+                        // RGBA to RGB (ignore alpha)
+                        rgb_data[i*3] = image_data[i*4];
+                        rgb_data[i*3+1] = image_data[i*4+1];
+                        rgb_data[i*3+2] = image_data[i*4+2];
+                    }
+                }
+            }
+            
+            // Resize image
+            std::vector<uint8_t> resized_rgb(thumb_width * thumb_height * 3);
+            if (stbir_resize_uint8_linear(rgb_data, width, height, 0,
+                                        resized_rgb.data(), thumb_width, thumb_height, 0, STBIR_RGB)) {
+                
+                // Encode as JPEG
+                thumb_data = encode_jpeg(resized_rgb.data(), thumb_width, thumb_height, 90);
+                if (!thumb_data.empty()) {
+                    thumb_success = true;
+                } else {
+                    fprintf(stderr, "Error: Failed to encode JPEG thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
+                }
+            } else {
+                fprintf(stderr, "Error: Failed to resize image for '%s' (size %d)\n", filepath.c_str(), thumb_size);
+            }
+            
+            if (need_free_rgb) {
+                free(rgb_data);
+            }
+            
+            if (thumb_success && !thumb_data.empty()) {
+                std::string thumb_key = std::string(hash_str) + ":" + std::to_string(thumb_size);
+                write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, thumb_key, thumb_data);
+            } else {
+                thumbnails_generated = false;
+            }
+        }
+    }
+    
+    stbi_image_free(image_data);
+    return thumbnails_generated;
+}
+
+void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_t start_idx, size_t end_idx,
+                                   moodycamel::ConcurrentQueue<WriteTask>& write_queue,
+                                   Timer& timer, StatusReporter& reporter,
+                                   std::atomic<int>& processed_count, std::atomic<int>& skipped_count) {
+    
+    for (size_t i = start_idx; i < end_idx && !stop_processing_.load(); i++) {
+        const std::string& filepath = files[i];
+        
+        std::vector<WriteTask> write_tasks;
+        bool should_skip = false;
+        
+        bool success = process_image_file(filepath, write_tasks, timer, should_skip);
+        
+        if (should_skip) {
+            skipped_count.fetch_add(1);
+        } else if (success) {
+            // Enqueue all write tasks for this image
+            for (const auto& task : write_tasks) {
+                write_queue.enqueue(task);
+            }
+            processed_count.fetch_add(1);
+        } else {
+            skipped_count.fetch_add(1);
+        }
+        
+        // Update progress periodically
+        if ((i - start_idx) % 10 == 0) {
+            reporter.set_current_count(processed_count.load() + skipped_count.load());
+        }
+    }
+}
+
+void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& write_queue,
+                                   std::atomic<bool>& workers_done,
+                                   Timer& timer, StatusReporter& reporter,
+                                   std::atomic<int>& write_count) {
+    
+    constexpr int BATCH_SIZE = 100;
+    std::vector<WriteTask> batch;
+    batch.reserve(BATCH_SIZE);
+    
+    while (!workers_done.load() || write_queue.size_approx() > 0) {
+        batch.clear();
+        
+        // Dequeue a batch of writes
+        WriteTask task;
+        for (int i = 0; i < BATCH_SIZE && write_queue.try_dequeue(task); i++) {
+            batch.push_back(std::move(task));
+        }
+        
+        if (batch.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        
+        // Process batch in a single transaction
+        {
+            std::lock_guard<std::mutex> lock(db_mutex_);
+            
+            if (!begin_transaction()) {
+                fprintf(stderr, "Error: Failed to begin transaction for batch write\n");
+                continue;
+            }
+            
+            bool batch_success = true;
+            for (const auto& write_task : batch) {
+                bool success = false;
+                
+                if (write_task.type == WriteTask::STORE_PATH) {
+                    success = store_key_value(write_task.key, write_task.string_value);
+                } else if (write_task.type == WriteTask::STORE_THUMBNAIL) {
+                    success = store_key_data(write_task.key, write_task.data);
+                }
+                
+                if (!success) {
+                    fprintf(stderr, "Error: Failed to store key '%s'\n", write_task.key.c_str());
+                    batch_success = false;
+                    break;
+                }
+            }
+            
+            if (batch_success) {
+                commit_transaction();
+                write_count.fetch_add(batch.size());
+            } else {
+                abort_transaction();
+            }
+        }
+    }
+}
+
+int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer& timer, 
+                                            StatusReporter& reporter, int num_threads) {
     if (!is_open_) return -1;
+    
+    if (num_threads <= 0) {
+        num_threads = std::thread::hardware_concurrency();
+        if (num_threads == 0) num_threads = 4; // fallback
+    }
+    
+    timer.start("Directory Scanning");
+    reporter.update_status("Scanning directory for images...");
+    
+    // Count total image files first
+    std::vector<std::string> image_files;
+    try {
+        for (const auto& entry : fs::recursive_directory_iterator(directory)) {
+            if (entry.is_regular_file() && is_image_file(entry.path().string())) {
+                image_files.push_back(entry.path().string());
+            }
+        }
+    } catch (const fs::filesystem_error& ex) {
+        return -1;
+    }
+    
+    timer.stop("Directory Scanning");
+    
+    if (image_files.empty()) {
+        reporter.update_status("No image files found");
+        return 0;
+    }
+    
+    reporter.set_total_count(image_files.size());
+    reporter.update_status("Processing images in parallel...");
+    
+    std::cout << "Using " << num_threads << " worker threads for parallel processing" << std::endl;
+    
+    // Initialize parallel processing
+    stop_processing_.store(false);
+    std::atomic<int> processed_count(0);
+    std::atomic<int> skipped_count(0);
+    std::atomic<int> write_count(0);
+    std::atomic<bool> workers_done(false);
+    
+    moodycamel::ConcurrentQueue<WriteTask> write_queue;
+    
+    timer.start("Parallel Image Processing");
+    
+    // Start writer thread
+    std::thread writer_thread_handle(&DatabaseManager::writer_thread, this,
+                                   std::ref(write_queue), std::ref(workers_done),
+                                   std::ref(timer), std::ref(reporter), std::ref(write_count));
+    
+    // Start worker threads
+    std::vector<std::thread> worker_threads;
+    size_t files_per_thread = (image_files.size() + num_threads - 1) / num_threads;
+    
+    for (int t = 0; t < num_threads; t++) {
+        size_t start_idx = t * files_per_thread;
+        size_t end_idx = std::min(start_idx + files_per_thread, image_files.size());
+        
+        if (start_idx < end_idx) {
+            worker_threads.emplace_back(&DatabaseManager::worker_thread, this,
+                                      std::ref(image_files), start_idx, end_idx,
+                                      std::ref(write_queue), std::ref(timer), std::ref(reporter),
+                                      std::ref(processed_count), std::ref(skipped_count));
+        }
+    }
+    
+    // Wait for all worker threads to complete
+    for (auto& worker : worker_threads) {
+        worker.join();
+    }
+    
+    // Signal writer thread that workers are done and wait for it
+    workers_done.store(true);
+    writer_thread_handle.join();
+    
+    timer.stop("Parallel Image Processing");
+    
+    reporter.update_status("Scanning complete");
+    return processed_count.load();
+}
+
+int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, StatusReporter& reporter) {
     
     timer.start("Directory Scanning");
     reporter.update_status("Scanning directory for images...");
