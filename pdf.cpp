@@ -39,17 +39,16 @@ PDFGenerator::~PDFGenerator() {
 
 std::vector<std::vector<size_t>> PDFGenerator::calculate_pagination(const std::vector<ImageInfo>& images,
                                                                    std::vector<std::vector<Item>>& boxes_per_page,
-                                                                   int row_height, int margin,
-                                                                   int pad_top, int pad_bottom, int pad_left, int pad_right) {
+                                                                   const PDFOptions& options) {
     // Setup layout configuration
     LayoutCfg layout_cfg;
-    layout_cfg.w = LAYOUT_WIDTH_PX;  // Available width
-    layout_cfg.pl = pad_left;        // Padding left
-    layout_cfg.pr = pad_right;       // Padding right
-    layout_cfg.pt = pad_top;         // Padding top
-    layout_cfg.pb = pad_bottom;      // Padding bottom
-    layout_cfg.sh = layout_cfg.sv = margin; // Spacing between images
-    layout_cfg.rh = row_height; // Target row height
+    layout_cfg.w = options.layout_width_px();  // Available width
+    layout_cfg.pl = options.pad_left;          // Padding left
+    layout_cfg.pr = options.pad_right;         // Padding right
+    layout_cfg.pt = options.pad_top;           // Padding top
+    layout_cfg.pb = options.pad_bottom;        // Padding bottom
+    layout_cfg.sh = layout_cfg.sv = options.margin; // Spacing between images
+    layout_cfg.rh = options.row_height; // Target row height
     layout_cfg.tol = 0.25; // ±25% tolerance
     layout_cfg.widows = true;
     layout_cfg.ws = WidowStyle::Left;
@@ -72,13 +71,13 @@ std::vector<std::vector<size_t>> PDFGenerator::calculate_pagination(const std::v
         std::vector<size_t> page_indices;
         double current_y = 0;
 
-        while (current_y < LAYOUT_HEIGHT_PX && image_idx < items.size()) {
+        while (current_y < options.layout_height_px() && image_idx < items.size()) {
             size_t remaining = items.size() - image_idx;
             std::vector<Item> remaining_items(items.begin() + image_idx, items.end());
 
             // Use maxRows to be as greedy as possible
             LayoutCfg temp_cfg = layout_cfg;
-            temp_cfg.maxRows = std::max(1, static_cast<int>((LAYOUT_HEIGHT_PX - current_y) / row_height));
+            temp_cfg.maxRows = std::max(1, static_cast<int>((options.layout_height_px() - current_y) / options.row_height));
             JustifiedLayout layout(remaining_items, temp_cfg);
 
             if (layout.boxes().empty()) break;
@@ -87,7 +86,7 @@ std::vector<std::vector<size_t>> PDFGenerator::calculate_pagination(const std::v
             double layout_h = layout.height();
             size_t nboxes = layout.boxes().size();
 
-            if (current_y + layout_h <= LAYOUT_HEIGHT_PX) {
+            if (current_y + layout_h <= options.layout_height_px()) {
                 // All rows fit
                 for (size_t b = 0; b < nboxes; ++b) {
                     Item box = layout.boxes()[b];
@@ -107,14 +106,14 @@ std::vector<std::vector<size_t>> PDFGenerator::calculate_pagination(const std::v
                 // We'll need to build up row-by-row, using maxRows=1 for each
                 size_t local_idx = 0;
                 double test_y = current_y;
-                while (test_y < LAYOUT_HEIGHT_PX && (image_idx + local_idx) < items.size()) {
+                while (test_y < options.layout_height_px() && (image_idx + local_idx) < items.size()) {
                     LayoutCfg row_cfg = layout_cfg;
                     row_cfg.maxRows = 1;
                     std::vector<Item> row_items(items.begin() + image_idx + local_idx, items.end());
                     JustifiedLayout row_layout(row_items, row_cfg);
                     if (row_layout.boxes().empty()) break;
                     double row_h = row_layout.height();
-                    if (test_y + row_h > LAYOUT_HEIGHT_PX) break;
+                    if (test_y + row_h > options.layout_height_px()) break;
                     // Add this row
                     for (size_t rb = 0; rb < row_layout.boxes().size(); ++rb) {
                         Item box = row_layout.boxes()[rb];
@@ -210,8 +209,7 @@ void PDFGenerator::composite_image(std::vector<uint8_t>& page_buffer, int page_w
 
 bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std::string& output_path,
                                Timer& timer, StatusReporter& reporter, 
-                               int row_height, int margin,
-                               int pad_top, int pad_bottom, int pad_left, int pad_right) {
+                               const PDFOptions& options) {
     if (images.empty()) {
         return false;
     }
@@ -220,7 +218,7 @@ bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std:
     reporter.update_status("Calculating page layout...");
 
     std::vector<std::vector<Item>> boxes_per_page;
-    std::vector<std::vector<size_t>> image_indices_per_page = calculate_pagination(images, boxes_per_page, row_height, margin, pad_top, pad_bottom, pad_left, pad_right);
+    std::vector<std::vector<size_t>> image_indices_per_page = calculate_pagination(images, boxes_per_page, options);
 
     timer.stop("PDF Layout");
 
@@ -239,7 +237,7 @@ bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std:
         reporter.set_current_count(page_idx + 1);
 
         // Create page buffer (white background)
-        std::vector<uint8_t> page_buffer(PAGE_WIDTH_PX * PAGE_HEIGHT_PX * 3, 255);
+        std::vector<uint8_t> page_buffer(options.page_width_px() * options.page_height_px() * 3, 255);
 
         for (size_t item_idx = 0; item_idx < boxes_per_page[page_idx].size(); ++item_idx) {
             size_t img_idx = image_indices_per_page[page_idx][item_idx];
@@ -249,8 +247,8 @@ bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std:
             const Item& box = boxes_per_page[page_idx][item_idx];
             const ImageInfo& img = images[img_idx];
 
-            int x = PAGE_MARGIN_PX + static_cast<int>(box.l);
-            int y = PAGE_MARGIN_PX + static_cast<int>(box.t);
+            int x = options.page_margin_px() + static_cast<int>(box.l);
+            int y = options.page_margin_px() + static_cast<int>(box.t);
             int w = static_cast<int>(box.w);
             int h = static_cast<int>(box.h);
 
@@ -263,15 +261,15 @@ bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std:
                 int resized_w = static_cast<int>(img.thumb_width * scale);
                 int resized_h = static_cast<int>(img.thumb_height * scale);
 
-                composite_image(page_buffer, PAGE_WIDTH_PX, PAGE_HEIGHT_PX,
+                composite_image(page_buffer, options.page_width_px(), options.page_height_px(),
                                 resized, resized_w, resized_h, x, y, w, h);
             } else {
                 fprintf(stderr, "Error: Failed to resize thumbnail for PDF, skipping image '%s'\n", img.path.c_str());
             }
         }
 
-        pdf.add_image_page(page_buffer.data(), PAGE_WIDTH_PX, PAGE_HEIGHT_PX,
-                           PAGE_WIDTH_PX * 3, true, pdfimg::CompressionType::None, PAGE_DPI);
+        pdf.add_image_page(page_buffer.data(), options.page_width_px(), options.page_height_px(),
+                           options.page_width_px() * 3, true, pdfimg::CompressionType::None, options.page_dpi);
     }
 
     timer.stop("PDF Rendering");

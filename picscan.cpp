@@ -148,9 +148,17 @@ int main(int argc, char* argv[]) {
 
             std::cout << "Generating PDF with " << images.size() << " images: " << pdf_path << std::endl;
             
+            // Create PDFOptions with CLI arguments
+            PDFOptions pdf_options;
+            pdf_options.row_height = row_height;
+            pdf_options.margin = margin;
+            pdf_options.pad_top = pad_top;
+            pdf_options.pad_bottom = pad_bottom;
+            pdf_options.pad_left = pad_left;
+            pdf_options.pad_right = pad_right;
+            
             PDFGenerator pdf_gen;
-            if (!pdf_gen.generate_pdf(images, pdf_path, timer, reporter, row_height, margin, 
-                                     pad_top, pad_bottom, pad_left, pad_right)) {
+            if (!pdf_gen.generate_pdf(images, pdf_path, timer, reporter, pdf_options)) {
                 std::cerr << "Error: Failed to generate PDF" << std::endl;
                 reporter.stop();
                 return 1;
