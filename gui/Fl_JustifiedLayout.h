@@ -27,17 +27,53 @@
 #include <FL/Fl_Widget.H>
 #include <FL/Fl_Scroll.H>
 #include <FL/Fl_RGB_Image.H>
+#include <FL/Fl.H>
 #include <string>
 #include <vector>
 #include <functional>
 #include <memory>
 #include <atomic>
 #include <unordered_map>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
 #include "../database.h"
 #include "../justified_layout.hpp"
+#include "concurrentqueue.h"
 
 // Forward declarations
 class DatabaseManager;
+class Fl_JustifiedLayout_Content;
+
+// Priority levels for thumbnail generation
+enum class ThumbnailPriority {
+    HIGH,   // Visible/soon-to-be-visible images
+    LOW     // Background population
+};
+
+// Thumbnail generation task
+struct ThumbnailTask {
+    int image_index;
+    ThumbnailPriority priority;
+    int target_width;
+    int target_height;
+
+    ThumbnailTask() = default;
+    ThumbnailTask(int idx, ThumbnailPriority prio, int w, int h)
+        : image_index(idx), priority(prio), target_width(w), target_height(h) {}
+};
+
+// Result of thumbnail generation
+struct ThumbnailResult {
+    int image_index;
+    std::unique_ptr<Fl_RGB_Image> thumbnail;
+    std::string cache_key;
+
+    ThumbnailResult() = default;
+    ThumbnailResult(int idx, std::unique_ptr<Fl_RGB_Image> thumb, const std::string& key)
+        : image_index(idx), thumbnail(std::move(thumb)), cache_key(key) {}
+};
 
 // Progress callback for background thumbnail generation
 using ProgressCallback = std::function<void(int current, int total, const std::string& status)>;
@@ -48,15 +84,16 @@ using SelectionCallback = std::function<void(const std::string& image_path, cons
 /**
  * FLTK widget that displays image thumbnails using justified layout algorithm.
  *
- * Features (skeleton implementation):
- * - Displays placeholder boxes for images in justified layout
+ * Features:
+ * - Displays thumbnails for images in justified layout with native scrollbar
  * - API to set LMDB database path
- * - Async thumbnail generation queues (stubbed)
- * - Progress indication (stubbed)
+ * - Async thumbnail generation queues with priority support
+ * - Progress indication
  * - Selection callbacks for thumbnail interaction
- * - Scrollable view with prefetch support (stubbed)
+ * - Scrollable view with prefetch support
  */
-class Fl_JustifiedLayout : public Fl_Widget {
+class Fl_JustifiedLayout : public Fl_Scroll {
+    friend class Fl_JustifiedLayout_Content;
 public:
     // Constructor
     Fl_JustifiedLayout(int X, int Y, int W, int H, const char* label = nullptr);
@@ -119,12 +156,22 @@ protected:
 
     // Event handling
     void handle_click(int x, int y);
-    void handle_scroll(int dy);
 
     // Database operations
     bool load_image_list();
 
+    // Worker thread methods
+    void thumbnail_worker_thread();
+    void result_processor_thread();
+    void queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority);
+    void process_thumbnail_results();
+    static void result_processor_callback(void* data);
+    static void progress_update_callback(void* data);
+
 private:
+    // Content widget for scrollable area
+    Fl_JustifiedLayout_Content* content_widget_;
+
     // Database and image management
     std::unique_ptr<DatabaseManager> database_;
     std::vector<ImageInfo> images_;
@@ -140,9 +187,19 @@ private:
     // Selection state
     int selected_index_;
 
-    // Async generation state (stubbed)
+    // Async generation state
     std::atomic<bool> generating_;
     std::atomic<bool> should_stop_;
+
+    // Threading for thumbnail generation
+    std::vector<std::thread> worker_threads_;
+    moodycamel::ConcurrentQueue<ThumbnailTask> high_priority_queue_;
+    moodycamel::ConcurrentQueue<ThumbnailTask> low_priority_queue_;
+    moodycamel::ConcurrentQueue<ThumbnailResult> result_queue_;
+    mutable std::mutex image_cache_mutex_;
+    std::atomic<int> active_tasks_;
+    std::atomic<int> completed_tasks_;
+    std::atomic<int> total_tasks_;
 
     // Callbacks
     ProgressCallback progress_callback_;
@@ -151,11 +208,22 @@ private:
     // Image cache for decoded thumbnails
     std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> image_cache_;
 
-    // Scroll state
-    int scroll_offset_;
-
     // Constants
     static constexpr int THUMBNAIL_BORDER_WIDTH = 2;
     static constexpr int DEFAULT_ROW_HEIGHT = 150;
     static constexpr int MIN_THUMBNAIL_SIZE = 50;
+};
+
+/**
+ * Internal content widget that handles the actual drawing of thumbnails.
+ * This is managed by the parent Fl_JustifiedLayout (Fl_Scroll) widget.
+ */
+class Fl_JustifiedLayout_Content : public Fl_Widget {
+public:
+    Fl_JustifiedLayout_Content(int X, int Y, int W, int H, Fl_JustifiedLayout* parent);
+    void draw() override;
+    int handle(int event) override;
+
+private:
+    Fl_JustifiedLayout* parent_;
 };
