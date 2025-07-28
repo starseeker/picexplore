@@ -8,9 +8,26 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find required system packages
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(JPEG REQUIRED libjpeg)
-pkg_check_modules(EXIF REQUIRED libexif)
+if(WIN32)
+    # Windows: Use find_library and find_path for libjpeg
+    find_path(JPEG_INCLUDE_DIR jpeglib.h)
+    find_library(JPEG_LIBRARY NAMES jpeg libjpeg)
+    if(NOT JPEG_INCLUDE_DIR OR NOT JPEG_LIBRARY)
+        message(FATAL_ERROR "libjpeg not found. Please install libjpeg-turbo or libjpeg.")
+    endif()
+    set(JPEG_LIBRARIES ${JPEG_LIBRARY})
+    set(JPEG_INCLUDE_DIRS ${JPEG_INCLUDE_DIR})
+else()
+    # Unix-like systems: Use pkg-config or find_package
+    find_package(PkgConfig)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(JPEG REQUIRED libjpeg)
+    else()
+        find_package(JPEG REQUIRED)
+        set(JPEG_LIBRARIES ${JPEG_LIBRARIES})
+        set(JPEG_INCLUDE_DIRS ${JPEG_INCLUDE_DIR})
+    endif()
+endif()
 
 # Third-party dependencies paths
 set(XXHASH_DIR ${CMAKE_SOURCE_DIR}/third_party/xxHash)
@@ -34,7 +51,7 @@ add_executable(justified_layout_test justified_layout_test.cpp)
 target_compile_options(justified_layout_test PRIVATE -g)
 
 # New unified picscan executable
-add_executable(picscan picscan.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp)
+add_executable(picscan picscan.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
 target_include_directories(picscan PRIVATE 
     ${XXHASH_DIR}
     ${STB_DIR} 
@@ -43,9 +60,11 @@ target_include_directories(picscan PRIVATE
     ${STRUETYPE_DIR}
     ${STRUETYPE_DIR}/examples
     ${CONCURRENTQUEUE_DIR}
+    ${CMAKE_SOURCE_DIR}/third_party
+    ${JPEG_INCLUDE_DIRS}
 .)
-target_link_libraries(picscan xxhash lmdb ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
-target_compile_options(picscan PRIVATE -g)
+target_link_libraries(picscan xxhash lmdb ${JPEG_LIBRARIES})
+target_compile_options(picscan PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
 
 # Local Variables:
 # tab-width: 8
