@@ -59,7 +59,8 @@ private:
         // Create menu bar
         menu_bar_ = new Fl_Menu_Bar(0, 0, 1200, 25);
         menu_bar_->add("&File/Open &Database...", FL_CTRL + 'd', menu_open_database_cb, this);
-        menu_bar_->add("&File/Open D&irectory...", FL_CTRL + 'i', menu_open_directory_cb, this);
+        menu_bar_->add("&File/Scan D&irectory...", FL_CTRL + 'i', menu_open_directory_cb, this);
+        menu_bar_->add("&File/Cancel &Scan", FL_CTRL + 'c', menu_cancel_scan_cb, this);
         menu_bar_->add("&File/&Quit", FL_CTRL + 'q', menu_quit_cb, this);
         menu_bar_->add("&View/Start &Background Generation", FL_CTRL + 'g', menu_start_generation_cb, this);
         menu_bar_->add("&View/&Stop Background Generation", FL_CTRL + 's', menu_stop_generation_cb, this);
@@ -101,6 +102,13 @@ private:
         const char* path = fl_dir_chooser("Select Directory", ".");
         if (path) {
             window->set_directory_path(path);
+        }
+    }
+    
+    static void menu_cancel_scan_cb(Fl_Widget*, void* data) {
+        ImageExplorerWindow* window = static_cast<ImageExplorerWindow*>(data);
+        if (window->layout_widget_) {
+            window->layout_widget_->cancel_directory_scan();
         }
     }
     
