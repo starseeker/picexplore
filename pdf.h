@@ -38,7 +38,8 @@ public:
     
     bool generate_pdf(const std::vector<ImageInfo>& images, const std::string& output_path,
                      Timer& timer, StatusReporter& reporter, 
-                     int row_height = 150, int margin = 10);
+                     int row_height = 150, int margin = 10,
+                     int pad_top = 0, int pad_bottom = 0, int pad_left = 0, int pad_right = 0);
 
 private:
     // Layout configuration
@@ -56,7 +57,8 @@ private:
     // Layout and rendering functions
     std::vector<std::vector<size_t>> calculate_pagination(const std::vector<ImageInfo>& images,
                                                         std::vector<std::vector<Item>>& boxes_per_page,
-                                                        int row_height, int margin);
+                                                        int row_height, int margin,
+                                                        int pad_top, int pad_bottom, int pad_left, int pad_right);
     
     std::vector<uint8_t> resize_image_to_fit(const std::vector<uint8_t>& image_data,
                                            int src_width, int src_height,

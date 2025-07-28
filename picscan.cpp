@@ -43,7 +43,12 @@ int main(int argc, char* argv[]) {
             ("db,database", "LMDB database path", cxxopts::value<std::string>()->default_value("./images.db"))
             ("pdf,output", "PDF output file path", cxxopts::value<std::string>())
             ("row-height", "Target row height in pixels for PDF layout", cxxopts::value<int>()->default_value("150"))
-            ("margin", "Layout margin in pixels for PDF", cxxopts::value<int>()->default_value("10"))
+            ("margin", "Spacing between images in pixels for PDF", cxxopts::value<int>()->default_value("10"))
+            ("layout-pad", "Layout padding for all sides in pixels (overridden by specific sides)", cxxopts::value<int>()->default_value("0"))
+            ("layout-pad-top", "Layout padding top in pixels", cxxopts::value<int>())
+            ("layout-pad-bottom", "Layout padding bottom in pixels", cxxopts::value<int>())
+            ("layout-pad-left", "Layout padding left in pixels", cxxopts::value<int>())
+            ("layout-pad-right", "Layout padding right in pixels", cxxopts::value<int>())
             ("v,verbose", "Enable verbose output")
         ;
 
@@ -67,6 +72,13 @@ int main(int argc, char* argv[]) {
         int row_height = result["row-height"].as<int>();
         int margin = result["margin"].as<int>();
         bool verbose = result.count("verbose") > 0;
+
+        // Parse layout padding options
+        int layout_pad_default = result["layout-pad"].as<int>();
+        int pad_top = result.count("layout-pad-top") ? result["layout-pad-top"].as<int>() : layout_pad_default;
+        int pad_bottom = result.count("layout-pad-bottom") ? result["layout-pad-bottom"].as<int>() : layout_pad_default;
+        int pad_left = result.count("layout-pad-left") ? result["layout-pad-left"].as<int>() : layout_pad_default;
+        int pad_right = result.count("layout-pad-right") ? result["layout-pad-right"].as<int>() : layout_pad_default;
 
         // Validate arguments
         if (directory.empty() && pdf_path.empty()) {
@@ -137,7 +149,8 @@ int main(int argc, char* argv[]) {
             std::cout << "Generating PDF with " << images.size() << " images: " << pdf_path << std::endl;
             
             PDFGenerator pdf_gen;
-            if (!pdf_gen.generate_pdf(images, pdf_path, timer, reporter, row_height, margin)) {
+            if (!pdf_gen.generate_pdf(images, pdf_path, timer, reporter, row_height, margin, 
+                                     pad_top, pad_bottom, pad_left, pad_right)) {
                 std::cerr << "Error: Failed to generate PDF" << std::endl;
                 reporter.stop();
                 return 1;

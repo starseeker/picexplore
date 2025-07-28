@@ -39,11 +39,15 @@ PDFGenerator::~PDFGenerator() {
 
 std::vector<std::vector<size_t>> PDFGenerator::calculate_pagination(const std::vector<ImageInfo>& images,
                                                                    std::vector<std::vector<Item>>& boxes_per_page,
-                                                                   int row_height, int margin) {
+                                                                   int row_height, int margin,
+                                                                   int pad_top, int pad_bottom, int pad_left, int pad_right) {
     // Setup layout configuration
     LayoutCfg layout_cfg;
     layout_cfg.w = LAYOUT_WIDTH_PX;  // Available width
-    layout_cfg.pl = layout_cfg.pr = layout_cfg.pt = layout_cfg.pb = 0; // No padding (we handle margins ourselves)
+    layout_cfg.pl = pad_left;        // Padding left
+    layout_cfg.pr = pad_right;       // Padding right
+    layout_cfg.pt = pad_top;         // Padding top
+    layout_cfg.pb = pad_bottom;      // Padding bottom
     layout_cfg.sh = layout_cfg.sv = margin; // Spacing between images
     layout_cfg.rh = row_height; // Target row height
     layout_cfg.tol = 0.25; // ±25% tolerance
@@ -206,7 +210,8 @@ void PDFGenerator::composite_image(std::vector<uint8_t>& page_buffer, int page_w
 
 bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std::string& output_path,
                                Timer& timer, StatusReporter& reporter, 
-                               int row_height, int margin) {
+                               int row_height, int margin,
+                               int pad_top, int pad_bottom, int pad_left, int pad_right) {
     if (images.empty()) {
         return false;
     }
@@ -215,7 +220,7 @@ bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std:
     reporter.update_status("Calculating page layout...");
 
     std::vector<std::vector<Item>> boxes_per_page;
-    std::vector<std::vector<size_t>> image_indices_per_page = calculate_pagination(images, boxes_per_page, row_height, margin);
+    std::vector<std::vector<size_t>> image_indices_per_page = calculate_pagination(images, boxes_per_page, row_height, margin, pad_top, pad_bottom, pad_left, pad_right);
 
     timer.stop("PDF Layout");
 

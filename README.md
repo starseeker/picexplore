@@ -48,8 +48,18 @@ picscan [OPTIONS]
 - `--db PATH`: LMDB database path (default: `./images.db`)
 - `--pdf PATH`: PDF output file path
 - `--row-height N`: Target row height in pixels for PDF layout (default: 150)
-- `--margin N`: Layout margin between images in pixels for PDF (default: 10)
+- `--margin N`: Spacing between images in pixels for PDF layout (default: 10)
+- `--layout-pad N`: Layout padding for all sides in pixels (default: 0)
+- `--layout-pad-top N`: Layout padding top in pixels
+- `--layout-pad-bottom N`: Layout padding bottom in pixels  
+- `--layout-pad-left N`: Layout padding left in pixels
+- `--layout-pad-right N`: Layout padding right in pixels
 - `-v, --verbose`: Enable verbose output with detailed information
+
+**PDF Layout Controls:**
+- **Page margins**: Fixed 0.5" margins from page edge (controls distance from paper edge)
+- **Layout padding**: Internal padding around the grid of images (`--layout-pad-*` options)
+- **Image spacing**: Space between individual images within the grid (`--margin` option)
 
 **Features:**
 - **Multi-format support**: JPEG, PNG, BMP, TGA
@@ -71,6 +81,12 @@ picscan --directory ~/Pictures --verbose
 
 # Generate PDF gallery from existing thumbnails  
 picscan --pdf my_photo_gallery.pdf --row-height 200
+
+# Generate PDF with custom layout padding (20px on all sides)
+picscan --pdf gallery.pdf --layout-pad 20
+
+# Generate PDF with asymmetric padding (larger top/bottom padding)
+picscan --pdf gallery.pdf --layout-pad-top 30 --layout-pad-bottom 30 --layout-pad-left 10 --layout-pad-right 10
 
 # Do both operations in one command
 picscan --directory ~/Pictures --pdf my_photo_gallery.pdf --verbose
