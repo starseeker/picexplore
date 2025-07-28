@@ -19,6 +19,7 @@ set(EPEG_DIR ${CMAKE_SOURCE_DIR}/third_party/epeg)
 set(LMDB_DIR ${CMAKE_SOURCE_DIR}/third_party/lmdb/libraries/liblmdb)
 set(CXXOPTS_DIR ${CMAKE_SOURCE_DIR}/third_party/cxxopts)
 set(STRUETYPE_DIR ${CMAKE_SOURCE_DIR}/third_party/struetype)
+set(PICOJPEG_DIR ${CMAKE_SOURCE_DIR}/third_party/picojpeg)
 
 # xxHash - compile the source
 add_library(xxhash STATIC ${XXHASH_DIR}/xxhash.c)
@@ -34,6 +35,10 @@ set(BUILD_STATIC_LIB ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)  
 set(BUILD_PROGRAM OFF CACHE BOOL "" FORCE)
 add_subdirectory(${EPEG_DIR} epeg_build)
+
+# PicoJPEG - compile the source
+add_library(picojpeg STATIC ${PICOJPEG_DIR}/picojpeg.c)
+target_include_directories(picojpeg PUBLIC ${PICOJPEG_DIR})
 
 # Original executable
 add_executable(justified_layout_test justified_layout_test.cpp)
