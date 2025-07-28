@@ -193,6 +193,7 @@ bool DatabaseManager::get_key_data(const std::string& key, std::vector<uint8_t>&
 }
 
 int DatabaseManager::calculate_scale_factor(int image_width, int image_height, int target_width, int target_height) {
+    if (target_width == 0 || target_height == 0) return 1;
     int scale_x = image_width / target_width;
     int scale_y = image_height / target_height;
     int scale_factor = std::max(scale_x, scale_y);
