@@ -29,7 +29,7 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     , completed_tasks_(0)
     , total_tasks_(0)
 {
-    // Initialize layout configuration with reasonable defaults  
+    // Initialize layout configuration with reasonable defaults
     layout_config_.w = W - 20; // Leave some margin for scrollbar
     layout_config_.rh = DEFAULT_ROW_HEIGHT;
     layout_config_.pt = layout_config_.pr = layout_config_.pb = layout_config_.pl = 10;
@@ -49,10 +49,10 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
 
 void Fl_JustifiedLayout::thumbnail_worker_thread() {
     ThumbnailTask task;
-    
+
     while (!should_stop_.load()) {
         bool found_task = false;
-        
+
         // Try high priority queue first
         if (high_priority_queue_.try_dequeue(task)) {
             found_task = true;
@@ -61,34 +61,34 @@ void Fl_JustifiedLayout::thumbnail_worker_thread() {
         else if (low_priority_queue_.try_dequeue(task)) {
             found_task = true;
         }
-        
+
         if (found_task) {
             active_tasks_.fetch_add(1);
-            
+
             // Generate thumbnail for the task
             if (task.image_index >= 0 && task.image_index < static_cast<int>(images_.size())) {
                 const auto& img_info = images_[task.image_index];
-                
+
                 // Generate thumbnail
                 auto thumbnail = load_thumbnail_image(img_info, task.target_width, task.target_height);
-                
+
                 if (thumbnail) {
                     // Create cache key
-                    std::string cache_key = img_info.hash + "_" + 
-                                          std::to_string(task.target_width) + "x" + 
+                    std::string cache_key = img_info.hash + "_" +
+                                          std::to_string(task.target_width) + "x" +
                                           std::to_string(task.target_height);
-                    
+
                     // Put result in result queue
-                    ThumbnailResult result(task.image_index, 
-                                         std::unique_ptr<Fl_RGB_Image>(thumbnail), 
+                    ThumbnailResult result(task.image_index,
+                                         std::unique_ptr<Fl_RGB_Image>(thumbnail),
                                          cache_key);
                     result_queue_.enqueue(std::move(result));
-                    
+
                     // Schedule UI update using FLTK's thread-safe mechanism
                     Fl::awake(result_processor_callback, this);
                 }
             }
-            
+
             active_tasks_.fetch_sub(1);
             completed_tasks_.fetch_add(1);
         }
@@ -105,10 +105,21 @@ void Fl_JustifiedLayout::result_processor_callback(void* data) {
     }
 }
 
+void Fl_JustifiedLayout::progress_update_callback(void* data) {
+    if (data) {
+        Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
+        if (widget->generating_.load() && widget->content_widget_) {
+            widget->content_widget_->redraw();
+            // Schedule next update
+            Fl::add_timeout(0.1, progress_update_callback, data);
+        }
+    }
+}
+
 void Fl_JustifiedLayout::process_thumbnail_results() {
     ThumbnailResult result;
     bool any_processed = false;
-    
+
     // Process all available results
     while (result_queue_.try_dequeue(result)) {
         if (result.thumbnail) {
@@ -117,13 +128,13 @@ void Fl_JustifiedLayout::process_thumbnail_results() {
             any_processed = true;
         }
     }
-    
+
     // Trigger redraw if any thumbnails were processed
     if (any_processed) {
         if (content_widget_) {
             content_widget_->redraw();
         }
-        
+
         // Update progress if callback is set
         if (progress_callback_) {
             int completed = completed_tasks_.load();
@@ -139,15 +150,15 @@ void Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, 
             const auto& item = layout_items_[idx];
             int target_w = static_cast<int>(item.w) - 2 * THUMBNAIL_BORDER_WIDTH;
             int target_h = static_cast<int>(item.h) - 2 * THUMBNAIL_BORDER_WIDTH;
-            
+
             ThumbnailTask task(idx, priority, target_w, target_h);
-            
+
             if (priority == ThumbnailPriority::HIGH) {
                 high_priority_queue_.enqueue(task);
             } else {
                 low_priority_queue_.enqueue(task);
             }
-            
+
             total_tasks_.fetch_add(1);
         }
     }
@@ -159,6 +170,9 @@ Fl_JustifiedLayout::~Fl_JustifiedLayout() {
 }
 
 bool Fl_JustifiedLayout::set_database_path(const std::string& db_path) {
+    // Stop any ongoing generation first
+    stop_background_generation();
+
     current_db_path_ = db_path;
 
     // Create and initialize database manager
@@ -176,6 +190,8 @@ bool Fl_JustifiedLayout::set_database_path(const std::string& db_path) {
 }
 
 bool Fl_JustifiedLayout::set_directory_path(const std::string& dir_path) {
+    // Stop any ongoing generation first
+    stop_background_generation();
     // For skeleton implementation, just create a default database path
     std::string db_path = dir_path + "/images.db";
 
@@ -190,17 +206,17 @@ void Fl_JustifiedLayout::start_background_generation() {
 
     generating_.store(true);
     should_stop_.store(false);
-    
+
     // Clear previous state
     completed_tasks_.store(0);
     total_tasks_.store(0);
 
-    // Start worker threads (use half of available cores, minimum 1, maximum 4)  
+    // Start worker threads (use half of available cores, minimum 1, maximum 4)
     int num_workers = std::max(1, std::min(4, static_cast<int>(std::thread::hardware_concurrency() / 2)));
-    
+
     worker_threads_.clear();
     worker_threads_.reserve(num_workers);
-    
+
     for (int i = 0; i < num_workers; ++i) {
         worker_threads_.emplace_back(&Fl_JustifiedLayout::thumbnail_worker_thread, this);
     }
@@ -209,7 +225,7 @@ void Fl_JustifiedLayout::start_background_generation() {
 
     // Queue high priority tasks for visible region
     prefetch_visible_region();
-    
+
     // Queue low priority tasks for all images
     std::vector<int> all_indices;
     for (int i = 0; i < static_cast<int>(images_.size()); ++i) {
@@ -220,13 +236,16 @@ void Fl_JustifiedLayout::start_background_generation() {
     if (progress_callback_) {
         progress_callback_(0, total_tasks_.load(), "Starting background generation...");
     }
+
+    // Start periodic progress updates
+    Fl::add_timeout(0.1, progress_update_callback, this);
 }
 
 void Fl_JustifiedLayout::stop_background_generation() {
     if (!generating_.load()) return;
 
     should_stop_.store(true);
-    
+
     // Wait for all worker threads to complete
     for (auto& thread : worker_threads_) {
         if (thread.joinable()) {
@@ -234,29 +253,32 @@ void Fl_JustifiedLayout::stop_background_generation() {
         }
     }
     worker_threads_.clear();
-    
+
     // Clear queues
     ThumbnailTask task;
     while (high_priority_queue_.try_dequeue(task)) {}
     while (low_priority_queue_.try_dequeue(task)) {}
-    
+
     ThumbnailResult result;
     while (result_queue_.try_dequeue(result)) {}
-    
+
     generating_.store(false);
+
+    // Remove any pending progress update timers
+    Fl::remove_timeout(progress_update_callback, this);
 
     std::cout << "Stopped background thumbnail generation" << std::endl;
 }
 
 void Fl_JustifiedLayout::prefetch_visible_region() {
     if (!generating_.load() || layout_items_.empty()) return;
-    
+
     // Queue visible region for high priority processing
     std::vector<int> visible_indices;
     for (int i = visible_start_idx_; i <= visible_end_idx_; ++i) {
         visible_indices.push_back(i);
     }
-    
+
     if (!visible_indices.empty()) {
         queue_thumbnail_tasks(visible_indices, ThumbnailPriority::HIGH);
         std::cout << "Queued visible region for high priority: " << visible_start_idx_ << " to " << visible_end_idx_ << std::endl;
@@ -265,11 +287,11 @@ void Fl_JustifiedLayout::prefetch_visible_region() {
 
 void Fl_JustifiedLayout::prefetch_next_region() {
     if (!generating_.load() || layout_items_.empty()) return;
-        
+
     // Calculate and prefetch next page of thumbnails
     int next_start = visible_end_idx_ + 1;
     int next_end = std::min(next_start + 20, static_cast<int>(images_.size()) - 1);
-    
+
     if (next_start <= next_end) {
         std::vector<int> next_indices;
         for (int i = next_start; i <= next_end; ++i) {
@@ -282,11 +304,11 @@ void Fl_JustifiedLayout::prefetch_next_region() {
 
 void Fl_JustifiedLayout::prefetch_previous_region() {
     if (!generating_.load() || layout_items_.empty()) return;
-        
+
     // Calculate and prefetch previous page of thumbnails
     int prev_end = visible_start_idx_ - 1;
     int prev_start = std::max(prev_end - 20, 0);
-    
+
     if (prev_start <= prev_end) {
         std::vector<int> prev_indices;
         for (int i = prev_start; i <= prev_end; ++i) {
@@ -317,8 +339,17 @@ int Fl_JustifiedLayout::handle(int event) {
 
 void Fl_JustifiedLayout::resize(int X, int Y, int W, int H) {
     Fl_Scroll::resize(X, Y, W, H);
-    layout_config_.w = W - 20; // Update layout width accounting for scrollbar
+
+    // Update layout width accounting for scrollbar
+    layout_config_.w = W - 20;
+
+    // Relayout will trigger new thumbnail generation if needed
     relayout();
+
+    // If generation is active, queue visible region for high priority
+    if (generating_.load()) {
+        prefetch_visible_region();
+    }
 }
 
 void Fl_JustifiedLayout::relayout() {
@@ -333,13 +364,13 @@ void Fl_JustifiedLayout::relayout() {
     clear_layout();
     clear_image_cache();  // Clear cache when layout changes
     calculate_layout();
-    
+
     // Resize content widget to match the total layout height
     if (content_widget_) {
         int content_height = std::max(static_cast<int>(total_height_), h());
         content_widget_->resize(x(), y(), w(), content_height);
     }
-    
+
     redraw();
 }
 
@@ -369,7 +400,7 @@ void Fl_JustifiedLayout::calculate_layout() {
     int scroll_y = yposition();
     int viewport_height = h();
 
-    // Visibility calculation  
+    // Visibility calculation
     bool found_first = false;
     for (size_t i = 0; i < layout_items_.size(); ++i) {
         const auto& item = layout_items_[i];
@@ -385,7 +416,7 @@ void Fl_JustifiedLayout::calculate_layout() {
             visible_end_idx_ = static_cast<int>(i);
         }
     }
-    
+
     // Trigger prefetching when visible region is calculated
     if (generating_.load()) {
         prefetch_visible_region();
@@ -534,8 +565,11 @@ void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const 
 }
 
 void Fl_JustifiedLayout::draw_thumbnail_placeholder(int x, int y, int w, int h, const ImageInfo& info) {
-    // Draw border
-    fl_color(FL_GRAY);
+    // Check if this thumbnail is being generated
+    bool is_loading = generating_.load();
+
+    // Draw border with different color if loading
+    fl_color(is_loading ? FL_BLUE : FL_GRAY);
     fl_rect(x, y, w, h);
 
     // Fill interior
@@ -561,7 +595,17 @@ void Fl_JustifiedLayout::draw_thumbnail_placeholder(int x, int y, int w, int h, 
 
     int text_w = 0, text_h = 0;
     fl_measure(filename.c_str(), text_w, text_h);
-    fl_draw(filename.c_str(), x + (w - text_w) / 2, y + h / 2);
+    int text_y = y + h / 2;
+
+    // Show loading indicator if generating
+    if (is_loading) {
+        fl_color(FL_BLUE);
+        fl_draw("[ Loading... ]", x + (w - text_w) / 2, text_y - 10);
+        fl_color(FL_DARK3);
+        text_y += 10;
+    }
+
+    fl_draw(filename.c_str(), x + (w - text_w) / 2, text_y);
 
     // Draw size info
     char size_str[64];
@@ -569,7 +613,7 @@ void Fl_JustifiedLayout::draw_thumbnail_placeholder(int x, int y, int w, int h, 
              static_cast<int>(w * info.aspect_ratio), static_cast<int>(h));
     fl_font(FL_HELVETICA, 8);
     fl_measure(size_str, text_w, text_h);
-    fl_draw(size_str, x + (w - text_w) / 2, y + h / 2 + 15);
+    fl_draw(size_str, x + (w - text_w) / 2, text_y + 15);
 }
 
 void Fl_JustifiedLayout::draw_selection_highlight(int x, int y, int w, int h) {
@@ -580,7 +624,7 @@ void Fl_JustifiedLayout::draw_selection_highlight(int x, int y, int w, int h) {
 
 void Fl_JustifiedLayout::handle_click(int click_x, int click_y) {
     if (!content_widget_) return;
-    
+
     // Convert click coordinates to content widget-relative
     int rel_x = click_x - content_widget_->x();
     int rel_y = click_y - content_widget_->y();
@@ -720,18 +764,39 @@ void Fl_JustifiedLayout_Content::draw() {
 
     // Draw progress indicator if generating
     if (parent_->generating_.load()) {
+        int completed = parent_->completed_tasks_.load();
+        int total = parent_->total_tasks_.load();
+        int active = parent_->active_tasks_.load();
+
+        // Draw progress background
         fl_color(FL_YELLOW);
-        fl_rectf(x() + w() - 100, y() + 5, 95, 20);
+        fl_rectf(x() + w() - 150, y() + 5, 145, 25);
         fl_color(FL_BLACK);
-        fl_rect(x() + w() - 100, y() + 5, 95, 20);
-        fl_font(FL_HELVETICA, 10);  
-        fl_draw("Generating...", x() + w() - 95, y() + 17);
+        fl_rect(x() + w() - 150, y() + 5, 145, 25);
+
+        // Draw progress bar
+        if (total > 0) {
+            int progress_width = (completed * 140) / total;
+            fl_color(FL_GREEN);
+            fl_rectf(x() + w() - 148, y() + 7, progress_width, 8);
+        }
+
+        // Draw progress text
+        fl_font(FL_HELVETICA, 9);
+        char progress_text[64];
+        if (total > 0) {
+            snprintf(progress_text, sizeof(progress_text), "%d/%d (%d active)", completed, total, active);
+        } else {
+            snprintf(progress_text, sizeof(progress_text), "Initializing...");
+        }
+        fl_color(FL_BLACK);
+        fl_draw(progress_text, x() + w() - 145, y() + 23);
     }
 }
 
 int Fl_JustifiedLayout_Content::handle(int event) {
     if (!parent_) return 0;
-    
+
     switch (event) {
         case FL_PUSH:
             if (Fl::event_button() == FL_LEFT_MOUSE) {
@@ -740,6 +805,6 @@ int Fl_JustifiedLayout_Content::handle(int event) {
             }
             break;
     }
-    
+
     return Fl_Widget::handle(event);
 }

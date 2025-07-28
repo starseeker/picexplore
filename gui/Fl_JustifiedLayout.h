@@ -58,7 +58,7 @@ struct ThumbnailTask {
     ThumbnailPriority priority;
     int target_width;
     int target_height;
-    
+
     ThumbnailTask() = default;
     ThumbnailTask(int idx, ThumbnailPriority prio, int w, int h)
         : image_index(idx), priority(prio), target_width(w), target_height(h) {}
@@ -69,7 +69,7 @@ struct ThumbnailResult {
     int image_index;
     std::unique_ptr<Fl_RGB_Image> thumbnail;
     std::string cache_key;
-    
+
     ThumbnailResult() = default;
     ThumbnailResult(int idx, std::unique_ptr<Fl_RGB_Image> thumb, const std::string& key)
         : image_index(idx), thumbnail(std::move(thumb)), cache_key(key) {}
@@ -159,13 +159,14 @@ protected:
 
     // Database operations
     bool load_image_list();
-    
+
     // Worker thread methods
     void thumbnail_worker_thread();
     void result_processor_thread();
     void queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority);
     void process_thumbnail_results();
     static void result_processor_callback(void* data);
+    static void progress_update_callback(void* data);
 
 private:
     // Content widget for scrollable area
