@@ -113,6 +113,13 @@ typedef unsigned char (*pjpeg_need_bytes_callback_t)(unsigned char* pBuf, unsign
 
 // Initializes the decompressor. Returns 0 on success, or one of the above error codes on failure.
 // pNeed_bytes_callback will be called to fill the decompressor's internal input buffer.
+// scale_factor specifies the scaling: 1=full size, 2=1/2 size, 4=1/4 size, 8=1/8 size
+// Scaled decoding is much faster as it processes fewer coefficients and uses optimized IDCT.
+// Not thread safe.
+unsigned char pjpeg_decode_init_scale(pjpeg_image_info_t *pInfo, pjpeg_need_bytes_callback_t pNeed_bytes_callback, void *pCallback_data, unsigned char scale_factor);
+
+// Backward compatibility: Initializes the decompressor. Returns 0 on success, or one of the above error codes on failure.
+// pNeed_bytes_callback will be called to fill the decompressor's internal input buffer.
 // If reduce is 1, only the first pixel of each block will be decoded. This mode is much faster because it skips the AC dequantization, IDCT and chroma upsampling of every image pixel.
 // Not thread safe.
 unsigned char pjpeg_decode_init(pjpeg_image_info_t *pInfo, pjpeg_need_bytes_callback_t pNeed_bytes_callback, void *pCallback_data, unsigned char reduce);
