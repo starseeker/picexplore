@@ -105,7 +105,7 @@ int main(int argc, char* argv[]) {
         if (scan_needed) {
             std::cout << "Scanning directory: " << directory << std::endl;
             
-            int processed = db.scan_directory(directory, timer, reporter);
+            int processed = db.scan_directory_parallel(directory, timer, reporter);
             if (processed < 0) {
                 std::cerr << "Error: Failed to scan directory" << std::endl;
                 reporter.stop();

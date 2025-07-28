@@ -19,6 +19,7 @@ set(LMDB_DIR ${CMAKE_SOURCE_DIR}/third_party/lmdb/libraries/liblmdb)
 set(CXXOPTS_DIR ${CMAKE_SOURCE_DIR}/third_party/cxxopts)
 set(STRUETYPE_DIR ${CMAKE_SOURCE_DIR}/third_party/struetype)
 set(PICOJPEG_DIR ${CMAKE_SOURCE_DIR}/third_party/picojpeg)
+set(CONCURRENTQUEUE_DIR ${CMAKE_SOURCE_DIR}/third_party/concurrentqueue)
 
 # xxHash - compile the source
 add_library(xxhash STATIC ${XXHASH_DIR}/xxhash.c)
@@ -47,6 +48,7 @@ target_include_directories(picscan PRIVATE
     ${PICOJPEG_DIR}
     ${STRUETYPE_DIR}
     ${STRUETYPE_DIR}/examples
+    ${CONCURRENTQUEUE_DIR}
 .)
 target_link_libraries(picscan xxhash lmdb picojpeg ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
 target_compile_options(picscan PRIVATE -g)
