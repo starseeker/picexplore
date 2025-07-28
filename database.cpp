@@ -802,6 +802,8 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
     reporter.set_total_count(image_files.size());
     reporter.update_status("Processing images in parallel...");
     
+    std::cout << "Using " << num_threads << " worker threads for parallel processing" << std::endl;
+    
     // Initialize parallel processing
     stop_processing_.store(false);
     std::atomic<int> processed_count(0);
