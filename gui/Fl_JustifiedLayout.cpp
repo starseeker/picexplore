@@ -197,13 +197,13 @@ bool Fl_JustifiedLayout::set_directory_path(const std::string& dir_path) {
     // Cancel any ongoing operations
     cancel_directory_scan();
     stop_background_generation();
-    
+
     // Generate database path from directory
     std::string db_path = dir_path + "/images.db";
-    
+
     // Start asynchronous directory scan
     start_directory_scan(dir_path, db_path);
-    
+
     return true;
 }
 
@@ -817,42 +817,45 @@ int Fl_JustifiedLayout_Content::handle(int event) {
 
 void Fl_JustifiedLayout::start_directory_scan(const std::string& dir_path, const std::string& db_path) {
     if (scanning_.load()) return;
-    
+
     scanning_.store(true);
     should_cancel_scan_.store(false);
-    
+
     // Clear current images while scanning
     images_.clear();
     clear_layout();
     clear_image_cache();
-    
+
     if (content_widget_) {
         content_widget_->redraw();
     }
-    
+
     // Report start of scanning
     if (progress_callback_) {
         progress_callback_(0, 0, "Starting directory scan...");
     }
-    
+
     // Start scan thread
     if (scan_thread_.joinable()) {
         scan_thread_.join();
     }
     scan_thread_ = std::thread(&Fl_JustifiedLayout::directory_scan_thread, this, dir_path, db_path);
-    
+
     std::cout << "Started directory scan for: " << dir_path << std::endl;
 }
 
 void Fl_JustifiedLayout::cancel_directory_scan() {
     if (!scanning_.load()) return;
-    
+
     should_cancel_scan_.store(true);
-    
+
+    // Also signal the database to stop processing (for current scan)
+    // Note: We don't use database_ here as it may not be set yet during scanning
+
     if (scan_thread_.joinable()) {
         scan_thread_.join();
     }
-    
+
     scanning_.store(false);
     std::cout << "Cancelled directory scan" << std::endl;
 }
@@ -871,53 +874,39 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             scanning_.store(false);
             return;
         }
-        
+
         // Create timer and reporter for the scan
         Timer timer;
-        StatusReporter reporter(1); // Report every second for GUI responsiveness
+        StatusReporter reporter(1); // Report every second
         reporter.start();
-        
-        // Override reporter's update methods to forward to GUI via FLTK's thread-safe mechanism
-        auto forward_progress = [this](int current, int total, const std::string& status) {
-            if (should_cancel_scan_.load()) return;
-            
-            // Create a copy of the data on the heap for FLTK callback
-            auto* params = new std::tuple<Fl_JustifiedLayout*, int, int, std::string>(this, current, total, status);
-            
-            Fl::awake([](void* data) {
-                auto* params = static_cast<std::tuple<Fl_JustifiedLayout*, int, int, std::string>*>(data);
-                Fl_JustifiedLayout* widget = std::get<0>(*params);
-                int current = std::get<1>(*params);
-                int total = std::get<2>(*params);
-                std::string status = std::get<3>(*params);
-                
-                if (widget->progress_callback_) {
-                    widget->progress_callback_(current, total, status);
+
+        // Forward initial progress
+        Fl::awake([](void* data) {
+            Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
+            if (widget->progress_callback_) {
+                widget->progress_callback_(0, 0, "Starting directory scan...");
+            }
+        }, this);
+
+        // Start a cancellation monitor thread
+        std::thread cancellation_monitor([this, scan_database = scan_database.get()]() {
+            while (scanning_.load()) {
+                if (should_cancel_scan_.load()) {
+                    scan_database->cancel_scan();
+                    break;
                 }
-                
-                delete params;
-            }, params);
-        };
-        
-        // Periodic progress updates during scan
-        std::thread progress_thread([this, &reporter, forward_progress]() {
-            while (scanning_.load() && !should_cancel_scan_.load()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                if (!should_cancel_scan_.load()) {
-                    // Get current status from reporter (thread safe)
-                    forward_progress(0, 0, "Scanning directory...");
-                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         });
-        
+
         // Perform the actual directory scan
         int processed = scan_database->scan_directory_parallel(dir_path, timer, reporter);
-        
-        // Stop progress updates
-        progress_thread.join();
+
+        cancellation_monitor.join();
         reporter.stop();
-        
+
         if (should_cancel_scan_.load()) {
+            scan_database->cancel_scan(); // Ensure cancellation is signaled
             Fl::awake([](void* data) {
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
                 if (widget->progress_callback_) {
@@ -928,7 +917,7 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             // Scan completed successfully - update database and reload
             current_db_path_ = db_path;
             database_ = std::move(scan_database);
-            
+
             Fl::awake([](void* data) {
                 static_cast<Fl_JustifiedLayout*>(data)->complete_directory_scan();
             }, this);
@@ -940,7 +929,7 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
                 }
             }, this);
         }
-        
+
     } catch (const std::exception& e) {
         Fl::awake([](void* data) {
             auto* params = static_cast<std::pair<Fl_JustifiedLayout*, std::string>*>(data);
@@ -950,7 +939,7 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             delete params;
         }, new std::pair<Fl_JustifiedLayout*, std::string>(this, e.what()));
     }
-    
+
     scanning_.store(false);
 }
 
@@ -958,16 +947,16 @@ void Fl_JustifiedLayout::complete_directory_scan() {
     if (progress_callback_) {
         progress_callback_(0, 0, "Loading images from database...");
     }
-    
+
     // Reload images from the updated database
     if (load_image_list()) {
         if (progress_callback_) {
             progress_callback_(0, 0, "Scan complete - " + std::to_string(images_.size()) + " images loaded");
         }
-        
+
         // Start background thumbnail generation
         start_background_generation();
-        
+
         std::cout << "Directory scan completed successfully - loaded " << images_.size() << " images" << std::endl;
     } else {
         if (progress_callback_) {

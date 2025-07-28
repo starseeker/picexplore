@@ -53,17 +53,17 @@ struct WriteTask {
         STORE_PATH,
         STORE_THUMBNAIL
     };
-    
+
     TaskType type;
     std::string key;
     std::vector<uint8_t> data;
     std::string string_value; // For path storage
-    
+
     WriteTask() = default;
-    WriteTask(TaskType t, const std::string& k, const std::string& val) 
+    WriteTask(TaskType t, const std::string& k, const std::string& val)
         : type(t), key(k), string_value(val) {}
-    
-    WriteTask(TaskType t, const std::string& k, const std::vector<uint8_t>& d) 
+
+    WriteTask(TaskType t, const std::string& k, const std::vector<uint8_t>& d)
         : type(t), key(k), data(d) {}
 };
 
@@ -72,47 +72,50 @@ class DatabaseManager {
 public:
     DatabaseManager();
     ~DatabaseManager();
-    
+
     bool open(const std::string& db_path);
     void close();
-    
+
     // Scanning and thumbnail generation
     int scan_directory(const std::string& directory, Timer& timer, StatusReporter& reporter);
     int scan_directory_parallel(const std::string& directory, Timer& timer, StatusReporter& reporter, int num_threads = 0);
-    
+
     // Database querying
     std::vector<ImageInfo> get_all_images();
     bool has_thumbnails(const std::string& hash);
-    
+
+    // Scanning control
+    void cancel_scan();
+
 private:
     MDB_env* env_;
     MDB_txn* txn_;
     MDB_dbi dbi_;
     bool is_open_;
-    
+
     // Parallel processing
     mutable std::mutex db_mutex_;
     std::atomic<bool> stop_processing_;
-    
+
     // Worker thread functions
     void worker_thread(const std::vector<std::string>& files, size_t start_idx, size_t end_idx,
                        moodycamel::ConcurrentQueue<WriteTask>& write_queue,
                        Timer& timer, StatusReporter& reporter,
                        std::atomic<int>& processed_count, std::atomic<int>& skipped_count);
-    
-    // Writer thread function  
+
+    // Writer thread function
     void writer_thread(moodycamel::ConcurrentQueue<WriteTask>& write_queue,
                        std::atomic<bool>& workers_done,
                        Timer& timer, StatusReporter& reporter,
                        std::atomic<int>& write_count);
-    
+
     // Thumbnail generation
-    bool generate_thumbnails(const std::string& filepath, const std::string& hash, 
+    bool generate_thumbnails(const std::string& filepath, const std::string& hash,
                            unsigned char* image_data, int width, int height, int channels);
-    std::vector<uint8_t> decode_jpeg_thumbnail_rgb(const std::string& filepath, int scale_factor, 
+    std::vector<uint8_t> decode_jpeg_thumbnail_rgb(const std::string& filepath, int scale_factor,
                                                   int* actual_width, int* actual_height);
     int calculate_scale_factor(int image_width, int image_height, int target_width, int target_height);
-    
+
     // Database operations
     bool begin_transaction();
     bool commit_transaction();
@@ -123,12 +126,12 @@ private:
     bool get_key_data(const std::string& key, std::vector<uint8_t>& data);
     std::string extract_hash_from_key(const char* key, size_t key_size);
     bool load_image_info(const std::string& hash, ImageInfo& info);
-    
+
     // Image processing helper
-    bool process_image_file(const std::string& filepath, 
+    bool process_image_file(const std::string& filepath,
                           std::vector<WriteTask>& write_tasks,
                           Timer& timer, bool& should_skip);
-    
+
     // EXIF orientation helpers
     int get_exif_orientation(const std::string& filepath);
     void apply_orientation_transform(unsigned char* data, int& width, int& height, int orientation);

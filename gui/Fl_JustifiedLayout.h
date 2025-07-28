@@ -105,7 +105,7 @@ public:
     // Database management
     bool set_database_path(const std::string& db_path);
     bool set_directory_path(const std::string& dir_path); // Will scan/build new database
-    
+
     // Directory scanning control
     void start_directory_scan(const std::string& dir_path, const std::string& db_path = "");
     void cancel_directory_scan();
@@ -173,7 +173,7 @@ protected:
     void process_thumbnail_results();
     static void result_processor_callback(void* data);
     static void progress_update_callback(void* data);
-    
+
     // Directory scanning methods
     void directory_scan_thread(const std::string& dir_path, const std::string& db_path);
     void complete_directory_scan();
@@ -200,7 +200,7 @@ private:
     // Async generation state
     std::atomic<bool> generating_;
     std::atomic<bool> should_stop_;
-    
+
     // Directory scanning state
     std::atomic<bool> scanning_;
     std::atomic<bool> should_cancel_scan_;
