@@ -27,18 +27,53 @@
 #include <FL/Fl_Widget.H>
 #include <FL/Fl_Scroll.H>
 #include <FL/Fl_RGB_Image.H>
+#include <FL/Fl.H>
 #include <string>
 #include <vector>
 #include <functional>
 #include <memory>
 #include <atomic>
 #include <unordered_map>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
 #include "../database.h"
 #include "../justified_layout.hpp"
+#include "concurrentqueue.h"
 
 // Forward declarations
 class DatabaseManager;
 class Fl_JustifiedLayout_Content;
+
+// Priority levels for thumbnail generation
+enum class ThumbnailPriority {
+    HIGH,   // Visible/soon-to-be-visible images
+    LOW     // Background population
+};
+
+// Thumbnail generation task
+struct ThumbnailTask {
+    int image_index;
+    ThumbnailPriority priority;
+    int target_width;
+    int target_height;
+    
+    ThumbnailTask() = default;
+    ThumbnailTask(int idx, ThumbnailPriority prio, int w, int h)
+        : image_index(idx), priority(prio), target_width(w), target_height(h) {}
+};
+
+// Result of thumbnail generation
+struct ThumbnailResult {
+    int image_index;
+    std::unique_ptr<Fl_RGB_Image> thumbnail;
+    std::string cache_key;
+    
+    ThumbnailResult() = default;
+    ThumbnailResult(int idx, std::unique_ptr<Fl_RGB_Image> thumb, const std::string& key)
+        : image_index(idx), thumbnail(std::move(thumb)), cache_key(key) {}
+};
 
 // Progress callback for background thumbnail generation
 using ProgressCallback = std::function<void(int current, int total, const std::string& status)>;
@@ -124,6 +159,13 @@ protected:
 
     // Database operations
     bool load_image_list();
+    
+    // Worker thread methods
+    void thumbnail_worker_thread();
+    void result_processor_thread();
+    void queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority);
+    void process_thumbnail_results();
+    static void result_processor_callback(void* data);
 
 private:
     // Content widget for scrollable area
@@ -144,9 +186,19 @@ private:
     // Selection state
     int selected_index_;
 
-    // Async generation state (stubbed)
+    // Async generation state
     std::atomic<bool> generating_;
     std::atomic<bool> should_stop_;
+
+    // Threading for thumbnail generation
+    std::vector<std::thread> worker_threads_;
+    moodycamel::ConcurrentQueue<ThumbnailTask> high_priority_queue_;
+    moodycamel::ConcurrentQueue<ThumbnailTask> low_priority_queue_;
+    moodycamel::ConcurrentQueue<ThumbnailResult> result_queue_;
+    mutable std::mutex image_cache_mutex_;
+    std::atomic<int> active_tasks_;
+    std::atomic<int> completed_tasks_;
+    std::atomic<int> total_tasks_;
 
     // Callbacks
     ProgressCallback progress_callback_;
