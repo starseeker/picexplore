@@ -4,9 +4,6 @@
 [submodule "third_party/stb"]
 	path = third_party/stb
 	url = https://github.com/nothings/stb.git
-[submodule "third_party/epeg"]
-	path = third_party/epeg
-	url = https://github.com/mattes/epeg.git
 [submodule "third_party/lmdb"]
 	path = third_party/lmdb
 	url = https://github.com/LMDB/lmdb.git
