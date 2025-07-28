@@ -33,32 +33,10 @@
 #include "xxhash.h"
 #include "stb_image.h"
 #include "stb_image_resize2.h"
-#include "picojpeg.h"
+#include <jpeglib.h>
+#include <jerror.h>
 
 namespace fs = std::filesystem;
-
-// Helper structure for file data callback for picojpeg
-struct FileData {
-    std::vector<uint8_t> data;
-    size_t offset;
-};
-
-// Callback function for picojpeg to read file data  
-unsigned char pjpeg_need_bytes_callback(unsigned char* pBuf, unsigned char buf_size, unsigned char *pBytes_actually_read, void *pCallback_data) {
-    FileData* file_data = static_cast<FileData*>(pCallback_data);
-    
-    size_t bytes_available = file_data->data.size() - file_data->offset;
-    size_t bytes_to_read = std::min((size_t)buf_size, bytes_available);
-    
-    if (bytes_to_read > 0) {
-        std::memcpy(pBuf, file_data->data.data() + file_data->offset, bytes_to_read);
-        file_data->offset += bytes_to_read;
-    }
-    
-    *pBytes_actually_read = (unsigned char)bytes_to_read;
-    return 0;
-}
-
 DatabaseManager::DatabaseManager() : env_(nullptr), txn_(nullptr), dbi_(0), is_open_(false), stop_processing_(false) {
 }
 
@@ -239,75 +217,98 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
         return {};
     }
     
-    FileData file_data;
     file.seekg(0, std::ios::end);
     size_t file_size = file.tellg();
     file.seekg(0, std::ios::beg);
     
-    file_data.data.resize(file_size);
-    file.read(reinterpret_cast<char*>(file_data.data.data()), file_size);
-    file_data.offset = 0;
+    std::vector<uint8_t> file_data(file_size);
+    file.read(reinterpret_cast<char*>(file_data.data()), file_size);
     
-    // Initialize picojpeg with the specified scale factor
-    pjpeg_image_info_t image_info;
-    unsigned char status = pjpeg_decode_init_scale(&image_info, pjpeg_need_bytes_callback, &file_data, scale_factor);
-    if (status != 0) {
-        fprintf(stderr, "Error: PicoJPEG decode init failed for '%s' (status: %d)\n", filepath.c_str(), status);
+    // Initialize JPEG decompression
+    struct jpeg_decompress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+    
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_decompress(&cinfo);
+    
+    // Set up memory source
+    jpeg_mem_src(&cinfo, file_data.data(), file_size);
+    
+    // Read JPEG header
+    if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
+        fprintf(stderr, "Error: Failed to read JPEG header for '%s'\n", filepath.c_str());
+        jpeg_destroy_decompress(&cinfo);
         return {};
     }
     
-    // Calculate output dimensions
-    int block_size = 8 / scale_factor;
-    if (block_size < 1) block_size = 1;
+    // Set scaling based on scale_factor (1, 2, 4, 8)
+    // libjpeg-turbo supports 1/8, 1/4, 1/2, 1/1 scaling
+    switch (scale_factor) {
+        case 1:
+            cinfo.scale_num = 1;
+            cinfo.scale_denom = 1;
+            break;
+        case 2:
+            cinfo.scale_num = 1;
+            cinfo.scale_denom = 2;
+            break;
+        case 4:
+            cinfo.scale_num = 1;
+            cinfo.scale_denom = 4;
+            break;
+        case 8:
+            cinfo.scale_num = 1;
+            cinfo.scale_denom = 8;
+            break;
+        default:
+            cinfo.scale_num = 1;
+            cinfo.scale_denom = 1;
+            break;
+    }
     
-    int output_width = image_info.m_MCUSPerRow * block_size;
-    int output_height = image_info.m_MCUSPerCol * block_size;
+    // Force RGB output
+    cinfo.out_color_space = JCS_RGB;
+    
+    // Start decompression
+    if (!jpeg_start_decompress(&cinfo)) {
+        fprintf(stderr, "Error: Failed to start JPEG decompression for '%s'\n", filepath.c_str());
+        jpeg_destroy_decompress(&cinfo);
+        return {};
+    }
+    
+    int output_width = cinfo.output_width;
+    int output_height = cinfo.output_height;
+    int output_components = cinfo.output_components;
     
     if (actual_width) *actual_width = output_width;
     if (actual_height) *actual_height = output_height;
     
+    // Ensure we have RGB output (3 components)
+    if (output_components != 3) {
+        fprintf(stderr, "Error: Expected RGB output but got %d components for '%s'\n", output_components, filepath.c_str());
+        jpeg_finish_decompress(&cinfo);
+        jpeg_destroy_decompress(&cinfo);
+        return {};
+    }
+    
     // Allocate RGB output buffer
     std::vector<uint8_t> rgb_data(output_width * output_height * 3);
     
-    // Decode MCUs
-    for (int mcu_y = 0; mcu_y < image_info.m_MCUSPerCol; mcu_y++) {
-        for (int mcu_x = 0; mcu_x < image_info.m_MCUSPerRow; mcu_x++) {
-            status = pjpeg_decode_mcu();
-            if (status != 0) {
-                if (status == PJPG_NO_MORE_BLOCKS) {
-                    break;
-                }
-                fprintf(stderr, "Error: PicoJPEG MCU decode failed for '%s' (status: %d)\n", filepath.c_str(), status);
-                return {};
-            }
-            
-            // Copy MCU data to output RGB buffer
-            int dst_x = mcu_x * block_size;
-            int dst_y = mcu_y * block_size;
-            
-            for (int by = 0; by < block_size; by++) {
-                for (int bx = 0; bx < block_size; bx++) {
-                    int src_idx = by * 8 + bx; // Source is always 8-pixel stride
-                    int dst_idx = ((dst_y + by) * output_width + (dst_x + bx)) * 3;
-                    
-                    if (dst_idx + 2 < rgb_data.size()) {
-                        if (image_info.m_comps == 1) {
-                            // Grayscale
-                            unsigned char y = image_info.m_pMCUBufR[src_idx];
-                            rgb_data[dst_idx + 0] = y;
-                            rgb_data[dst_idx + 1] = y;
-                            rgb_data[dst_idx + 2] = y;
-                        } else {
-                            // Color
-                            rgb_data[dst_idx + 0] = image_info.m_pMCUBufR[src_idx];
-                            rgb_data[dst_idx + 1] = image_info.m_pMCUBufG[src_idx];
-                            rgb_data[dst_idx + 2] = image_info.m_pMCUBufB[src_idx];
-                        }
-                    }
-                }
-            }
+    // Read scanlines
+    JSAMPROW row_buffer = rgb_data.data();
+    while (cinfo.output_scanline < cinfo.output_height) {
+        JSAMPROW row_ptr = row_buffer + (cinfo.output_scanline * output_width * 3);
+        if (jpeg_read_scanlines(&cinfo, &row_ptr, 1) != 1) {
+            fprintf(stderr, "Error: Failed to read scanline %d for '%s'\n", cinfo.output_scanline, filepath.c_str());
+            jpeg_finish_decompress(&cinfo);
+            jpeg_destroy_decompress(&cinfo);
+            return {};
         }
     }
+    
+    // Finish decompression and cleanup
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
     
     return rgb_data;
 }
@@ -323,7 +324,7 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
     bool thumbnails_generated = true;
     
     if (ext == ".jpg" || ext == ".jpeg") {
-        // For JPEG files, use picojpeg with optimized scale factor grouping
+        // For JPEG files, use libjpeg-turbo with optimized scale factor grouping
         std::map<int, std::vector<int>> scale_groups; // scale_factor -> list of thumb_sizes
         
         // Group thumbnail sizes by their optimal scale factor
@@ -375,7 +376,7 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
                     }
                 }
             } else {
-                // Failed to decode with picojpeg, fall back to stb_image for these sizes  
+                // Failed to decode with libjpeg-turbo, fall back to stb_image for these sizes  
                 fprintf(stderr, "Warning: JPEG decoding failed for '%s' (scale factor %d), falling back to STB\n", filepath.c_str(), scale_factor);
                 thumbnails_generated = false;
                 break;
@@ -386,7 +387,7 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
         thumbnails_generated = false;
     }
     
-    // Fallback processing for non-JPEG files or if picojpeg failed
+    // Fallback processing for non-JPEG files or if libjpeg-turbo failed
     if (!thumbnails_generated) {
         thumbnails_generated = true; // Reset the flag
         for (int thumb_size : thumb_sizes) {
@@ -534,7 +535,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
     bool thumbnails_generated = true;
     
     if (ext == ".jpg" || ext == ".jpeg") {
-        // For JPEG files, use picojpeg with optimized scale factor grouping
+        // For JPEG files, use libjpeg-turbo with optimized scale factor grouping
         std::map<int, std::vector<int>> scale_groups; // scale_factor -> list of thumb_sizes
         
         // Group thumbnail sizes by their optimal scale factor
@@ -583,7 +584,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
                     }
                 }
             } else {
-                // Failed to decode with picojpeg, fall back to stb_image for these sizes  
+                // Failed to decode with libjpeg-turbo, fall back to stb_image for these sizes  
                 fprintf(stderr, "Warning: JPEG decoding failed for '%s' (scale factor %d), falling back to STB\n", filepath.c_str(), scale_factor);
                 thumbnails_generated = false;
                 break;
@@ -594,7 +595,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
         thumbnails_generated = false;
     }
     
-    // Fallback processing for non-JPEG files or if picojpeg failed
+    // Fallback processing for non-JPEG files or if libjpeg-turbo failed
     if (!thumbnails_generated) {
         thumbnails_generated = true; // Reset the flag
         for (int thumb_size : thumb_sizes) {

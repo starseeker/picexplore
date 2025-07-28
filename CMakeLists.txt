@@ -18,7 +18,6 @@ set(STB_DIR ${CMAKE_SOURCE_DIR}/third_party/stb)
 set(LMDB_DIR ${CMAKE_SOURCE_DIR}/third_party/lmdb/libraries/liblmdb)
 set(CXXOPTS_DIR ${CMAKE_SOURCE_DIR}/third_party/cxxopts)
 set(STRUETYPE_DIR ${CMAKE_SOURCE_DIR}/third_party/struetype)
-set(PICOJPEG_DIR ${CMAKE_SOURCE_DIR}/third_party/picojpeg)
 set(CONCURRENTQUEUE_DIR ${CMAKE_SOURCE_DIR}/third_party/concurrentqueue)
 
 # xxHash - compile the source
@@ -29,10 +28,6 @@ target_include_directories(xxhash PUBLIC ${XXHASH_DIR})
 add_library(lmdb STATIC ${LMDB_DIR}/mdb.c ${LMDB_DIR}/midl.c)
 target_include_directories(lmdb PUBLIC ${LMDB_DIR})
 target_compile_definitions(lmdb PRIVATE MDB_MAXKEYSIZE=511)
-
-# PicoJPEG - compile the source
-add_library(picojpeg STATIC ${PICOJPEG_DIR}/picojpeg.c)
-target_include_directories(picojpeg PUBLIC ${PICOJPEG_DIR})
 
 # Original executable
 add_executable(justified_layout_test justified_layout_test.cpp)
@@ -45,12 +40,11 @@ target_include_directories(picscan PRIVATE
     ${STB_DIR} 
     ${LMDB_DIR}
     ${CXXOPTS_DIR}/include
-    ${PICOJPEG_DIR}
     ${STRUETYPE_DIR}
     ${STRUETYPE_DIR}/examples
     ${CONCURRENTQUEUE_DIR}
 .)
-target_link_libraries(picscan xxhash lmdb picojpeg ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
+target_link_libraries(picscan xxhash lmdb ${JPEG_LIBRARIES} ${EXIF_LIBRARIES})
 target_compile_options(picscan PRIVATE -g)
 
 # Local Variables:

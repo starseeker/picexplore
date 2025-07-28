@@ -102,13 +102,13 @@ You need the following system packages installed:
 
 - CMake 3.12 or later
 - A C++17 compatible compiler (GCC, Clang)
-- libjpeg development headers (`libjpeg-dev` on Ubuntu/Debian)
+- libjpeg-turbo development headers (`libjpeg-turbo8-dev` on Ubuntu/Debian)
 - libexif development headers (`libexif-dev` on Ubuntu/Debian)
 - pkg-config
 
 On Ubuntu/Debian:
 ```bash
-sudo apt-get install cmake build-essential libjpeg-dev libexif-dev pkg-config
+sudo apt-get install cmake build-essential libjpeg-turbo8-dev libexif-dev pkg-config
 ```
 
 ### Build Steps
@@ -149,7 +149,7 @@ All formats support grayscale, RGB, and RGBA color modes.
 The application uses an optimized pipeline designed for efficiency and quality:
 
 ### JPEG Processing (Optimized)
-1. **DCT-Domain Downscaling**: JPEGs are decoded using picojpeg with DCT-domain scaling (scale factors 1, 2, 4, 8)
+1. **DCT-Domain Downscaling**: JPEGs are decoded using libjpeg-turbo with DCT-domain scaling (scale factors 1/1, 1/2, 1/4, 1/8)
 2. **Scale Factor Grouping**: Thumbnails are grouped by optimal scale factor to minimize decode operations
 3. **Single Decode Per Group**: Each scale factor group requires only one decode operation
 4. **JPEG Encoding**: All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
