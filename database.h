@@ -90,7 +90,6 @@ public:
 
 private:
     MDB_env* env_;
-    MDB_txn* txn_;
     MDB_dbi dbi_;
     bool is_open_;
 
@@ -111,22 +110,23 @@ private:
                        std::atomic<int>& write_count);
 
     // Thumbnail generation
-    bool generate_thumbnails(const std::string& filepath, const std::string& hash,
+    bool generate_thumbnails(MDB_txn* txn, const std::string& filepath, const std::string& hash,
                            unsigned char* image_data, int width, int height, int channels);
     std::vector<uint8_t> decode_jpeg_thumbnail_rgb(const std::string& filepath, int scale_factor,
                                                   int* actual_width, int* actual_height);
     int calculate_scale_factor(int image_width, int image_height, int target_width, int target_height);
 
     // Database operations
-    bool begin_transaction();
-    bool commit_transaction();
-    void abort_transaction();
-    bool store_key_value(const std::string& key, const std::string& value);
-    bool store_key_data(const std::string& key, const std::vector<uint8_t>& data);
-    bool get_key_value(const std::string& key, std::string& value);
-    bool get_key_data(const std::string& key, std::vector<uint8_t>& data);
+    bool begin_write_transaction(MDB_txn*& txn);
+    bool begin_read_transaction(MDB_txn*& txn);
+    bool commit_transaction(MDB_txn* txn);
+    void abort_transaction(MDB_txn* txn);
+    bool store_key_value(MDB_txn* txn, const std::string& key, const std::string& value);
+    bool store_key_data(MDB_txn* txn, const std::string& key, const std::vector<uint8_t>& data);
+    bool get_key_value(MDB_txn* txn, const std::string& key, std::string& value);
+    bool get_key_data(MDB_txn* txn, const std::string& key, std::vector<uint8_t>& data);
     std::string extract_hash_from_key(const char* key, size_t key_size);
-    bool load_image_info(const std::string& hash, ImageInfo& info);
+    bool load_image_info(MDB_txn* txn, const std::string& hash, ImageInfo& info);
 
     // Image processing helper
     bool process_image_file(const std::string& filepath,
