@@ -84,6 +84,26 @@ struct ThumbnailNotification {
     ThumbnailNotification(const std::string& h, bool ready) : hash(h), is_ready(ready) {}
 };
 
+// Batch processing configuration
+struct BatchConfig {
+    size_t small_batch_threshold = 5;     // Process immediately for small batches
+    size_t large_batch_size = 50;         // Process in batches of this size for large operations
+    double batch_timeout_ms = 100.0;      // Maximum time to wait before flushing a batch
+    bool enable_debug_logging = true;     // Enable detailed batch processing logs
+    
+    BatchConfig() = default;
+};
+
+// Batch processing state for ImageInfo objects
+struct ImageInfoBatch {
+    std::vector<ImageInfo> pending_images;
+    std::chrono::steady_clock::time_point last_batch_time;
+    size_t total_images_added = 0;
+    size_t total_batches_processed = 0;
+    
+    ImageInfoBatch() : last_batch_time(std::chrono::steady_clock::now()) {}
+};
+
 // Progress callback for background thumbnail generation
 using ProgressCallback = std::function<void(int current, int total, const std::string& status)>;
 
@@ -119,13 +139,26 @@ public:
     void cancel_directory_scan();
     bool is_scanning() const { return scanning_.load(); }
 
-    // Two-stage population support
+    // Two-stage population support  
     using ThumbnailNotificationCallback = std::function<void(const ThumbnailNotification&)>;
     void set_thumbnail_notification_callback(ThumbnailNotificationCallback callback) {
         thumbnail_notification_callback_ = callback;
     }
     void handle_image_info_ready(const ImageInfo& info);  // Stage 1: Add placeholder
     void handle_thumbnail_ready(const std::string& hash);  // Stage 2: Update with thumbnail
+
+    // Batch processing support
+    void set_batch_config(const BatchConfig& config) { batch_config_ = config; }
+    BatchConfig get_batch_config() const { return batch_config_; }
+    
+    // Batch processing methods
+    void queue_image_info_batch(const ImageInfo& info);
+    void flush_pending_image_batch(bool force = false);
+    void process_image_info_batch(const std::vector<ImageInfo>& batch);
+    
+    // Enhanced debug logging
+    void log_batch_debug(const std::string& message) const;
+    void log_ui_debug(const std::string& message) const;
 
     // Layout configuration
     void set_row_height(double height) { layout_config_.rh = height; relayout(); }
@@ -203,6 +236,7 @@ protected:
     static void result_processor_callback(void* data);
     static void progress_update_callback(void* data);
     static void thumbnail_notification_callback(void* data);  // FLTK callback for notifications
+    static void batch_flush_callback(void* data);  // FLTK callback for batch processing
 
     // Directory scanning methods
     void directory_scan_thread(const std::string& dir_path, const std::string& db_path);
@@ -262,6 +296,16 @@ private:
     // Two-stage processing support
     moodycamel::ConcurrentQueue<ThumbnailNotification> thumbnail_notifications_;
     std::unordered_map<std::string, int> hash_to_index_map_;  // Map hash to image index
+
+    // Batch processing state
+    BatchConfig batch_config_;
+    mutable std::mutex batch_mutex_;
+    ImageInfoBatch current_batch_;
+    std::atomic<bool> batch_flush_scheduled_;
+    
+    // Enhanced debug logging state
+    mutable std::mutex debug_log_mutex_;
+    size_t debug_batch_counter_ = 0;
 
     // Debug output configuration
     bool debug_output_enabled_ = false;

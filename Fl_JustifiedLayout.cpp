@@ -48,6 +48,7 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     , completed_tasks_(0)
     , total_tasks_(0)
     , thumbnail_notification_callback_(nullptr)
+    , batch_flush_scheduled_(false)
 {
     // Initialize layout configuration with reasonable defaults
     layout_config_.w = W - 20; // Leave some margin for scrollbar
@@ -150,7 +151,7 @@ static std::unique_ptr<Fl_RGB_Image> worker_decode_fl_rgb_image(const ImageInfo&
 }
 
 void Fl_JustifiedLayout::thumbnail_worker_thread() {
-    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id() << " started" << std::endl;
+    log_ui_debug("Thumbnail worker thread " + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) + " started");
 
     ThumbnailTask task;
     int tasks_processed = 0;
@@ -161,30 +162,22 @@ void Fl_JustifiedLayout::thumbnail_worker_thread() {
         // Try high priority queue first
         if (high_priority_queue_.try_dequeue(task)) {
             found_task = true;
-            std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                      << " dequeued HIGH priority task for image " << task.image_index
-                      << " (" << task.target_width << "x" << task.target_height << ")" << std::endl;
+            log_ui_debug("Worker dequeued HIGH priority task for image " + std::to_string(task.image_index) +
+                         " (" + std::to_string(task.target_width) + "x" + std::to_string(task.target_height) + ")");
         }
         // Fall back to low priority queue
         else if (low_priority_queue_.try_dequeue(task)) {
             found_task = true;
-            std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                      << " dequeued LOW priority task for image " << task.image_index
-                      << " (" << task.target_width << "x" << task.target_height << ")" << std::endl;
+            log_ui_debug("Worker dequeued LOW priority task for image " + std::to_string(task.image_index) +
+                         " (" + std::to_string(task.target_width) + "x" + std::to_string(task.target_height) + ")");
         }
 
         if (found_task) {
             active_tasks_.fetch_add(1);
             tasks_processed++;
 
-            std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                      << " processing task #" << tasks_processed << " for image " << task.image_index << std::endl;
-
             if (task.image_index >= 0 && task.image_index < static_cast<int>(images_.size())) {
                 const auto& img_info = images_[task.image_index];
-
-                std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                          << " processing image: " << img_info.path << " (hash: " << img_info.hash << ")" << std::endl;
 
                 // Create cache key
                 std::string cache_key = img_info.hash + "_" +
@@ -195,8 +188,7 @@ void Fl_JustifiedLayout::thumbnail_worker_thread() {
                 {
                     std::lock_guard<std::mutex> lock(image_cache_mutex_);
                     if (image_cache_.find(cache_key) != image_cache_.end()) {
-                        std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                                  << " found cached thumbnail for: " << cache_key << std::endl;
+                        // Thumbnail already cached
                         active_tasks_.fetch_sub(1);
                         completed_tasks_.fetch_add(1);
                         continue;
@@ -207,26 +199,18 @@ void Fl_JustifiedLayout::thumbnail_worker_thread() {
 
                 // Check if image has thumbnails in database
                 if (img_info.has_thumbnails) {
-                    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                              << " loading existing thumbnail for: " << img_info.path << std::endl;
                     // Load from existing thumbnail data
                     thumbnail = worker_decode_fl_rgb_image(img_info, task.target_width, task.target_height);
                 } else {
-                    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                              << " generating new thumbnail for: " << img_info.path << std::endl;
                     // Generate thumbnail from source image using database
                     if (database_) {
                         // Generate thumbnails for this hash
                         if (database_->generate_thumbnails_for_hash(img_info.hash, img_info.path)) {
-                            std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                                      << " successfully generated thumbnail for hash: " << img_info.hash << std::endl;
                             // Reload the image info to get the thumbnails
                             ImageInfo updated_img = img_info;
                             MDB_txn* read_txn;
                             if (database_->begin_read_transaction(read_txn)) {
                                 if (database_->load_image_info(read_txn, img_info.hash, updated_img)) {
-                                    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                                              << " reloaded image info for: " << img_info.path << std::endl;
                                     // Decode the thumbnail
                                     thumbnail = worker_decode_fl_rgb_image(updated_img, task.target_width, task.target_height);
 
@@ -235,100 +219,60 @@ void Fl_JustifiedLayout::thumbnail_worker_thread() {
                                         std::lock_guard<std::mutex> lock(image_cache_mutex_);
                                         if (task.image_index < static_cast<int>(images_.size())) {
                                             images_[task.image_index] = updated_img;
-                                            std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                                                      << " updated image list for index: " << task.image_index << std::endl;
                                         }
                                     }
 
                                     // Notify UI that thumbnail is ready
-                                    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                                              << " notifying UI thumbnail ready for hash: " << img_info.hash << std::endl;
                                     handle_thumbnail_ready(img_info.hash);
-                                } else {
-                                    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                                              << " failed to load image info for hash: " << img_info.hash << std::endl;
                                 }
                                 database_->abort_transaction(read_txn);
-                            } else {
-                                std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                                          << " failed to begin read transaction for hash: " << img_info.hash << std::endl;
                             }
-                        } else {
-                            std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                                      << " failed to generate thumbnail for hash: " << img_info.hash << std::endl;
                         }
-                    } else {
-                        std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                                  << " no database available for thumbnail generation" << std::endl;
                     }
                 }
 
                 if (thumbnail) {
-                    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                              << " thumbnail created successfully for image " << task.image_index
-                              << ", enqueueing result and triggering UI awake" << std::endl;
+                    log_ui_debug("Thumbnail created for image " + std::to_string(task.image_index) + ", enqueueing result");
                     ThumbnailResult result(task.image_index, std::move(thumbnail), cache_key);
                     result_queue_.enqueue(std::move(result));
                     debug_awake(result_processor_callback, this, "thumbnail generation result");
-                } else {
-                    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                              << " failed to create thumbnail for image " << task.image_index << std::endl;
                 }
-            } else {
-                std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                          << " invalid image index: " << task.image_index << " (images size: " << images_.size() << ")" << std::endl;
             }
 
             active_tasks_.fetch_sub(1);
             completed_tasks_.fetch_add(1);
-            std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
-                      << " completed task #" << tasks_processed << ", active: " << active_tasks_.load()
-                      << ", completed: " << completed_tasks_.load() << std::endl;
         }
         else {
-            // No tasks available, sleep briefly
+            // No tasks available, sleep briefly  
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
 
-    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id() << " shutting down after processing "
-              << tasks_processed << " tasks" << std::endl;
+    log_ui_debug("Thumbnail worker thread shutting down after processing " + std::to_string(tasks_processed) + " tasks");
 }
 
 void Fl_JustifiedLayout::result_processor_callback(void* data) {
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " result processor callback triggered" << std::endl;
     if (data) {
         static_cast<Fl_JustifiedLayout*>(data)->process_thumbnail_results();
-    } else {
-        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " result processor callback called with null data" << std::endl;
     }
 }
 
 void Fl_JustifiedLayout::progress_update_callback(void* data) {
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " progress update callback triggered" << std::endl;
     if (data) {
         Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
         if (widget->generating_.load() && widget->content_widget_) {
-            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " redrawing content widget" << std::endl;
             widget->content_widget_->redraw();
             // Schedule next update
             Fl::add_timeout(0.1, progress_update_callback, data);
-        } else {
-            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " progress update callback: not generating or no widget" << std::endl;
         }
-    } else {
-        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " progress update callback called with null data" << std::endl;
     }
 }
 
 void Fl_JustifiedLayout::process_thumbnail_results() {
     static std::atomic_flag processing = ATOMIC_FLAG_INIT;
     if (processing.test_and_set()) {
-        std::cerr << "[DEBUG] UI thread " << std::this_thread::get_id() << " WARNING: process_thumbnail_results re-entered!" << std::endl;
-        return;
+        return;  // Avoid re-entry
     }
-
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " processing thumbnail results" << std::endl;
 
     ThumbnailResult result;
     bool any_processed = false;
@@ -337,52 +281,35 @@ void Fl_JustifiedLayout::process_thumbnail_results() {
     // Process all available results
     while (result_queue_.try_dequeue(result)) {
         results_processed++;
-        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " processing result #" << results_processed
-                  << " for image " << result.image_index << " cache_key: " << result.cache_key << std::endl;
 
         if (result.thumbnail) {
             std::lock_guard<std::mutex> lock(image_cache_mutex_);
             if (image_cache_.find(result.cache_key) != image_cache_.end()) {
-                std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " skipping duplicate cache key: "
-                          << result.cache_key << std::endl;
                 continue; // Already in cache, skip duplicate job
             }
             image_cache_[result.cache_key] = std::move(result.thumbnail);
             any_processed = true;
-            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " cached thumbnail for key: "
-                      << result.cache_key << std::endl;
-        } else {
-            std::cerr << "[DEBUG] UI thread " << std::this_thread::get_id() << " WARNING: Dequeued null thumbnail for key="
-                      << result.cache_key << std::endl;
         }
     }
 
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " processed " << results_processed
-              << " thumbnail results, any_processed: " << any_processed << std::endl;
+    log_batch_debug("Processed " + std::to_string(results_processed) + " thumbnail results, any_processed: " + 
+                   (any_processed ? "true" : "false"));
 
     // Trigger redraw if any thumbnails were processed
     if (any_processed) {
         if (content_widget_) {
-            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " triggering content widget redraw" << std::endl;
             content_widget_->redraw();
-        } else {
-            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " no content widget to redraw" << std::endl;
         }
 
         // Update progress if callback is set
         if (progress_callback_) {
             int completed = completed_tasks_.load();
             int total = total_tasks_.load();
-            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " invoking progress callback: "
-                      << completed << "/" << total << std::endl;
             progress_callback_(completed, total, "Generating thumbnails...");
-        } else {
-            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " no progress callback set" << std::endl;
         }
     }
 
     processing.clear();
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " completed processing thumbnail results" << std::endl;
 }
 
 int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority) {
@@ -406,8 +333,6 @@ int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, T
             {
                 std::lock_guard<std::mutex> lock(image_cache_mutex_);
                 if (image_cache_.find(cache_key) != image_cache_.end()) {
-                    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " thumbnail already cached for: "
-                              << cache_key << ", skipping queue" << std::endl;
                     continue; // Already cached, do not queue
                 }
             }
@@ -416,25 +341,35 @@ int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, T
             ThumbnailTask task(idx, priority, target_w, target_h);
 
             if (priority == ThumbnailPriority::HIGH) {
-                std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " enqueueing HIGH priority thumbnail task for image "
-                          << idx << " (" << target_w << "x" << target_h << ") hash: " << img.hash << std::endl;
                 high_priority_queue_.enqueue(task);
             } else {
-                std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " enqueueing LOW priority thumbnail task for image "
-                          << idx << " (" << target_w << "x" << target_h << ") hash: " << img.hash << std::endl;
                 low_priority_queue_.enqueue(task);
             }
 
             total_tasks_.fetch_add(1);
             num_queued++;
-            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " total tasks now: " << total_tasks_.load()
-                      << ", num_queued this round: " << num_queued << std::endl;
         }
     }
+    
+    if (num_queued > 0) {
+        log_ui_debug("Queued " + std::to_string(num_queued) + " " + 
+                    (priority == ThumbnailPriority::HIGH ? "HIGH" : "LOW") + 
+                    " priority thumbnail tasks, total tasks now: " + std::to_string(total_tasks_.load()));
+    }
+    
     return num_queued;
 }
 
 Fl_JustifiedLayout::~Fl_JustifiedLayout() {
+    // Cancel any pending batch flush timers
+    if (batch_flush_scheduled_.load()) {
+        Fl::remove_timeout(batch_flush_callback, this);
+        batch_flush_scheduled_.store(false);
+    }
+    
+    // Flush any remaining batch before shutdown
+    flush_pending_image_batch(true);
+    
     cancel_directory_scan();
     stop_background_generation();
     clear_image_cache();
@@ -1433,38 +1368,156 @@ void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& ne
               << " images incrementally (total: " << images_.size() << ")" << std::endl;
 }
 
-// Two-stage population support methods
-void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " handling image info ready for: "
-              << info.path << " (hash: " << info.hash << ", has_thumbnails: " << info.has_thumbnails << ")" << std::endl;
+// Batch processing and debug logging methods
+void Fl_JustifiedLayout::log_batch_debug(const std::string& message) const {
+    if (!batch_config_.enable_debug_logging) return;
+    
+    std::lock_guard<std::mutex> lock(debug_log_mutex_);
+    std::cout << "[BATCH] UI thread " << std::this_thread::get_id() << " " << message << std::endl;
+}
 
-    // This is called from the database scanning thread when metadata is available
-    // Add the image to our list immediately (stage 1)
-    std::lock_guard<std::mutex> lock(image_cache_mutex_);
+void Fl_JustifiedLayout::log_ui_debug(const std::string& message) const {
+    if (!batch_config_.enable_debug_logging) return;
+    
+    std::lock_guard<std::mutex> lock(debug_log_mutex_);
+    std::cout << "[UI] Thread " << std::this_thread::get_id() << " " << message << std::endl;
+}
 
-    images_.push_back(info);
-    hash_to_index_map_[info.hash] = images_.size() - 1;
+void Fl_JustifiedLayout::queue_image_info_batch(const ImageInfo& info) {
+    log_batch_debug("queue_image_info_batch called for: " + info.path + " (hash: " + info.hash + ")");
+    
+    std::lock_guard<std::mutex> lock(batch_mutex_);
+    
+    current_batch_.pending_images.push_back(info);
+    current_batch_.total_images_added++;
+    
+    size_t pending_count = current_batch_.pending_images.size();
+    log_batch_debug("Added image to batch, pending count: " + std::to_string(pending_count) + 
+                   ", total added: " + std::to_string(current_batch_.total_images_added));
+    
+    // Check if we should process immediately (small batch) or schedule for later
+    if (pending_count <= batch_config_.small_batch_threshold) {
+        log_batch_debug("Small batch detected (" + std::to_string(pending_count) + 
+                       " <= " + std::to_string(batch_config_.small_batch_threshold) + 
+                       "), processing immediately for snappy UI feedback");
+        
+        // Process immediately for small batches to maintain snappy UI
+        std::vector<ImageInfo> immediate_batch = std::move(current_batch_.pending_images);
+        current_batch_.pending_images.clear();
+        current_batch_.last_batch_time = std::chrono::steady_clock::now();
+        
+        // Release lock before processing
+        lock.~lock_guard();
+        process_image_info_batch(immediate_batch);
+    } else {
+        // For larger batches, schedule a flush if not already scheduled
+        if (!batch_flush_scheduled_.load()) {
+            log_batch_debug("Large batch detected (" + std::to_string(pending_count) + 
+                           " > " + std::to_string(batch_config_.small_batch_threshold) + 
+                           "), scheduling batch flush");
+            
+            batch_flush_scheduled_.store(true);
+            Fl::add_timeout(batch_config_.batch_timeout_ms / 1000.0, batch_flush_callback, this);
+        }
+    }
+}
 
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " added image to list, total images: "
-              << images_.size() << ", assigned index: " << (images_.size() - 1) << std::endl;
+void Fl_JustifiedLayout::flush_pending_image_batch(bool force) {
+    std::lock_guard<std::mutex> lock(batch_mutex_);
+    
+    if (current_batch_.pending_images.empty()) {
+        log_batch_debug("Flush called but no pending images");
+        return;
+    }
+    
+    auto now = std::chrono::steady_clock::now();
+    double elapsed_ms = std::chrono::duration<double, std::milli>(now - current_batch_.last_batch_time).count();
+    
+    size_t pending_count = current_batch_.pending_images.size();
+    
+    if (force || pending_count >= batch_config_.large_batch_size || elapsed_ms >= batch_config_.batch_timeout_ms) {
+        log_batch_debug("Flushing batch: force=" + std::string(force ? "true" : "false") + 
+                       ", pending=" + std::to_string(pending_count) + 
+                       ", elapsed=" + std::to_string(elapsed_ms) + "ms");
+        
+        std::vector<ImageInfo> batch_to_process = std::move(current_batch_.pending_images);
+        current_batch_.pending_images.clear();
+        current_batch_.last_batch_time = now;
+        current_batch_.total_batches_processed++;
+        
+        // Release lock before processing
+        lock.~lock_guard();
+        process_image_info_batch(batch_to_process);
+    } else {
+        log_batch_debug("Flush conditions not met: pending=" + std::to_string(pending_count) + 
+                       ", elapsed=" + std::to_string(elapsed_ms) + "ms, will wait");
+    }
+}
 
-    // Trigger immediate layout recalculation to populate with placeholders
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " calculating layout" << std::endl;
+void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& batch) {
+    if (batch.empty()) {
+        log_batch_debug("process_image_info_batch called with empty batch");
+        return;
+    }
+    
+    log_batch_debug("Processing batch of " + std::to_string(batch.size()) + " images");
+    
+    // Add images to our list in batch
+    size_t old_size = images_.size();
+    {
+        std::lock_guard<std::mutex> lock(image_cache_mutex_);
+        
+        for (const auto& info : batch) {
+            images_.push_back(info);
+            hash_to_index_map_[info.hash] = images_.size() - 1;
+            
+            log_batch_debug("Added image to main list: " + info.path + 
+                           " (index: " + std::to_string(images_.size() - 1) + 
+                           ", has_thumbnails: " + (info.has_thumbnails ? "true" : "false") + ")");
+        }
+    }
+    
+    log_batch_debug("Batch processed: added " + std::to_string(batch.size()) + 
+                   " images, total count increased from " + std::to_string(old_size) + 
+                   " to " + std::to_string(images_.size()));
+    
+    // Recalculate layout for the batch
+    log_ui_debug("Recalculating layout for batch of " + std::to_string(batch.size()) + " images");
     calculate_layout();
-
+    
     // Resize content widget to match the new total layout height
     if (content_widget_) {
         int content_height = std::max(static_cast<int>(total_height_), h());
-        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " resizing content widget to height: "
-                  << content_height << " (total_height_: " << total_height_ << ")" << std::endl;
+        log_ui_debug("Resizing content widget for batch, new height: " + std::to_string(content_height));
         content_widget_->resize(x(), y(), w(), content_height);
-    } else {
-        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " no content widget to resize" << std::endl;
     }
-
-    // Schedule a redraw
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " scheduling redraw for image: " << info.path << std::endl;
+    
+    // Trigger redraw to show new placeholders
+    log_ui_debug("Triggering redraw for batch of " + std::to_string(batch.size()) + " images");
     redraw();
+    
+    log_batch_debug("Completed processing batch of " + std::to_string(batch.size()) + " images");
+}
+
+// Static callback for batch processing
+void Fl_JustifiedLayout::batch_flush_callback(void* data) {
+    if (!data) return;
+    
+    Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
+    widget->log_batch_debug("Batch flush callback triggered by timeout");
+    
+    widget->batch_flush_scheduled_.store(false);
+    widget->flush_pending_image_batch(false);
+}
+
+// Two-stage population support methods
+void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
+    log_ui_debug("handle_image_info_ready called for: " + info.path + 
+                " (hash: " + info.hash + ", has_thumbnails: " + 
+                (info.has_thumbnails ? "true" : "false") + ")");
+    
+    // Instead of processing immediately, queue for batch processing
+    queue_image_info_batch(info);
 }
 
 void Fl_JustifiedLayout::handle_thumbnail_ready(const std::string& hash) {
