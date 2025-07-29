@@ -51,6 +51,88 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     end(); // Important: end() to finalize the Fl_Scroll's children
 }
 
+// Helper to decode and create a Fl_RGB_Image for worker thread
+static std::unique_ptr<Fl_RGB_Image> worker_decode_fl_rgb_image(const ImageInfo& info, int target_width, int target_height) {
+    // Check if we have thumbnail data
+    if (info.thumb_data.empty()) {
+        return nullptr;
+    }
+
+    // Decode image from memory using stb_image
+    int image_width, image_height, channels;
+    unsigned char* pixels = stbi_load_from_memory(
+        info.thumb_data.data(),
+        static_cast<int>(info.thumb_data.size()),
+        &image_width, &image_height, &channels, 3  // Force RGB
+    );
+
+    if (!pixels) {
+        std::cerr << "Failed to decode thumbnail for " << info.path << ": " << stbi_failure_reason() << std::endl;
+        return nullptr;
+    }
+
+    // Calculate scaled dimensions while maintaining aspect ratio
+    double aspect_ratio = static_cast<double>(image_width) / image_height;
+    int scaled_width, scaled_height;
+
+    if (static_cast<double>(target_width) / target_height > aspect_ratio) {
+        // Target is wider than image - fit to height
+        scaled_height = target_height;
+        scaled_width = static_cast<int>(target_height * aspect_ratio);
+    } else {
+        // Target is taller than image - fit to width
+        scaled_width = target_width;
+        scaled_height = static_cast<int>(target_width / aspect_ratio);
+    }
+
+    // Ensure minimum size
+    if (scaled_width < 1) scaled_width = 1;
+    if (scaled_height < 1) scaled_height = 1;
+
+    unsigned char* scaled_pixels = nullptr;
+
+    // Scale image if needed
+    if (scaled_width != image_width || scaled_height != image_height) {
+        scaled_pixels = new unsigned char[scaled_width * scaled_height * 3];
+
+        // Simple nearest-neighbor scaling for now
+        for (int y = 0; y < scaled_height; y++) {
+            for (int x = 0; x < scaled_width; x++) {
+                int src_x = (x * image_width) / scaled_width;
+                int src_y = (y * image_height) / scaled_height;
+
+                // Ensure bounds
+                if (src_x >= image_width) src_x = image_width - 1;
+                if (src_y >= image_height) src_y = image_height - 1;
+
+                int src_idx = (src_y * image_width + src_x) * 3;
+                int dst_idx = (y * scaled_width + x) * 3;
+
+                scaled_pixels[dst_idx] = pixels[src_idx];
+                scaled_pixels[dst_idx + 1] = pixels[src_idx + 1];
+                scaled_pixels[dst_idx + 2] = pixels[src_idx + 2];
+            }
+        }
+
+        stbi_image_free(pixels);
+        pixels = scaled_pixels;
+    } else {
+        scaled_pixels = pixels;
+    }
+
+    // FLTK will take ownership of the pixel data, so we create a copy
+    unsigned char* fltk_pixels = new unsigned char[scaled_width * scaled_height * 3];
+    std::memcpy(fltk_pixels, scaled_pixels, scaled_width * scaled_height * 3);
+
+    if (scaled_pixels != pixels) {
+        delete[] scaled_pixels;
+    } else {
+        stbi_image_free(pixels);
+    }
+
+    return std::make_unique<Fl_RGB_Image>(fltk_pixels, scaled_width, scaled_height, 3);
+}
+
 void Fl_JustifiedLayout::thumbnail_worker_thread() {
     ThumbnailTask task;
 
@@ -69,26 +151,30 @@ void Fl_JustifiedLayout::thumbnail_worker_thread() {
         if (found_task) {
             active_tasks_.fetch_add(1);
 
-            // Generate thumbnail for the task
             if (task.image_index >= 0 && task.image_index < static_cast<int>(images_.size())) {
                 const auto& img_info = images_[task.image_index];
 
-                // Generate thumbnail
-                auto thumbnail = load_thumbnail_image(img_info, task.target_width, task.target_height);
+                // Create cache key
+                std::string cache_key = img_info.hash + "_" +
+                                      std::to_string(task.target_width) + "x" +
+                                      std::to_string(task.target_height);
+
+                // Check cache before generating thumbnail (avoid duplicate work)
+                {
+                    std::lock_guard<std::mutex> lock(image_cache_mutex_);
+                    if (image_cache_.find(cache_key) != image_cache_.end()) {
+                        active_tasks_.fetch_sub(1);
+                        completed_tasks_.fetch_add(1);
+                        continue;
+                    }
+                }
+
+                // Generate thumbnail for the task (worker creates new instance)
+                auto thumbnail = worker_decode_fl_rgb_image(img_info, task.target_width, task.target_height);
 
                 if (thumbnail) {
-                    // Create cache key
-                    std::string cache_key = img_info.hash + "_" +
-                                          std::to_string(task.target_width) + "x" +
-                                          std::to_string(task.target_height);
-
-                    // Put result in result queue
-                    ThumbnailResult result(task.image_index,
-                                         std::unique_ptr<Fl_RGB_Image>(thumbnail),
-                                         cache_key);
+                    ThumbnailResult result(task.image_index, std::move(thumbnail), cache_key);
                     result_queue_.enqueue(std::move(result));
-
-                    // Schedule UI update using FLTK's thread-safe mechanism
                     Fl::awake(result_processor_callback, this);
                 }
             }
