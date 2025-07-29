@@ -25,6 +25,8 @@
 #include <iostream>
 #include <string>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 
 // GUI includes
 #include <FL/Fl.H>
@@ -81,6 +83,13 @@ public:
             } else {
                 fl_alert("Failed to set directory: %s", path.c_str());
             }
+        }
+    }
+
+    void enable_debug_output(const std::string& dir, const std::string& format = "svg") {
+        if (layout_widget_) {
+            layout_widget_->enable_debug_output(dir, format);
+            std::cout << "Debug output enabled: " << dir << " (format: " << format << ")" << std::endl;
         }
     }
 
@@ -182,7 +191,7 @@ private:
 int run_scan_only_mode(int argc, char* argv[]) {
     try {
         cxxopts::Options options("picexplore", "Unified image scanner, database manager, and gallery viewer");
-        
+
         options.add_options()
             ("h,help", "Print usage")
             ("scan-only", "Run in scan-only mode (no GUI)")
@@ -196,6 +205,8 @@ int run_scan_only_mode(int argc, char* argv[]) {
             ("layout-pad-bottom", "Layout padding bottom in pixels", cxxopts::value<int>())
             ("layout-pad-left", "Layout padding left in pixels", cxxopts::value<int>())
             ("layout-pad-right", "Layout padding right in pixels", cxxopts::value<int>())
+            ("debug-output", "Enable debug output to directory (creates SVG files during scanning)", cxxopts::value<std::string>())
+            ("debug-format", "Debug output format: svg or png", cxxopts::value<std::string>()->default_value("svg"))
             ("v,verbose", "Enable verbose output")
         ;
 
@@ -208,7 +219,7 @@ int run_scan_only_mode(int argc, char* argv[]) {
             std::cout << "  picexplore\n\n";
             std::cout << "  # Scan directory and build/update database (no GUI):\n";
             std::cout << "  picexplore --scan-only --directory /path/to/photos\n\n";
-            std::cout << "  # Generate PDF from existing database (no GUI):\n"; 
+            std::cout << "  # Generate PDF from existing database (no GUI):\n";
             std::cout << "  picexplore --scan-only --pdf gallery.pdf\n\n";
             std::cout << "  # Scan directory and generate PDF in one step (no GUI):\n";
             std::cout << "  picexplore --scan-only --directory /path/to/photos --pdf gallery.pdf\n\n";
@@ -218,6 +229,8 @@ int run_scan_only_mode(int argc, char* argv[]) {
         std::string directory = result.count("directory") ? result["directory"].as<std::string>() : "";
         std::string db_path = result["database"].as<std::string>();
         std::string pdf_path = result.count("pdf") ? result["pdf"].as<std::string>() : "";
+        std::string debug_output_dir = result.count("debug-output") ? result["debug-output"].as<std::string>() : "";
+        std::string debug_format = result["debug-format"].as<std::string>();
         int row_height = result["row-height"].as<int>();
         int margin = result["margin"].as<int>();
         bool verbose = result.count("verbose") > 0;
@@ -242,7 +255,7 @@ int run_scan_only_mode(int argc, char* argv[]) {
         }
 
         std::cout << "PicExplore - Unified Image Scanner, Database Manager, and Gallery Viewer" << std::endl;
-        
+
         Timer timer;
         StatusReporter reporter(10); // Report every 10 seconds
         reporter.start();
@@ -255,6 +268,76 @@ int run_scan_only_mode(int argc, char* argv[]) {
             return 1;
         }
 
+        // Set up debug output callback if requested
+        if (!debug_output_dir.empty()) {
+            std::filesystem::create_directories(debug_output_dir);
+            std::cout << "Debug output enabled: " << debug_output_dir << " (format: " << debug_format << ")" << std::endl;
+
+            // Create a debug callback similar to our test
+            class ScanDebugCallback {
+            public:
+                ScanDebugCallback(const std::string& dir, const std::string& format)
+                    : debug_dir_(dir), format_(format), counter_(0) {}
+
+                void operator()(const ImageInfo& info) {
+                    images_.push_back(info);
+
+                    // Write simple debug output showing progressive scanning
+                    if (format_ == "svg") {
+                        write_debug_svg();
+                    }
+                    counter_++;
+                }
+
+            private:
+                void write_debug_svg() {
+                    std::string filename = debug_dir_ + "/scan_progress_" + std::to_string(counter_) + ".svg";
+                    std::ofstream file(filename);
+
+                    file << "<?xml version=\"1.0\" standalone=\"no\" ?>\n";
+                    file << "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n";
+                    int height = std::max(100, static_cast<int>(images_.size() * 30 + 20));
+                    file << "<svg width=\"500px\" height=\"" << height << "px\" xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" >\n";
+
+                    // Background
+                    file << "\t<rect x=\"0\" y=\"0\" width=\"500\" height=\"" << height << "\" fill=\"rgb(250,250,250)\" />\n";
+
+                    // Title
+                    file << "\t<text x=\"10\" y=\"15\" fill=\"rgb(0,0,0)\" font-size=\"12\" font-family=\"Arial\">Scanning Progress: " << images_.size() << " images</text>\n";
+
+                    // Draw a small bar for each image
+                    for (size_t i = 0; i < images_.size(); ++i) {
+                        const auto& img = images_[i];
+                        int y = 25 + i * 30;
+                        int width = static_cast<int>(img.aspect_ratio * 80);
+                        width = std::min(200, std::max(10, width));
+
+                        std::string color = img.has_thumbnails ? "rgb(100,255,100)" : "rgb(255,255,100)";
+
+                        file << "\t<rect x=\"10\" y=\"" << y << "\" width=\"" << width << "\" height=\"20\" fill=\"" << color << "\" stroke=\"rgb(0,0,0)\" />\n";
+
+                        // Extract filename from path for display
+                        std::string filename = std::filesystem::path(img.path).filename().string();
+                        if (filename.length() > 20) filename = filename.substr(0, 17) + "...";
+
+                        file << "\t<text x=\"15\" y=\"" << (y + 14) << "\" fill=\"rgb(0,0,0)\" font-size=\"9\" font-family=\"Arial\">"
+                             << filename << " (AR:" << std::fixed << std::setprecision(2) << img.aspect_ratio << ")</text>\n";
+                    }
+
+                    file << "</svg>\n";
+                    file.close();
+                }
+
+                std::string debug_dir_;
+                std::string format_;
+                std::vector<ImageInfo> images_;
+                int counter_;
+            };
+
+            static ScanDebugCallback debug_callback(debug_output_dir, debug_format);
+            db.set_image_info_callback(debug_callback);
+        }
+
         if (verbose) {
             std::cout << "Using database: " << db_path << std::endl;
         }
@@ -265,14 +348,14 @@ int run_scan_only_mode(int argc, char* argv[]) {
         // Phase 1: Directory scanning (if requested)
         if (scan_needed) {
             std::cout << "Scanning directory: " << directory << std::endl;
-            
+
             int processed = db.scan_directory_parallel(directory, timer, reporter);
             if (processed < 0) {
                 std::cerr << "Error: Failed to scan directory" << std::endl;
                 reporter.stop();
                 return 1;
             }
-            
+
             std::cout << "Processed " << processed << " images" << std::endl;
         }
 
@@ -280,11 +363,11 @@ int run_scan_only_mode(int argc, char* argv[]) {
         if (pdf_needed) {
             timer.start("Database Query");
             reporter.update_status("Loading images from database...");
-            
+
             std::vector<ImageInfo> images = db.get_all_images();
-            
+
             timer.stop("Database Query");
-            
+
             if (images.empty()) {
                 std::cerr << "Error: No images found in database";
                 if (!scan_needed) {
@@ -296,7 +379,7 @@ int run_scan_only_mode(int argc, char* argv[]) {
             }
 
             std::cout << "Generating PDF with " << images.size() << " images: " << pdf_path << std::endl;
-            
+
             // Create PDFOptions with CLI arguments
             PDFOptions pdf_options;
             pdf_options.row_height = row_height;
@@ -305,14 +388,14 @@ int run_scan_only_mode(int argc, char* argv[]) {
             pdf_options.pad_bottom = pad_bottom;
             pdf_options.pad_left = pad_left;
             pdf_options.pad_right = pad_right;
-            
+
             PDFGenerator pdf_gen;
             if (!pdf_gen.generate_pdf(images, pdf_path, timer, reporter, pdf_options)) {
                 std::cerr << "Error: Failed to generate PDF" << std::endl;
                 reporter.stop();
                 return 1;
             }
-            
+
             std::cout << "Successfully generated PDF: " << pdf_path << std::endl;
         }
 
@@ -340,6 +423,9 @@ int run_gui_mode(int argc, char* argv[]) {
     std::string initial_directory;
 
     // Simple parsing for GUI mode - only look for -d/--database and -i/--directory
+    std::string debug_output_dir;
+    std::string debug_output_format = "svg";
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
 
@@ -350,11 +436,14 @@ int run_gui_mode(int argc, char* argv[]) {
             std::cout << "  -h, --help               Show this help message\n";
             std::cout << "  -d, --database PATH      Open LMDB database at PATH\n";
             std::cout << "  -i, --directory PATH     Open directory PATH (will scan/build database)\n";
+            std::cout << "  --debug-output DIR       Enable debug output to DIR (creates SVG files)\n";
+            std::cout << "  --debug-format FORMAT    Debug output format: svg or png (default: svg)\n";
             std::cout << "  --scan-only              Run in scan-only mode (no GUI) - see --help for scan options\n";
             std::cout << "\nExamples:\n";
             std::cout << "  picexplore                           # Launch GUI\n";
             std::cout << "  picexplore --database " << get_cache_db_path(true) << "    # Launch GUI with specific database\n";
             std::cout << "  picexplore --directory ~/Pictures    # Launch GUI and scan directory\n";
+            std::cout << "  picexplore --directory ~/Pictures --debug-output /tmp/debug  # With debug output\n";
             std::cout << "  picexplore --scan-only --help        # Show scan-only mode options\n";
             return 0;
         }
@@ -363,6 +452,12 @@ int run_gui_mode(int argc, char* argv[]) {
         }
         else if ((arg == "-i" || arg == "--directory") && i + 1 < argc) {
             initial_directory = argv[++i];
+        }
+        else if (arg == "--debug-output" && i + 1 < argc) {
+            debug_output_dir = argv[++i];
+        }
+        else if (arg == "--debug-format" && i + 1 < argc) {
+            debug_output_format = argv[++i];
         }
         else if (arg != "--scan-only") {  // Ignore --scan-only, handled elsewhere
             std::cerr << "Unknown argument in GUI mode: " << arg << std::endl;
@@ -373,6 +468,11 @@ int run_gui_mode(int argc, char* argv[]) {
 
     // Create and show main window
     PicExploreWindow app;
+
+    // Enable debug output if requested
+    if (!debug_output_dir.empty()) {
+        app.enable_debug_output(debug_output_dir, debug_output_format);
+    }
 
     // Load initial content if specified
     if (!initial_database.empty()) {

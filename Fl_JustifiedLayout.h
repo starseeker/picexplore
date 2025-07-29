@@ -142,6 +142,15 @@ public:
         relayout();
     }
 
+    // Debug output configuration
+    void enable_debug_output(const std::string& output_dir, const std::string& format = "svg") {
+        debug_output_enabled_ = true;
+        debug_output_dir_ = output_dir;
+        debug_output_format_ = format;
+        debug_update_counter_ = 0;
+    }
+    void disable_debug_output() { debug_output_enabled_ = false; }
+
     // Callback management
     void set_progress_callback(ProgressCallback callback) { progress_callback_ = callback; }
     void set_selection_callback(SelectionCallback callback) { selection_callback_ = callback; }
@@ -199,6 +208,11 @@ protected:
     void directory_scan_thread(const std::string& dir_path, const std::string& db_path);
     void complete_directory_scan();
 
+    // Debug output methods
+    void write_debug_output();  // Write SVG or PNG of current layout
+    void write_debug_svg(const std::string& filename);
+    void write_debug_png(const std::string& filename);
+
 private:
     // Content widget for scrollable area
     Fl_JustifiedLayout_Content* content_widget_;
@@ -248,6 +262,12 @@ private:
     // Two-stage processing support
     moodycamel::ConcurrentQueue<ThumbnailNotification> thumbnail_notifications_;
     std::unordered_map<std::string, int> hash_to_index_map_;  // Map hash to image index
+
+    // Debug output configuration
+    bool debug_output_enabled_ = false;
+    std::string debug_output_dir_;
+    std::string debug_output_format_;  // "svg" or "png"
+    int debug_update_counter_ = 0;
 
     // Constants
     static constexpr int THUMBNAIL_BORDER_WIDTH = 2;
