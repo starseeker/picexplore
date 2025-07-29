@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <thread>
 
 // GUI includes
 #include <FL/Fl.H>

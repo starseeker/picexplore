@@ -137,44 +137,76 @@ void DatabaseManager::close() {
 }
 
 bool DatabaseManager::begin_write_transaction(MDB_txn*& txn) {
-    if (!is_open_) return false;
-
-    int rc = mdb_txn_begin(env_, nullptr, 0, &txn);
-    if (rc != 0) {
-        txn = nullptr;
+    if (!is_open_) {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " failed to begin write transaction: database not open" << std::endl;
         return false;
     }
 
+    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " beginning write transaction" << std::endl;
+    int rc = mdb_txn_begin(env_, nullptr, 0, &txn);
+    if (rc != 0) {
+        txn = nullptr;
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " failed to begin write transaction, error code: " << rc << std::endl;
+        return false;
+    }
+
+    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " write transaction began successfully" << std::endl;
     return true;
 }
 
 bool DatabaseManager::begin_read_transaction(MDB_txn*& txn) {
-    if (!is_open_) return false;
-
-    int rc = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
-    if (rc != 0) {
-        txn = nullptr;
+    if (!is_open_) {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " failed to begin read transaction: database not open" << std::endl;
         return false;
     }
 
+    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " beginning read transaction" << std::endl;
+    int rc = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
+    if (rc != 0) {
+        txn = nullptr;
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " failed to begin read transaction, error code: " << rc << std::endl;
+        return false;
+    }
+
+    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " read transaction began successfully" << std::endl;
     return true;
 }
 
 bool DatabaseManager::commit_transaction(MDB_txn* txn) {
-    if (!txn) return false;
+    if (!txn) {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " cannot commit null transaction" << std::endl;
+        return false;
+    }
 
+    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " committing transaction" << std::endl;
     int rc = mdb_txn_commit(txn);
-    return (rc == 0);
+    bool success = (rc == 0);
+    if (success) {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " transaction committed successfully" << std::endl;
+    } else {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " transaction commit failed, error code: " << rc << std::endl;
+    }
+    return success;
 }
 
 void DatabaseManager::abort_transaction(MDB_txn* txn) {
     if (txn) {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " aborting transaction" << std::endl;
         mdb_txn_abort(txn);
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " transaction aborted" << std::endl;
+    } else {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " cannot abort null transaction" << std::endl;
     }
 }
 
 bool DatabaseManager::store_key_value(MDB_txn* txn, const std::string& key, const std::string& value) {
-    if (!txn) return false;
+    if (!txn) {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " cannot store key-value with null transaction" << std::endl;
+        return false;
+    }
+
+    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " storing key-value: " << key
+              << " (" << value.length() << " chars)" << std::endl;
 
     MDB_val k, v;
     k.mv_data = (void*)key.c_str();
@@ -182,11 +214,25 @@ bool DatabaseManager::store_key_value(MDB_txn* txn, const std::string& key, cons
     v.mv_data = (void*)value.c_str();
     v.mv_size = value.length();
 
-    return mdb_put(txn, dbi_, &k, &v, 0) == 0;
+    int rc = mdb_put(txn, dbi_, &k, &v, 0);
+    bool success = (rc == 0);
+    if (success) {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " stored key-value successfully: " << key << std::endl;
+    } else {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " failed to store key-value: " << key
+                  << " error code: " << rc << std::endl;
+    }
+    return success;
 }
 
 bool DatabaseManager::store_key_data(MDB_txn* txn, const std::string& key, const std::vector<uint8_t>& data) {
-    if (!txn) return false;
+    if (!txn) {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " cannot store key-data with null transaction" << std::endl;
+        return false;
+    }
+
+    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " storing key-data: " << key
+              << " (" << data.size() << " bytes)" << std::endl;
 
     MDB_val k, v;
     k.mv_data = (void*)key.c_str();
@@ -194,7 +240,15 @@ bool DatabaseManager::store_key_data(MDB_txn* txn, const std::string& key, const
     v.mv_data = (void*)data.data();
     v.mv_size = data.size();
 
-    return mdb_put(txn, dbi_, &k, &v, 0) == 0;
+    int rc = mdb_put(txn, dbi_, &k, &v, 0);
+    bool success = (rc == 0);
+    if (success) {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " stored key-data successfully: " << key << std::endl;
+    } else {
+        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " failed to store key-data: " << key
+                  << " error code: " << rc << std::endl;
+    }
+    return success;
 }
 
 bool DatabaseManager::get_key_value(MDB_txn* txn, const std::string& key, std::string& value) {
@@ -512,7 +566,14 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
     if (extract_image_metadata(filepath, quick_info)) {
         // Emit ImageInfo immediately for stage 1 UI population
         if (image_info_callback_) {
+            std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " emitting image info callback for: "
+                      << quick_info.path << " (hash: " << quick_info.hash << ", aspect: " << quick_info.aspect_ratio << ")" << std::endl;
             image_info_callback_(quick_info);
+            std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " image info callback completed for: "
+                      << quick_info.path << std::endl;
+        } else {
+            std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " no image info callback set for: "
+                      << quick_info.path << std::endl;
         }
 
         // Store metadata in database for future loading
@@ -749,11 +810,16 @@ void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_
                                    moodycamel::ConcurrentQueue<WriteTask>& write_queue,
                                    Timer& timer, StatusReporter& reporter,
                                    std::atomic<int>& processed_count, std::atomic<int>& skipped_count) {
-    std::cout << "[DEBUG] Worker thread started: processing files " << start_idx << " to " << (end_idx - 1)
-              << " (total: " << (end_idx - start_idx) << " files)" << std::endl;
+    std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " started: processing files "
+              << start_idx << " to " << (end_idx - 1) << " (total: " << (end_idx - start_idx) << " files)" << std::endl;
+
+    size_t local_processed = 0;
+    size_t local_skipped = 0;
 
     for (size_t i = start_idx; i < end_idx && !stop_processing_.load(); i++) {
         const std::string& filepath = files[i];
+        std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " processing file "
+                  << (i - start_idx + 1) << "/" << (end_idx - start_idx) << ": " << filepath << std::endl;
 
         std::vector<WriteTask> write_tasks;
         bool should_skip = false;
@@ -761,103 +827,166 @@ void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_
         bool success = process_image_file(filepath, write_tasks, timer, should_skip);
 
         if (should_skip) {
+            local_skipped++;
             skipped_count.fetch_add(1);
+            std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " skipped file: " << filepath << std::endl;
         } else if (success) {
             // Enqueue all write tasks for this image
+            std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " enqueueing " << write_tasks.size()
+                      << " write tasks for: " << filepath << std::endl;
             for (const auto& task : write_tasks) {
                 write_queue.enqueue(task);
+                std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " enqueued task type "
+                          << task.type << " for key: " << task.key << std::endl;
             }
+            local_processed++;
             processed_count.fetch_add(1);
+            std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " successfully processed: " << filepath << std::endl;
         } else {
+            local_skipped++;
             skipped_count.fetch_add(1);
+            std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " failed to process: " << filepath << std::endl;
         }
 
         // Update progress periodically
         if ((i - start_idx) % 10 == 0) {
             reporter.set_current_count(processed_count.load() + skipped_count.load());
+            std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " progress update: "
+                      << (i - start_idx + 1) << "/" << (end_idx - start_idx) << " files processed" << std::endl;
         }
     }
 
-    std::cout << "[DEBUG] Worker thread completed: processed " << (end_idx - start_idx)
-              << " files from index " << start_idx << " to " << (end_idx - 1) << std::endl;
+    std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " completed: processed "
+              << local_processed << " files, skipped " << local_skipped << " files from index "
+              << start_idx << " to " << (end_idx - 1) << std::endl;
 }
 
 void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& write_queue,
                                    std::atomic<bool>& workers_done,
                                    Timer& timer, StatusReporter& reporter,
                                    std::atomic<int>& write_count) {
-    std::cout << "[DEBUG] Writer thread started" << std::endl;
+    std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " started" << std::endl;
 
     constexpr int BATCH_SIZE = 100;
     std::vector<WriteTask> batch;
     batch.reserve(BATCH_SIZE);
+
+    int batch_counter = 0;
+    int total_writes = 0;
 
     while (!workers_done.load() || write_queue.size_approx() > 0) {
         batch.clear();
 
         // Dequeue a batch of writes
         WriteTask task;
+        std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " dequeuing batch, queue size: "
+                  << write_queue.size_approx() << std::endl;
         for (int i = 0; i < BATCH_SIZE && write_queue.try_dequeue(task); i++) {
             batch.push_back(std::move(task));
         }
 
         if (batch.empty()) {
+            std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " no tasks available, sleeping"
+                      << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
 
+        batch_counter++;
+        std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " processing batch #" << batch_counter
+                  << " with " << batch.size() << " tasks" << std::endl;
+
         // Process batch in a single transaction
         MDB_txn* write_txn = nullptr;
+        std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " beginning write transaction" << std::endl;
         if (!begin_write_transaction(write_txn)) {
-            fprintf(stderr, "Error: Failed to begin transaction for batch write\n");
+            fprintf(stderr, "[ERROR] Writer thread %s: Failed to begin transaction for batch write\n",
+                    std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())).c_str());
             continue;
         }
+        std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " transaction began successfully" << std::endl;
 
         bool batch_success = true;
         int successful_writes = 0;
 
-        for (const auto& write_task : batch) {
+        for (size_t task_idx = 0; task_idx < batch.size(); task_idx++) {
+            const auto& write_task = batch[task_idx];
             bool success = false;
+
+            std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " processing task " << (task_idx + 1)
+                      << "/" << batch.size() << " type " << write_task.type << " key: " << write_task.key << std::endl;
 
             if (write_task.type == WriteTask::STORE_PATH) {
                 // Check for duplicates before storing path
                 std::string existing_value;
                 if (get_key_value(write_txn, write_task.key, existing_value)) {
                     // Key already exists, skip this write (this is a duplicate)
+                    std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " skipping duplicate key: "
+                              << write_task.key << std::endl;
                     continue;
                 }
                 success = store_key_value(write_txn, write_task.key, write_task.string_value);
                 if (success) {
                     successful_writes++; // Count new images
+                    std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " stored path: "
+                              << write_task.key << " -> " << write_task.string_value << std::endl;
+                } else {
+                    std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " failed to store path: "
+                              << write_task.key << std::endl;
                 }
             } else if (write_task.type == WriteTask::STORE_THUMBNAIL) {
                 // For thumbnails, we can overwrite if they exist
                 success = store_key_data(write_txn, write_task.key, write_task.data);
+                if (success) {
+                    std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " stored thumbnail: "
+                              << write_task.key << " (" << write_task.data.size() << " bytes)" << std::endl;
+                } else {
+                    std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " failed to store thumbnail: "
+                              << write_task.key << std::endl;
+                }
             } else if (write_task.type == WriteTask::STORE_IMAGE_METADATA) {
                 // Store metadata (aspect ratio) separately for two-stage loading
                 std::string metadata_key = write_task.key + ":metadata";
                 success = store_key_value(write_txn, metadata_key, std::to_string(write_task.aspect_ratio));
+                if (success) {
+                    std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " stored metadata: "
+                              << metadata_key << " -> " << write_task.aspect_ratio << std::endl;
+                } else {
+                    std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " failed to store metadata: "
+                              << metadata_key << std::endl;
+                }
             }
 
             if (!success && write_task.type == WriteTask::STORE_PATH) {
-                fprintf(stderr, "Error: Failed to store key '%s'\n", write_task.key.c_str());
+                fprintf(stderr, "[ERROR] Writer thread %s: Failed to store key '%s'\n",
+                        std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())).c_str(),
+                        write_task.key.c_str());
                 batch_success = false;
                 break;
             }
         }
 
         if (batch_success) {
+            std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " committing transaction for batch #"
+                      << batch_counter << " with " << successful_writes << " successful writes" << std::endl;
             if (commit_transaction(write_txn)) {
                 write_count.fetch_add(successful_writes);
+                total_writes += successful_writes;
+                std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " transaction committed successfully, "
+                          << "total writes so far: " << total_writes << std::endl;
             } else {
-                fprintf(stderr, "Error: Failed to commit transaction\n");
+                fprintf(stderr, "[ERROR] Writer thread %s: Failed to commit transaction\n",
+                        std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())).c_str());
             }
         } else {
+            std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " aborting transaction for batch #"
+                      << batch_counter << " due to errors" << std::endl;
             abort_transaction(write_txn);
         }
     }
 
-    std::cout << "[DEBUG] Writer thread completed" << std::endl;
+    std::cout << "[DEBUG] Writer thread " << std::this_thread::get_id() << " completed after processing "
+              << batch_counter << " batches with " << total_writes << " total successful writes" << std::endl;
 }
 
 int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer& timer,
