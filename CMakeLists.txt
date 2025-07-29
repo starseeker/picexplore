@@ -7,6 +7,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+add_definitions(-g)
+
 # Find required system packages
 if(WIN32)
     # Windows: Use find_library and find_path for libjpeg
@@ -93,7 +95,7 @@ target_compile_options(justified_layout_test PRIVATE -g)
 
 # New unified picexplore executable
 if(JPEG_FOUND)
-    add_executable(picexplore picexplore.cpp gui/Fl_JustifiedLayout.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
+    add_executable(picexplore picexplore.cpp Fl_JustifiedLayout.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
     target_include_directories(picexplore PRIVATE
         ${XXHASH_DIR}
         ${STB_DIR}

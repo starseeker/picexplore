@@ -40,7 +40,7 @@
 #include "database.h"
 #include "pdf.h"
 #include "utils.h"
-#include "gui/Fl_JustifiedLayout.h"
+#include "Fl_JustifiedLayout.h"
 
 namespace fs = std::filesystem;
 

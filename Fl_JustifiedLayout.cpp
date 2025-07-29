@@ -663,60 +663,6 @@ void Fl_JustifiedLayout::handle_click(int click_x, int click_y) {
     }
 }
 
-bool Fl_JustifiedLayout::load_image_list() {
-    images_.clear();
-    clear_image_cache();  // Clear cached images when loading new list
-
-    if (!database_) {
-        std::cout << "No database available, creating mock data for testing" << std::endl;
-
-        // Create sample images with various aspect ratios (fallback for testing)
-        std::vector<std::pair<std::string, double>> sample_images = {
-            {"sample1.jpg", 1.5},    // Landscape
-            {"sample2.jpg", 0.75},   // Portrait
-            {"sample3.jpg", 1.0},    // Square
-            {"sample4.jpg", 2.0},    // Wide landscape
-            {"sample5.jpg", 0.5},    // Tall portrait
-            {"sample6.jpg", 1.33},   // 4:3 landscape
-            {"sample7.jpg", 1.77},   // 16:9 landscape
-            {"sample8.jpg", 0.56},   // 9:16 portrait
-            {"sample9.jpg", 1.2},
-            {"sample10.jpg", 0.8},
-            {"sample11.jpg", 1.6},
-            {"sample12.jpg", 0.9},
-            {"sample13.jpg", 1.1},
-            {"sample14.jpg", 1.8},
-            {"sample15.jpg", 0.6}
-        };
-
-        for (const auto& sample : sample_images) {
-            ImageInfo info;
-            info.path = current_db_path_ + "/" + sample.first;
-            info.hash = "mock_hash_" + std::to_string(images_.size());
-            info.aspect_ratio = sample.second;
-            info.best_thumb_size = 256;
-            // thumb_data remains empty for mock data
-            images_.push_back(info);
-        }
-
-        std::cout << "Loaded " << images_.size() << " mock images" << std::endl;
-    } else {
-        // Load real images from database
-        try {
-            images_ = database_->get_all_images();
-            std::cout << "Loaded " << images_.size() << " images from database" << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "Error loading images from database: " << e.what() << std::endl;
-            return false;
-        }
-    }
-
-    // Trigger layout calculation
-    relayout();
-
-    return true;
-}
-
 // Fl_JustifiedLayout_Content implementation
 Fl_JustifiedLayout_Content::Fl_JustifiedLayout_Content(int X, int Y, int W, int H, Fl_JustifiedLayout* parent)
     : Fl_Widget(X, Y, W, H), parent_(parent) {
@@ -817,6 +763,7 @@ int Fl_JustifiedLayout_Content::handle(int event) {
 }
 
 void Fl_JustifiedLayout::start_directory_scan(const std::string& dir_path, const std::string& db_path) {
+	should_cancel_scan_.store(false);
     if (scanning_.load()) return;
 
     scanning_.store(true);
@@ -846,12 +793,10 @@ void Fl_JustifiedLayout::start_directory_scan(const std::string& dir_path, const
 }
 
 void Fl_JustifiedLayout::cancel_directory_scan() {
+    // Only set cancellation if a scan is running
     if (!scanning_.load()) return;
 
     should_cancel_scan_.store(true);
-
-    // Also signal the database to stop processing (for current scan)
-    // Note: We don't use database_ here as it may not be set yet during scanning
 
     if (scan_thread_.joinable()) {
         scan_thread_.join();
@@ -889,10 +834,14 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             }
         }, this);
 
+        // Track explicit user cancellation
+        std::atomic<bool> user_cancelled(false);
+
         // Start a cancellation monitor thread
-        std::thread cancellation_monitor([this, scan_database = scan_database.get()]() {
+        std::thread cancellation_monitor([this, scan_database = scan_database.get(), &user_cancelled]() {
             while (scanning_.load()) {
                 if (should_cancel_scan_.load()) {
+                    user_cancelled.store(true);
                     scan_database->cancel_scan();
                     break;
                 }
@@ -906,9 +855,15 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
         cancellation_monitor.join();
         reporter.stop();
 
-        if (should_cancel_scan_.load()) {
+        std::cout << "[DEBUG] should_cancel_scan_: " << should_cancel_scan_.load()
+                  << ", user_cancelled: " << user_cancelled.load()
+                  << ", processed: " << processed << std::endl;
+
+        if (user_cancelled.load()) {
             scan_database->cancel_scan(); // Ensure cancellation is signaled
+            std::cout << "[DEBUG] About to call Fl::awake for scan cancelled" << std::endl;
             Fl::awake([](void* data) {
+                std::cout << "[DEBUG] Fl::awake (cancelled) lambda running" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
                 if (widget->progress_callback_) {
                     widget->progress_callback_(0, 0, "Scan cancelled");
@@ -919,11 +874,15 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             current_db_path_ = db_path;
             database_ = std::move(scan_database);
 
+            std::cout << "[DEBUG] About to call Fl::awake for scan complete" << std::endl;
             Fl::awake([](void* data) {
+                std::cout << "[DEBUG] Fl::awake (scan complete) lambda running" << std::endl;
                 static_cast<Fl_JustifiedLayout*>(data)->complete_directory_scan();
             }, this);
         } else {
+            std::cout << "[DEBUG] About to call Fl::awake for scan failed" << std::endl;
             Fl::awake([](void* data) {
+                std::cout << "[DEBUG] Fl::awake (scan failed) lambda running" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
                 if (widget->progress_callback_) {
                     widget->progress_callback_(0, 0, "Scan failed");
@@ -931,9 +890,12 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             }, this);
         }
 
+        std::cout << "[DEBUG] directory_scan_thread (end of try) scanning_ = " << scanning_.load() << std::endl;
     } catch (const std::exception& e) {
+        std::cout << "[DEBUG] Exception caught in directory_scan_thread: " << e.what() << std::endl;
         Fl::awake([](void* data) {
             auto* params = static_cast<std::pair<Fl_JustifiedLayout*, std::string>*>(data);
+            std::cout << "[DEBUG] Fl::awake (exception) lambda running" << std::endl;
             if (params->first->progress_callback_) {
                 params->first->progress_callback_(0, 0, "Scan error: " + params->second);
             }
@@ -942,9 +904,11 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
     }
 
     scanning_.store(false);
+    std::cout << "[DEBUG] directory_scan_thread ending, scanning_ = " << scanning_.load() << std::endl;
 }
 
 void Fl_JustifiedLayout::complete_directory_scan() {
+    std::cout << "[DEBUG] complete_directory_scan() called in GUI thread" << std::endl;
     if (progress_callback_) {
         progress_callback_(0, 0, "Loading images from database...");
     }
@@ -965,3 +929,31 @@ void Fl_JustifiedLayout::complete_directory_scan() {
         }
     }
 }
+
+bool Fl_JustifiedLayout::load_image_list() {
+    std::cout << "[DEBUG] load_image_list() called" << std::endl;
+    images_.clear();
+    clear_image_cache();  // Clear cached images when loading new list
+
+    if (!database_) {
+        std::cout << "No database available, creating mock data for testing" << std::endl;
+
+        // ... [mock image code unchanged] ...
+        std::cout << "Loaded " << images_.size() << " mock images" << std::endl;
+    } else {
+        // Load real images from database
+        try {
+            images_ = database_->get_all_images();
+            std::cout << "Loaded " << images_.size() << " images from database" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Error loading images from database: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    // Trigger layout calculation
+    relayout();
+
+    return true;
+}
+
