@@ -38,9 +38,9 @@
 #include <mutex>
 #include <condition_variable>
 #include <queue>
-#include "../database.h"
-#include "../utils.h"
-#include "../justified_layout.hpp"
+#include "database.h"
+#include "utils.h"
+#include "justified_layout.hpp"
 #include "concurrentqueue.h"
 
 // Forward declarations
@@ -241,11 +241,6 @@ protected:
     // Directory scanning methods
     void directory_scan_thread(const std::string& dir_path, const std::string& db_path);
     void complete_directory_scan();
-
-    // Debug output methods
-    void write_debug_output();  // Write SVG or PNG of current layout
-    void write_debug_svg(const std::string& filename);
-    void write_debug_png(const std::string& filename);
 
 private:
     // Content widget for scrollable area
