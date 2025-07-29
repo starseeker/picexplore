@@ -32,6 +32,7 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     , active_tasks_(0)
     , completed_tasks_(0)
     , total_tasks_(0)
+    , thumbnail_notification_callback_(nullptr)
 {
     // Initialize layout configuration with reasonable defaults
     layout_config_.w = W - 20; // Leave some margin for scrollbar
@@ -169,8 +170,41 @@ void Fl_JustifiedLayout::thumbnail_worker_thread() {
                     }
                 }
 
-                // Generate thumbnail for the task (worker creates new instance)
-                auto thumbnail = worker_decode_fl_rgb_image(img_info, task.target_width, task.target_height);
+                std::unique_ptr<Fl_RGB_Image> thumbnail;
+
+                // Check if image has thumbnails in database
+                if (img_info.has_thumbnails) {
+                    // Load from existing thumbnail data
+                    thumbnail = worker_decode_fl_rgb_image(img_info, task.target_width, task.target_height);
+                } else {
+                    // Generate thumbnail from source image using database
+                    if (database_) {
+                        // Generate thumbnails for this hash
+                        if (database_->generate_thumbnails_for_hash(img_info.hash, img_info.path)) {
+                            // Reload the image info to get the thumbnails
+                            ImageInfo updated_img = img_info;
+                            MDB_txn* read_txn;
+                            if (database_->begin_read_transaction(read_txn)) {
+                                if (database_->load_image_info(read_txn, img_info.hash, updated_img)) {
+                                    // Decode the thumbnail
+                                    thumbnail = worker_decode_fl_rgb_image(updated_img, task.target_width, task.target_height);
+
+                                    // Update the main image list
+                                    {
+                                        std::lock_guard<std::mutex> lock(image_cache_mutex_);
+                                        if (task.image_index < static_cast<int>(images_.size())) {
+                                            images_[task.image_index] = updated_img;
+                                        }
+                                    }
+
+                                    // Notify UI that thumbnail is ready
+                                    handle_thumbnail_ready(img_info.hash);
+                                }
+                                database_->abort_transaction(read_txn);
+                            }
+                        }
+                    }
+                }
 
                 if (thumbnail) {
                     ThumbnailResult result(task.image_index, std::move(thumbnail), cache_key);
@@ -251,11 +285,18 @@ int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, T
     for (int idx : indices) {
         if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
             const auto& item = layout_items_[idx];
+            const auto& img = images_[idx];
+
+            // Skip images that already have thumbnails
+            if (img.has_thumbnails) {
+                continue;
+            }
+
             int target_w = static_cast<int>(item.w) - 2 * THUMBNAIL_BORDER_WIDTH;
             int target_h = static_cast<int>(item.h) - 2 * THUMBNAIL_BORDER_WIDTH;
 
-	    // --- Add this cache check ---
-            std::string cache_key = images_[idx].hash + "_" +
+            // Check if we already have a cached version
+            std::string cache_key = img.hash + "_" +
                 std::to_string(target_w) + "x" + std::to_string(target_h);
             {
                 std::lock_guard<std::mutex> lock(image_cache_mutex_);
@@ -264,6 +305,7 @@ int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, T
                 }
             }
 
+            // Queue thumbnail generation task for this image
             ThumbnailTask task(idx, priority, target_w, target_h);
 
             if (priority == ThumbnailPriority::HIGH) {
@@ -293,6 +335,11 @@ bool Fl_JustifiedLayout::set_database_path(const std::string& db_path) {
 
     // Create and initialize database manager
     database_ = std::make_unique<DatabaseManager>();
+
+    // Set up callback for two-stage processing
+    database_->set_image_info_callback([this](const ImageInfo& info) {
+        this->handle_image_info_ready(info);
+    });
 
     // Try to open the database
     if (!database_->open(db_path)) {
@@ -437,22 +484,28 @@ void Fl_JustifiedLayout::prefetch_previous_region() {
     }
 }
 
-void Fl_JustifiedLayout::draw() {
-    // Fl_Scroll handles its own drawing and scrollbar management
-    // The content widget (Fl_JustifiedLayout_Content) handles the actual thumbnail drawing
-    Fl_Scroll::draw();
-}
-
 int Fl_JustifiedLayout::handle(int event) {
     switch (event) {
         case FL_FOCUS:
         case FL_UNFOCUS:
             return 1;
+        case FL_MOVE:
+        case FL_DRAG:
+            // Check for scroll position changes
+            update_visibility_and_queue_thumbnails();
+            break;
     }
 
     // Let Fl_Scroll handle scrolling and other events
     // Click events are handled by the content widget
-    return Fl_Scroll::handle(event);
+    int result = Fl_Scroll::handle(event);
+
+    // After any scroll handling, update visibility
+    if (event == FL_MOUSEWHEEL || event == FL_PUSH || event == FL_DRAG) {
+        update_visibility_and_queue_thumbnails();
+    }
+
+    return result;
 }
 
 void Fl_JustifiedLayout::resize(int X, int Y, int W, int H) {
@@ -520,6 +573,9 @@ void Fl_JustifiedLayout::calculate_layout() {
     // Get the current scroll position from Fl_Scroll
     int scroll_y = yposition();
     int viewport_height = h();
+
+    // After layout calculation, check visibility and queue thumbnails
+    update_visibility_and_queue_thumbnails();
 
     // Visibility calculation
     bool found_first = false;
@@ -752,7 +808,7 @@ void Fl_JustifiedLayout::draw_thumbnail_placeholder(int x, int y, int w, int h, 
     int info_w = 0, info_h = 0;
     fl_measure(info_str, info_w, info_h);
     fl_draw(info_str, x + (w - info_w) / 2, text_y + 15);
-    
+
     // Draw approximate dimensions based on current box size
     char size_str[64];
     int est_width = static_cast<int>(h * info.aspect_ratio);
@@ -849,8 +905,13 @@ void Fl_JustifiedLayout_Content::draw() {
             parent_->draw_selection_highlight(item_x, item_y, item_w, item_h);
         }
 
-        // Try to draw real thumbnail first, fallback to placeholder
-        parent_->draw_thumbnail_image(item_x, item_y, item_w, item_h, img);
+        // Check if image has thumbnails
+        if (img.has_thumbnails) {
+            parent_->draw_thumbnail_image(item_x, item_y, item_w, item_h, img);
+        } else {
+            // Draw loading indicator for images without thumbnails
+            parent_->draw_loading_indicator(item_x, item_y, item_w, item_h);
+        }
     }
 
     fl_pop_clip();
@@ -989,10 +1050,10 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
                     std::vector<ImageInfo> new_images = scan_database->get_images_since_count(last_image_count.load());
                     if (!new_images.empty()) {
                         last_image_count.store(last_image_count.load() + new_images.size());
-                        
+
                         // Create a copy for the lambda to capture
                         auto new_images_copy = std::make_shared<std::vector<ImageInfo>>(std::move(new_images));
-                        
+
                         Fl::awake([](void* data) {
                             auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>*>(data);
                             params->first->add_images_incremental(*(params->second));
@@ -1156,7 +1217,156 @@ void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& ne
     // Trigger redraw to show new placeholders
     redraw();
 
-    std::cout << "Added " << new_images.size() << " images incrementally (total: " 
+    std::cout << "Added " << new_images.size() << " images incrementally (total: "
               << images_.size() << ")" << std::endl;
+}
+
+// Two-stage population support methods
+void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
+    // This is called from the database scanning thread when metadata is available
+    // Add the image to our list immediately (stage 1)
+    std::lock_guard<std::mutex> lock(image_cache_mutex_);
+
+    images_.push_back(info);
+    hash_to_index_map_[info.hash] = images_.size() - 1;
+
+    // Schedule a layout recalculation and redraw
+    Fl::awake(thumbnail_notification_callback, this);
+}
+
+void Fl_JustifiedLayout::handle_thumbnail_ready(const std::string& hash) {
+    // This is called when a thumbnail becomes available (stage 2)
+    ThumbnailNotification notification(hash, true);
+    thumbnail_notifications_.enqueue(notification);
+
+    // Schedule UI update
+    Fl::awake(thumbnail_notification_callback, this);
+}
+
+void Fl_JustifiedLayout::process_thumbnail_notifications() {
+    ThumbnailNotification notification("", false);
+    bool needs_redraw = false;
+
+    while (thumbnail_notifications_.try_dequeue(notification)) {
+        if (notification.is_ready) {
+            // Find the image by hash and update it
+            auto it = hash_to_index_map_.find(notification.hash);
+            if (it != hash_to_index_map_.end()) {
+                int index = it->second;
+                if (index >= 0 && index < static_cast<int>(images_.size())) {
+                    std::lock_guard<std::mutex> lock(image_cache_mutex_);
+
+                    // Reload image info from database to get thumbnail data
+                    if (database_) {
+                        MDB_txn* read_txn;
+                        if (database_->begin_read_transaction(read_txn)) {
+                            if (database_->load_image_info(read_txn, notification.hash, images_[index])) {
+                                // Clear cached image so it will be reloaded with thumbnail
+                                auto cache_it = image_cache_.find(notification.hash);
+                                if (cache_it != image_cache_.end()) {
+                                    image_cache_.erase(cache_it);
+                                }
+                                needs_redraw = true;
+                            }
+                            database_->abort_transaction(read_txn);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (needs_redraw) {
+        redraw();
+    }
+}
+
+void Fl_JustifiedLayout::draw_loading_indicator(int x, int y, int w, int h) {
+    // Draw a simple loading placeholder
+    fl_color(FL_LIGHT2);
+    fl_rectf(x, y, w, h);
+
+    // Draw border
+    fl_color(FL_DARK3);
+    fl_rect(x, y, w, h);
+
+    // Draw loading text or spinner
+    fl_color(FL_BLACK);
+    fl_font(FL_HELVETICA, 12);
+
+    const char* text = "Loading...";
+    int text_width = static_cast<int>(fl_width(text));
+    int text_height = fl_height();
+
+    int text_x = x + (w - text_width) / 2;
+    int text_y = y + (h + text_height) / 2 - fl_descent();
+
+    fl_draw(text, text_x, text_y);
+}
+
+// Static callback for thumbnail notifications
+void Fl_JustifiedLayout::thumbnail_notification_callback(void* data) {
+    if (data) {
+        static_cast<Fl_JustifiedLayout*>(data)->process_thumbnail_notifications();
+    }
+}
+
+void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
+    if (layout_items_.empty() || images_.empty()) {
+        return;
+    }
+
+    // Get current scroll position
+    int scroll_y = yposition();
+    int viewport_height = h();
+
+    // Define visible area with some padding for preloading
+    int visible_start = scroll_y - viewport_height;  // Preload above viewport
+    int visible_end = scroll_y + 2 * viewport_height;  // Preload below viewport
+
+    std::vector<int> high_priority_indices;
+    std::vector<int> low_priority_indices;
+
+    for (size_t i = 0; i < layout_items_.size() && i < images_.size(); i++) {
+        const auto& item = layout_items_[i];
+        const auto& img = images_[i];
+
+        // Skip images that already have thumbnails
+        if (img.has_thumbnails) {
+            continue;
+        }
+
+        int item_y = static_cast<int>(item.t);
+        int item_bottom = item_y + static_cast<int>(item.h);
+
+        // Check if item intersects with visible area
+        if (item_bottom >= visible_start && item_y <= visible_end) {
+            // Check if actually visible in current viewport
+            if (item_bottom >= scroll_y && item_y <= scroll_y + viewport_height) {
+                high_priority_indices.push_back(static_cast<int>(i));
+            } else {
+                // Near visible area, lower priority
+                low_priority_indices.push_back(static_cast<int>(i));
+            }
+        }
+    }
+
+    // Queue high priority thumbnails first
+    if (!high_priority_indices.empty()) {
+        int queued = queue_thumbnail_tasks(high_priority_indices, ThumbnailPriority::HIGH);
+        std::cout << "Queued " << queued << " high-priority thumbnail tasks" << std::endl;
+    }
+
+    // Queue lower priority thumbnails
+    if (!low_priority_indices.empty()) {
+        int queued = queue_thumbnail_tasks(low_priority_indices, ThumbnailPriority::LOW);
+        std::cout << "Queued " << queued << " low-priority thumbnail tasks" << std::endl;
+    }
+}
+
+void Fl_JustifiedLayout::draw() {
+    // Fl_Scroll handles its own drawing and scrollbar management
+    // The content widget (Fl_JustifiedLayout_Content) handles the actual thumbnail drawing
+    Fl_Scroll::draw();
 }
 

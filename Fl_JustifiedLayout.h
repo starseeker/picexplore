@@ -76,6 +76,14 @@ struct ThumbnailResult {
         : image_index(idx), thumbnail(std::move(thumb)), cache_key(key) {}
 };
 
+// Thumbnail readiness notification
+struct ThumbnailNotification {
+    std::string hash;
+    bool is_ready;
+
+    ThumbnailNotification(const std::string& h, bool ready) : hash(h), is_ready(ready) {}
+};
+
 // Progress callback for background thumbnail generation
 using ProgressCallback = std::function<void(int current, int total, const std::string& status)>;
 
@@ -111,6 +119,14 @@ public:
     void cancel_directory_scan();
     bool is_scanning() const { return scanning_.load(); }
 
+    // Two-stage population support
+    using ThumbnailNotificationCallback = std::function<void(const ThumbnailNotification&)>;
+    void set_thumbnail_notification_callback(ThumbnailNotificationCallback callback) {
+        thumbnail_notification_callback_ = callback;
+    }
+    void handle_image_info_ready(const ImageInfo& info);  // Stage 1: Add placeholder
+    void handle_thumbnail_ready(const std::string& hash);  // Stage 2: Update with thumbnail
+
     // Layout configuration
     void set_row_height(double height) { layout_config_.rh = height; relayout(); }
     void set_spacing(double horizontal, double vertical) {
@@ -135,10 +151,11 @@ public:
     void stop_background_generation();
     bool is_generating() const { return generating_.load(); }
 
-    // Prefetch control (stubbed for now)
+    // Prefetch control
     void prefetch_visible_region();
     void prefetch_next_region();
     void prefetch_previous_region();
+    void update_visibility_and_queue_thumbnails();  // Check visibility and queue high-priority tasks
 
     // FLTK widget overrides
     void draw() override;
@@ -155,6 +172,7 @@ protected:
     void draw_thumbnail_placeholder(int x, int y, int w, int h, const ImageInfo& info);
     void draw_thumbnail_image(int x, int y, int w, int h, const ImageInfo& info);
     void draw_selection_highlight(int x, int y, int w, int h);
+    void draw_loading_indicator(int x, int y, int w, int h);  // For images without thumbnails
 
     // Image decoding and caching
     Fl_RGB_Image* load_thumbnail_image(const ImageInfo& info, int target_width, int target_height);
@@ -172,8 +190,10 @@ protected:
     void result_processor_thread();
     int queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority);
     void process_thumbnail_results();
+    void process_thumbnail_notifications();  // Process readiness notifications
     static void result_processor_callback(void* data);
     static void progress_update_callback(void* data);
+    static void thumbnail_notification_callback(void* data);  // FLTK callback for notifications
 
     // Directory scanning methods
     void directory_scan_thread(const std::string& dir_path, const std::string& db_path);
@@ -220,9 +240,14 @@ private:
     // Callbacks
     ProgressCallback progress_callback_;
     SelectionCallback selection_callback_;
+    ThumbnailNotificationCallback thumbnail_notification_callback_;
 
     // Image cache for decoded thumbnails
     std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> image_cache_;
+
+    // Two-stage processing support
+    moodycamel::ConcurrentQueue<ThumbnailNotification> thumbnail_notifications_;
+    std::unordered_map<std::string, int> hash_to_index_map_;  // Map hash to image index
 
     // Constants
     static constexpr int THUMBNAIL_BORDER_WIDTH = 2;

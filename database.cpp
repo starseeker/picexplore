@@ -40,7 +40,8 @@
 #define MAX_DB_SIZE 549755813888
 
 namespace fs = std::filesystem;
-DatabaseManager::DatabaseManager() : env_(nullptr), dbi_(0), is_open_(false), stop_processing_(false) {
+DatabaseManager::DatabaseManager() : env_(nullptr), dbi_(0), is_open_(false), stop_processing_(false),
+                                   image_info_callback_(nullptr) {
 }
 
 DatabaseManager::~DatabaseManager() {
@@ -506,21 +507,39 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
                                         Timer& timer, bool& should_skip) {
     should_skip = false;
 
-    // Load image with stb_image
+    // First, try to extract metadata quickly without loading full image
+    ImageInfo quick_info;
+    if (extract_image_metadata(filepath, quick_info)) {
+        // Emit ImageInfo immediately for stage 1 UI population
+        if (image_info_callback_) {
+            image_info_callback_(quick_info);
+        }
+
+        // Store metadata in database for future loading
+        std::string path_key = quick_info.hash + ":path";
+        write_tasks.emplace_back(WriteTask::STORE_PATH, path_key, filepath);
+        write_tasks.emplace_back(WriteTask::STORE_IMAGE_METADATA, quick_info.hash, filepath, quick_info.aspect_ratio);
+    } else {
+        // Fallback to full image loading for problematic files
+        should_skip = true;
+        return false;
+    }
+
+    // Load image with stb_image for thumbnail generation
     int width, height, channels;
     unsigned char* image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 0);
     if (!image_data) {
         fprintf(stderr, "Error: Failed to load image '%s': %s\n", filepath.c_str(), stbi_failure_reason());
-        should_skip = true;
-        return false;
+        // Don't mark as should_skip since we already have metadata
+        return true; // Return true since we have metadata stored
     }
 
     // Check for zero width or height
     if (width <= 0 || height <= 0) {
         fprintf(stderr, "Error: Invalid image dimensions for '%s': %dx%d\n", filepath.c_str(), width, height);
         stbi_image_free(image_data);
-        should_skip = true;
-        return false;
+        // Don't mark as should_skip since we already have metadata
+        return true;
     }
 
     // Read EXIF orientation and apply transformation if needed
@@ -565,20 +584,14 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
         channels = 3;
     }
 
-    // Compute content hash
-    size_t data_size = width * height * channels;
-    XXH64_hash_t hash = XXH64(image_data, data_size, 0);
-    char hash_str[17];
-    snprintf(hash_str, sizeof(hash_str), "%016llx", (unsigned long long)hash);
+    // Use the hash from quick_info (already computed)
+    const std::string& hash_str = quick_info.hash;
 
     // Check if this hash already exists (duplicate detection)
     // Note: We skip the duplicate check in parallel processing mode to avoid
     // database access from worker threads. The writer thread will handle duplicates
     // by checking if the key already exists before writing.
-    std::string path_key = std::string(hash_str) + ":path";
-
-    // Store file path as write task
-    write_tasks.emplace_back(WriteTask::STORE_PATH, path_key, filepath);
+    // Path and metadata have already been queued for storage above
 
     // Generate and store thumbnails
     std::vector<int> thumb_sizes = {32, 64, 128, 256, 512, 1024};
@@ -629,7 +642,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
                     std::vector<uint8_t> thumb_data = encode_jpeg(rgb_thumb.data(), actual_width, actual_height, 90);
 
                     if (!thumb_data.empty()) {
-                        std::string thumb_key = std::string(hash_str) + ":" + std::to_string(thumb_size);
+                        std::string thumb_key = hash_str + ":" + std::to_string(thumb_size);
                         write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, thumb_key, thumb_data);
                     } else {
                         fprintf(stderr, "Error: Failed to encode JPEG thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
@@ -720,7 +733,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
             }
 
             if (thumb_success && !thumb_data.empty()) {
-                std::string thumb_key = std::string(hash_str) + ":" + std::to_string(thumb_size);
+                std::string thumb_key = hash_str + ":" + std::to_string(thumb_size);
                 write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, thumb_key, thumb_data);
             } else {
                 thumbnails_generated = false;
@@ -802,7 +815,7 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
 
         bool batch_success = true;
         int successful_writes = 0;
-        
+
         for (const auto& write_task : batch) {
             bool success = false;
 
@@ -820,6 +833,10 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
             } else if (write_task.type == WriteTask::STORE_THUMBNAIL) {
                 // For thumbnails, we can overwrite if they exist
                 success = store_key_data(write_txn, write_task.key, write_task.data);
+            } else if (write_task.type == WriteTask::STORE_IMAGE_METADATA) {
+                // Store metadata (aspect ratio) separately for two-stage loading
+                std::string metadata_key = write_task.key + ":metadata";
+                success = store_key_value(write_txn, metadata_key, std::to_string(write_task.aspect_ratio));
             }
 
             if (!success && write_task.type == WriteTask::STORE_PATH) {
@@ -1100,6 +1117,7 @@ bool DatabaseManager::load_image_info(MDB_txn* txn, const std::string& hash, Ima
     info.thumb_width = width;
     info.thumb_height = height;
     info.aspect_ratio = static_cast<double>(width) / height;
+    info.has_thumbnails = true;  // We have thumbnails if we reached this point
 
     stbi_image_free(pixels);
     return true;
@@ -1129,11 +1147,22 @@ std::vector<ImageInfo> DatabaseManager::get_all_images() {
             ImageInfo info;
             info.hash = hash;
             info.path = std::string((char*)data.mv_data, data.mv_size);
+            info.has_thumbnails = false;  // Initialize to false
 
             if (load_image_info(read_txn, hash, info)) {
+                // load_image_info sets has_thumbnails to true if successful
                 images.push_back(std::move(info));
             } else {
-                fprintf(stderr, "Warning: Failed to load image info for '%s' (hash: %s)\n", info.path.c_str(), hash.c_str());
+                // Even if thumbnails don't exist, we might have metadata
+                std::string metadata_key = hash + ":metadata";
+                std::string metadata_value;
+                if (get_key_value(read_txn, metadata_key, metadata_value)) {
+                    info.aspect_ratio = std::stod(metadata_value);
+                    info.has_thumbnails = false;
+                    images.push_back(std::move(info));
+                } else {
+                    fprintf(stderr, "Warning: Failed to load image info for '%s' (hash: %s)\n", info.path.c_str(), hash.c_str());
+                }
             }
         }
     }
@@ -1152,12 +1181,12 @@ std::vector<ImageInfo> DatabaseManager::get_all_images() {
 
 std::vector<ImageInfo> DatabaseManager::get_images_since_count(size_t last_count) {
     std::vector<ImageInfo> all_images = get_all_images();
-    
+
     // Return only the images beyond the last_count
     if (last_count >= all_images.size()) {
         return std::vector<ImageInfo>(); // No new images
     }
-    
+
     std::vector<ImageInfo> new_images(all_images.begin() + last_count, all_images.end());
     return new_images;
 }
@@ -1177,6 +1206,156 @@ bool DatabaseManager::has_thumbnails(const std::string& hash) {
 
     abort_transaction(read_txn);
     return has_thumb;
+}
+
+std::vector<ImageInfo> DatabaseManager::get_images_without_thumbnails() {
+    std::vector<ImageInfo> images_needing_thumbs;
+
+    if (!is_open_) return images_needing_thumbs;
+
+    MDB_txn* read_txn;
+    MDB_cursor* cursor;
+
+    if (mdb_txn_begin(env_, nullptr, MDB_RDONLY, &read_txn) != 0) {
+        return images_needing_thumbs;
+    }
+
+    if (mdb_cursor_open(read_txn, dbi_, &cursor) != 0) {
+        mdb_txn_abort(read_txn);
+        return images_needing_thumbs;
+    }
+
+    MDB_val key, data;
+    while (mdb_cursor_get(cursor, &key, &data, MDB_NEXT) == 0) {
+        std::string hash = extract_hash_from_key((char*)key.mv_data, key.mv_size);
+        if (!hash.empty()) {
+            // Check if this hash has thumbnails
+            if (!has_thumbnails(hash)) {
+                ImageInfo info;
+                info.hash = hash;
+                info.path = std::string((char*)data.mv_data, data.mv_size);
+                info.has_thumbnails = false;
+
+                // Try to extract aspect ratio from metadata key
+                std::string metadata_key = hash + ":metadata";
+                std::string metadata_value;
+                if (get_key_value(read_txn, metadata_key, metadata_value)) {
+                    // Parse aspect ratio from metadata (simple format: "aspect_ratio")
+                    info.aspect_ratio = std::stod(metadata_value);
+                } else {
+                    info.aspect_ratio = 1.0; // Default square
+                }
+
+                images_needing_thumbs.push_back(std::move(info));
+            }
+        }
+    }
+
+    mdb_cursor_close(cursor);
+    mdb_txn_abort(read_txn);
+
+    return images_needing_thumbs;
+}
+
+bool DatabaseManager::extract_image_metadata(const std::string& filepath, ImageInfo& info) {
+    // Load image header only to get dimensions quickly
+    int width, height, channels;
+
+    // Use stbi_info for faster metadata extraction (doesn't load full image)
+    if (!stbi_info(filepath.c_str(), &width, &height, &channels)) {
+        return false;
+    }
+
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+
+    // Apply EXIF orientation to dimensions
+    int orientation = get_exif_orientation(filepath);
+    if (orientation > 4) { // Rotated 90 or 270 degrees
+        std::swap(width, height);
+    }
+
+    // Calculate aspect ratio
+    double aspect_ratio = static_cast<double>(width) / height;
+
+    // Compute a simple hash for metadata (just use filepath for now, faster)
+    // TODO: For production, might want a more robust hash or use file modification time
+    XXH64_hash_t hash = XXH64(filepath.c_str(), filepath.length(), 0);
+    char hash_str[17];
+    snprintf(hash_str, sizeof(hash_str), "%016llx", (unsigned long long)hash);
+
+    info.path = filepath;
+    info.hash = hash_str;
+    info.aspect_ratio = aspect_ratio;
+    info.has_thumbnails = false;
+    info.thumb_data.clear();
+    info.thumb_width = 0;
+    info.thumb_height = 0;
+    info.best_thumb_size = 0;
+
+    return true;
+}
+
+bool DatabaseManager::generate_thumbnails_for_hash(const std::string& hash, const std::string& filepath) {
+    // Load the full image to generate thumbnails
+    int width, height, channels;
+    unsigned char* image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 0);
+    if (!image_data) {
+        return false;
+    }
+
+    // Apply EXIF orientation if needed
+    int orientation = get_exif_orientation(filepath);
+    if (orientation > 1) {
+        // Convert to RGB if not already (needed for orientation transforms)
+        unsigned char* rgb_data = nullptr;
+        bool allocated_rgb = false;
+
+        if (channels == 3) {
+            rgb_data = (unsigned char*)malloc(width * height * 3);
+            allocated_rgb = true;
+            memcpy(rgb_data, image_data, width * height * 3);
+        } else {
+            rgb_data = (unsigned char*)malloc(width * height * 3);
+            allocated_rgb = true;
+
+            for (int i = 0; i < width * height; i++) {
+                if (channels == 1) {
+                    rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i];
+                } else if (channels == 2) {
+                    rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i*2];
+                } else if (channels == 4) {
+                    rgb_data[i*3] = image_data[i*4];
+                    rgb_data[i*3+1] = image_data[i*4+1];
+                    rgb_data[i*3+2] = image_data[i*4+2];
+                }
+            }
+        }
+
+        apply_orientation_transform(rgb_data, width, height, orientation);
+        stbi_image_free(image_data);
+        image_data = rgb_data;
+        channels = 3;
+    }
+
+    // Start a transaction for thumbnail generation
+    MDB_txn* write_txn = nullptr;
+    if (!begin_write_transaction(write_txn)) {
+        stbi_image_free(image_data);
+        return false;
+    }
+
+    bool success = generate_thumbnails(write_txn, filepath, hash, image_data, width, height, channels);
+
+    if (success) {
+        commit_transaction(write_txn);
+    } else {
+        abort_transaction(write_txn);
+    }
+
+    stbi_image_free(image_data);
+    return success;
 }
 
 // Get EXIF orientation from JPEG file

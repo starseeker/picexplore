@@ -45,13 +45,15 @@ struct ImageInfo {
     std::vector<uint8_t> thumb_data;
     int thumb_width = 0;
     int thumb_height = 0;
+    bool has_thumbnails = false;  // Track thumbnail availability for two-stage loading
 };
 
 // Write task for batch database operations
 struct WriteTask {
     enum TaskType {
         STORE_PATH,
-        STORE_THUMBNAIL
+        STORE_THUMBNAIL,
+        STORE_IMAGE_METADATA  // New: Store metadata without thumbnails for stage 1
     };
 
     TaskType type;
@@ -59,12 +61,20 @@ struct WriteTask {
     std::vector<uint8_t> data;
     std::string string_value; // For path storage
 
+    // Metadata for early emission
+    double aspect_ratio = 1.0;
+    std::string file_path;
+
     WriteTask() = default;
     WriteTask(TaskType t, const std::string& k, const std::string& val)
         : type(t), key(k), string_value(val) {}
 
     WriteTask(TaskType t, const std::string& k, const std::vector<uint8_t>& d)
         : type(t), key(k), data(d) {}
+
+    // Constructor for metadata storage
+    WriteTask(TaskType t, const std::string& k, const std::string& path, double aspect)
+        : type(t), key(k), file_path(path), aspect_ratio(aspect) {}
 };
 
 // Database manager class
@@ -83,10 +93,28 @@ public:
     // Database querying
     std::vector<ImageInfo> get_all_images();
     std::vector<ImageInfo> get_images_since_count(size_t last_count);
+    std::vector<ImageInfo> get_images_without_thumbnails(); // Get images that need thumbnails
     bool has_thumbnails(const std::string& hash);
+
+    // Two-stage processing support
+    using ImageInfoCallback = std::function<void(const ImageInfo&)>;
+    void set_image_info_callback(ImageInfoCallback callback) { image_info_callback_ = callback; }
+
+    // Stage 1: Extract image metadata (path, aspect ratio) quickly
+    bool extract_image_metadata(const std::string& filepath, ImageInfo& info);
+
+    // Stage 2: Generate thumbnails for existing image metadata
+    bool generate_thumbnails_for_hash(const std::string& hash, const std::string& filepath);
 
     // Scanning control
     void cancel_scan();
+
+    // Database operations (made public for UI access)
+    bool begin_write_transaction(MDB_txn*& txn);
+    bool begin_read_transaction(MDB_txn*& txn);
+    bool commit_transaction(MDB_txn* txn);
+    void abort_transaction(MDB_txn* txn);
+    bool load_image_info(MDB_txn* txn, const std::string& hash, ImageInfo& info);
 
 private:
     MDB_env* env_;
@@ -96,6 +124,9 @@ private:
     // Parallel processing
     mutable std::mutex db_mutex_;
     std::atomic<bool> stop_processing_;
+
+    // Two-stage processing callback
+    ImageInfoCallback image_info_callback_;
 
     // Worker thread functions
     void worker_thread(const std::vector<std::string>& files, size_t start_idx, size_t end_idx,
@@ -116,17 +147,12 @@ private:
                                                   int* actual_width, int* actual_height);
     int calculate_scale_factor(int image_width, int image_height, int target_width, int target_height);
 
-    // Database operations
-    bool begin_write_transaction(MDB_txn*& txn);
-    bool begin_read_transaction(MDB_txn*& txn);
-    bool commit_transaction(MDB_txn* txn);
-    void abort_transaction(MDB_txn* txn);
+    // Database operations (remaining private methods)
     bool store_key_value(MDB_txn* txn, const std::string& key, const std::string& value);
     bool store_key_data(MDB_txn* txn, const std::string& key, const std::vector<uint8_t>& data);
     bool get_key_value(MDB_txn* txn, const std::string& key, std::string& value);
     bool get_key_data(MDB_txn* txn, const std::string& key, std::vector<uint8_t>& data);
     std::string extract_hash_from_key(const char* key, size_t key_size);
-    bool load_image_info(MDB_txn* txn, const std::string& hash, ImageInfo& info);
 
     // Image processing helper
     bool process_image_file(const std::string& filepath,
