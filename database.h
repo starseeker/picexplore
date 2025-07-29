@@ -60,7 +60,7 @@ struct WriteTask {
     std::string key;
     std::vector<uint8_t> data;
     std::string string_value; // For path storage
-    
+
     // Metadata for early emission
     double aspect_ratio = 1.0;
     std::string file_path;
@@ -71,7 +71,7 @@ struct WriteTask {
 
     WriteTask(TaskType t, const std::string& k, const std::vector<uint8_t>& d)
         : type(t), key(k), data(d) {}
-        
+
     // Constructor for metadata storage
     WriteTask(TaskType t, const std::string& k, const std::string& path, double aspect)
         : type(t), key(k), file_path(path), aspect_ratio(aspect) {}
@@ -99,16 +99,16 @@ public:
     // Two-stage processing support
     using ImageInfoCallback = std::function<void(const ImageInfo&)>;
     void set_image_info_callback(ImageInfoCallback callback) { image_info_callback_ = callback; }
-    
+
     // Stage 1: Extract image metadata (path, aspect ratio) quickly
     bool extract_image_metadata(const std::string& filepath, ImageInfo& info);
-    
+
     // Stage 2: Generate thumbnails for existing image metadata
     bool generate_thumbnails_for_hash(const std::string& hash, const std::string& filepath);
 
     // Scanning control
     void cancel_scan();
-    
+
     // Database operations (made public for UI access)
     bool begin_write_transaction(MDB_txn*& txn);
     bool begin_read_transaction(MDB_txn*& txn);
@@ -124,7 +124,7 @@ private:
     // Parallel processing
     mutable std::mutex db_mutex_;
     std::atomic<bool> stop_processing_;
-    
+
     // Two-stage processing callback
     ImageInfoCallback image_info_callback_;
 

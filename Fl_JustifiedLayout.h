@@ -80,7 +80,7 @@ struct ThumbnailResult {
 struct ThumbnailNotification {
     std::string hash;
     bool is_ready;
-    
+
     ThumbnailNotification(const std::string& h, bool ready) : hash(h), is_ready(ready) {}
 };
 
@@ -121,8 +121,8 @@ public:
 
     // Two-stage population support
     using ThumbnailNotificationCallback = std::function<void(const ThumbnailNotification&)>;
-    void set_thumbnail_notification_callback(ThumbnailNotificationCallback callback) { 
-        thumbnail_notification_callback_ = callback; 
+    void set_thumbnail_notification_callback(ThumbnailNotificationCallback callback) {
+        thumbnail_notification_callback_ = callback;
     }
     void handle_image_info_ready(const ImageInfo& info);  // Stage 1: Add placeholder
     void handle_thumbnail_ready(const std::string& hash);  // Stage 2: Update with thumbnail
@@ -151,10 +151,11 @@ public:
     void stop_background_generation();
     bool is_generating() const { return generating_.load(); }
 
-    // Prefetch control (stubbed for now)
+    // Prefetch control
     void prefetch_visible_region();
     void prefetch_next_region();
     void prefetch_previous_region();
+    void update_visibility_and_queue_thumbnails();  // Check visibility and queue high-priority tasks
 
     // FLTK widget overrides
     void draw() override;
@@ -243,7 +244,7 @@ private:
 
     // Image cache for decoded thumbnails
     std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> image_cache_;
-    
+
     // Two-stage processing support
     moodycamel::ConcurrentQueue<ThumbnailNotification> thumbnail_notifications_;
     std::unordered_map<std::string, int> hash_to_index_map_;  // Map hash to image index

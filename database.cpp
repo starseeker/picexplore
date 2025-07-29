@@ -40,7 +40,7 @@
 #define MAX_DB_SIZE 549755813888
 
 namespace fs = std::filesystem;
-DatabaseManager::DatabaseManager() : env_(nullptr), dbi_(0), is_open_(false), stop_processing_(false), 
+DatabaseManager::DatabaseManager() : env_(nullptr), dbi_(0), is_open_(false), stop_processing_(false),
                                    image_info_callback_(nullptr) {
 }
 
@@ -514,7 +514,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
         if (image_info_callback_) {
             image_info_callback_(quick_info);
         }
-        
+
         // Store metadata in database for future loading
         std::string path_key = quick_info.hash + ":path";
         write_tasks.emplace_back(WriteTask::STORE_PATH, path_key, filepath);
@@ -815,7 +815,7 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
 
         bool batch_success = true;
         int successful_writes = 0;
-        
+
         for (const auto& write_task : batch) {
             bool success = false;
 
@@ -1181,12 +1181,12 @@ std::vector<ImageInfo> DatabaseManager::get_all_images() {
 
 std::vector<ImageInfo> DatabaseManager::get_images_since_count(size_t last_count) {
     std::vector<ImageInfo> all_images = get_all_images();
-    
+
     // Return only the images beyond the last_count
     if (last_count >= all_images.size()) {
         return std::vector<ImageInfo>(); // No new images
     }
-    
+
     std::vector<ImageInfo> new_images(all_images.begin() + last_count, all_images.end());
     return new_images;
 }
@@ -1210,7 +1210,7 @@ bool DatabaseManager::has_thumbnails(const std::string& hash) {
 
 std::vector<ImageInfo> DatabaseManager::get_images_without_thumbnails() {
     std::vector<ImageInfo> images_needing_thumbs;
-    
+
     if (!is_open_) return images_needing_thumbs;
 
     MDB_txn* read_txn;
@@ -1235,7 +1235,7 @@ std::vector<ImageInfo> DatabaseManager::get_images_without_thumbnails() {
                 info.hash = hash;
                 info.path = std::string((char*)data.mv_data, data.mv_size);
                 info.has_thumbnails = false;
-                
+
                 // Try to extract aspect ratio from metadata key
                 std::string metadata_key = hash + ":metadata";
                 std::string metadata_value;
@@ -1245,7 +1245,7 @@ std::vector<ImageInfo> DatabaseManager::get_images_without_thumbnails() {
                 } else {
                     info.aspect_ratio = 1.0; // Default square
                 }
-                
+
                 images_needing_thumbs.push_back(std::move(info));
             }
         }
@@ -1253,38 +1253,38 @@ std::vector<ImageInfo> DatabaseManager::get_images_without_thumbnails() {
 
     mdb_cursor_close(cursor);
     mdb_txn_abort(read_txn);
-    
+
     return images_needing_thumbs;
 }
 
 bool DatabaseManager::extract_image_metadata(const std::string& filepath, ImageInfo& info) {
     // Load image header only to get dimensions quickly
     int width, height, channels;
-    
+
     // Use stbi_info for faster metadata extraction (doesn't load full image)
     if (!stbi_info(filepath.c_str(), &width, &height, &channels)) {
         return false;
     }
-    
+
     if (width <= 0 || height <= 0) {
         return false;
     }
-    
+
     // Apply EXIF orientation to dimensions
     int orientation = get_exif_orientation(filepath);
     if (orientation > 4) { // Rotated 90 or 270 degrees
         std::swap(width, height);
     }
-    
+
     // Calculate aspect ratio
     double aspect_ratio = static_cast<double>(width) / height;
-    
+
     // Compute a simple hash for metadata (just use filepath for now, faster)
     // TODO: For production, might want a more robust hash or use file modification time
     XXH64_hash_t hash = XXH64(filepath.c_str(), filepath.length(), 0);
     char hash_str[17];
     snprintf(hash_str, sizeof(hash_str), "%016llx", (unsigned long long)hash);
-    
+
     info.path = filepath;
     info.hash = hash_str;
     info.aspect_ratio = aspect_ratio;
@@ -1293,7 +1293,7 @@ bool DatabaseManager::extract_image_metadata(const std::string& filepath, ImageI
     info.thumb_width = 0;
     info.thumb_height = 0;
     info.best_thumb_size = 0;
-    
+
     return true;
 }
 
@@ -1347,7 +1347,7 @@ bool DatabaseManager::generate_thumbnails_for_hash(const std::string& hash, cons
     }
 
     bool success = generate_thumbnails(write_txn, filepath, hash, image_data, width, height, channels);
-    
+
     if (success) {
         commit_transaction(write_txn);
     } else {
