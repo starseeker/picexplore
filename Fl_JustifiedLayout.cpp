@@ -32,6 +32,7 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     , active_tasks_(0)
     , completed_tasks_(0)
     , total_tasks_(0)
+    , thumbnail_notification_callback_(nullptr)
 {
     // Initialize layout configuration with reasonable defaults
     layout_config_.w = W - 20; // Leave some margin for scrollbar
@@ -293,6 +294,11 @@ bool Fl_JustifiedLayout::set_database_path(const std::string& db_path) {
 
     // Create and initialize database manager
     database_ = std::make_unique<DatabaseManager>();
+    
+    // Set up callback for two-stage processing
+    database_->set_image_info_callback([this](const ImageInfo& info) {
+        this->handle_image_info_ready(info);
+    });
 
     // Try to open the database
     if (!database_->open(db_path)) {
@@ -849,8 +855,13 @@ void Fl_JustifiedLayout_Content::draw() {
             parent_->draw_selection_highlight(item_x, item_y, item_w, item_h);
         }
 
-        // Try to draw real thumbnail first, fallback to placeholder
-        parent_->draw_thumbnail_image(item_x, item_y, item_w, item_h, img);
+        // Check if image has thumbnails
+        if (img.has_thumbnails) {
+            parent_->draw_thumbnail_image(item_x, item_y, item_w, item_h, img);
+        } else {
+            // Draw loading indicator for images without thumbnails
+            parent_->draw_loading_indicator(item_x, item_y, item_w, item_h);
+        }
     }
 
     fl_pop_clip();
@@ -1158,5 +1169,95 @@ void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& ne
 
     std::cout << "Added " << new_images.size() << " images incrementally (total: " 
               << images_.size() << ")" << std::endl;
+}
+
+// Two-stage population support methods
+void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
+    // This is called from the database scanning thread when metadata is available
+    // Add the image to our list immediately (stage 1)
+    std::lock_guard<std::mutex> lock(image_cache_mutex_);
+    
+    images_.push_back(info);
+    hash_to_index_map_[info.hash] = images_.size() - 1;
+    
+    // Schedule a layout recalculation and redraw
+    Fl::awake(thumbnail_notification_callback, this);
+}
+
+void Fl_JustifiedLayout::handle_thumbnail_ready(const std::string& hash) {
+    // This is called when a thumbnail becomes available (stage 2)
+    ThumbnailNotification notification(hash, true);
+    thumbnail_notifications_.enqueue(notification);
+    
+    // Schedule UI update
+    Fl::awake(thumbnail_notification_callback, this);
+}
+
+void Fl_JustifiedLayout::process_thumbnail_notifications() {
+    ThumbnailNotification notification("", false);
+    bool needs_redraw = false;
+    
+    while (thumbnail_notifications_.try_dequeue(notification)) {
+        if (notification.is_ready) {
+            // Find the image by hash and update it
+            auto it = hash_to_index_map_.find(notification.hash);
+            if (it != hash_to_index_map_.end()) {
+                int index = it->second;
+                if (index >= 0 && index < static_cast<int>(images_.size())) {
+                    std::lock_guard<std::mutex> lock(image_cache_mutex_);
+                    
+                    // Reload image info from database to get thumbnail data
+                    if (database_) {
+                        MDB_txn* read_txn;
+                        if (database_->begin_read_transaction(read_txn)) {
+                            if (database_->load_image_info(read_txn, notification.hash, images_[index])) {
+                                // Clear cached image so it will be reloaded with thumbnail
+                                auto cache_it = image_cache_.find(notification.hash);
+                                if (cache_it != image_cache_.end()) {
+                                    image_cache_.erase(cache_it);
+                                }
+                                needs_redraw = true;
+                            }
+                            database_->abort_transaction(read_txn);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if (needs_redraw) {
+        redraw();
+    }
+}
+
+void Fl_JustifiedLayout::draw_loading_indicator(int x, int y, int w, int h) {
+    // Draw a simple loading placeholder
+    fl_color(FL_LIGHT2);
+    fl_rectf(x, y, w, h);
+    
+    // Draw border
+    fl_color(FL_DARK3);
+    fl_rect(x, y, w, h);
+    
+    // Draw loading text or spinner
+    fl_color(FL_BLACK);
+    fl_font(FL_HELVETICA, 12);
+    
+    const char* text = "Loading...";
+    int text_width = static_cast<int>(fl_width(text));
+    int text_height = fl_height();
+    
+    int text_x = x + (w - text_width) / 2;
+    int text_y = y + (h + text_height) / 2 - fl_descent();
+    
+    fl_draw(text, text_x, text_y);
+}
+
+// Static callback for thumbnail notifications
+void Fl_JustifiedLayout::thumbnail_notification_callback(void* data) {
+    if (data) {
+        static_cast<Fl_JustifiedLayout*>(data)->process_thumbnail_notifications();
+    }
 }
 
