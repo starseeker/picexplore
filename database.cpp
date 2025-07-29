@@ -566,7 +566,14 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
     if (extract_image_metadata(filepath, quick_info)) {
         // Emit ImageInfo immediately for stage 1 UI population
         if (image_info_callback_) {
+            std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " emitting image info callback for: "
+                      << quick_info.path << " (hash: " << quick_info.hash << ", aspect: " << quick_info.aspect_ratio << ")" << std::endl;
             image_info_callback_(quick_info);
+            std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " image info callback completed for: "
+                      << quick_info.path << std::endl;
+        } else {
+            std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " no image info callback set for: "
+                      << quick_info.path << std::endl;
         }
 
         // Store metadata in database for future loading

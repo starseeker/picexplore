@@ -393,6 +393,8 @@ int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, T
             {
                 std::lock_guard<std::mutex> lock(image_cache_mutex_);
                 if (image_cache_.find(cache_key) != image_cache_.end()) {
+                    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " thumbnail already cached for: "
+                              << cache_key << ", skipping queue" << std::endl;
                     continue; // Already cached, do not queue
                 }
             }
@@ -401,13 +403,19 @@ int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, T
             ThumbnailTask task(idx, priority, target_w, target_h);
 
             if (priority == ThumbnailPriority::HIGH) {
+                std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " enqueueing HIGH priority thumbnail task for image "
+                          << idx << " (" << target_w << "x" << target_h << ") hash: " << img.hash << std::endl;
                 high_priority_queue_.enqueue(task);
             } else {
+                std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " enqueueing LOW priority thumbnail task for image "
+                          << idx << " (" << target_w << "x" << target_h << ") hash: " << img.hash << std::endl;
                 low_priority_queue_.enqueue(task);
             }
 
             total_tasks_.fetch_add(1);
-	    num_queued++;
+            num_queued++;
+            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " total tasks now: " << total_tasks_.load()
+                      << ", num_queued this round: " << num_queued << std::endl;
         }
     }
     return num_queued;
@@ -471,14 +479,20 @@ void Fl_JustifiedLayout::start_background_generation() {
     // Start worker threads (use half of available cores, minimum 1, maximum 4)
     int num_workers = std::max(1, std::min(4, static_cast<int>(std::thread::hardware_concurrency() / 2)));
 
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " starting " << num_workers
+              << " thumbnail worker threads" << std::endl;
+
     worker_threads_.clear();
     worker_threads_.reserve(num_workers);
 
     for (int i = 0; i < num_workers; ++i) {
+        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " launching thumbnail worker thread #"
+                  << (i + 1) << std::endl;
         worker_threads_.emplace_back(&Fl_JustifiedLayout::thumbnail_worker_thread, this);
     }
 
-    std::cout << "Started background thumbnail generation with " << num_workers << " workers" << std::endl;
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " Started background thumbnail generation with "
+              << num_workers << " workers" << std::endl;
 
     // Queue high priority tasks for visible region
     prefetch_visible_region();
@@ -499,30 +513,41 @@ void Fl_JustifiedLayout::start_background_generation() {
 }
 
 void Fl_JustifiedLayout::stop_background_generation() {
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " stopping background thumbnail generation" << std::endl;
     should_stop_.store(true);
 
     // Wait for all worker threads to complete
-    for (auto& thread : worker_threads_) {
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " waiting for " << worker_threads_.size()
+              << " worker threads to join" << std::endl;
+    for (size_t i = 0; i < worker_threads_.size(); ++i) {
+        auto& thread = worker_threads_[i];
         if (thread.joinable()) {
+            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " joining worker thread #" << (i + 1) << std::endl;
             thread.join();
         }
     }
     worker_threads_.clear();
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " all worker threads joined" << std::endl;
 
     // Clear queues
     ThumbnailTask task;
-    while (high_priority_queue_.try_dequeue(task)) {}
-    while (low_priority_queue_.try_dequeue(task)) {}
+    int high_cleared = 0, low_cleared = 0;
+    while (high_priority_queue_.try_dequeue(task)) { high_cleared++; }
+    while (low_priority_queue_.try_dequeue(task)) { low_cleared++; }
 
     ThumbnailResult result;
-    while (result_queue_.try_dequeue(result)) {}
+    int results_cleared = 0;
+    while (result_queue_.try_dequeue(result)) { results_cleared++; }
+
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " cleared " << high_cleared << " high priority tasks, "
+              << low_cleared << " low priority tasks, and " << results_cleared << " results from queues" << std::endl;
 
     generating_.store(false);
 
     // Remove any pending progress update timers
     Fl::remove_timeout(progress_update_callback, this);
 
-    std::cout << "Stopped background thumbnail generation" << std::endl;
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " Stopped background thumbnail generation" << std::endl;
 }
 
 void Fl_JustifiedLayout::prefetch_visible_region() {
@@ -1327,32 +1352,50 @@ bool Fl_JustifiedLayout::load_image_list() {
 }
 
 void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& new_images) {
-    if (new_images.empty()) return;
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " add_images_incremental called with "
+              << new_images.size() << " new images" << std::endl;
+
+    if (new_images.empty()) {
+        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " no new images to add, returning" << std::endl;
+        return;
+    }
 
     // Add new images to our list
     size_t old_size = images_.size();
     images_.insert(images_.end(), new_images.begin(), new_images.end());
 
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " added " << new_images.size()
+              << " images, total count increased from " << old_size << " to " << images_.size() << std::endl;
+
     // For incremental layout, we need to recalculate layout with all images
     // This is more efficient than a full clear since we preserve existing layout cache
     // when possible, but for now we do a simple approach
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " recalculating layout for incremental add" << std::endl;
     calculate_layout();
 
     // Resize content widget to match the new total layout height
     if (content_widget_) {
         int content_height = std::max(static_cast<int>(total_height_), h());
+        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " resizing content widget for incremental add, new height: "
+                  << content_height << std::endl;
         content_widget_->resize(x(), y(), w(), content_height);
+    } else {
+        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " no content widget to resize for incremental add" << std::endl;
     }
 
     // Trigger redraw to show new placeholders
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " triggering redraw for incremental add" << std::endl;
     redraw();
 
-    std::cout << "Added " << new_images.size() << " images incrementally (total: "
-              << images_.size() << ")" << std::endl;
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " Added " << new_images.size()
+              << " images incrementally (total: " << images_.size() << ")" << std::endl;
 }
 
 // Two-stage population support methods
 void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " handling image info ready for: "
+              << info.path << " (hash: " << info.hash << ", has_thumbnails: " << info.has_thumbnails << ")" << std::endl;
+
     // This is called from the database scanning thread when metadata is available
     // Add the image to our list immediately (stage 1)
     std::lock_guard<std::mutex> lock(image_cache_mutex_);
@@ -1360,23 +1403,36 @@ void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
     images_.push_back(info);
     hash_to_index_map_[info.hash] = images_.size() - 1;
 
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " added image to list, total images: "
+              << images_.size() << ", assigned index: " << (images_.size() - 1) << std::endl;
+
     // Trigger immediate layout recalculation to populate with placeholders
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " calculating layout" << std::endl;
     calculate_layout();
 
     // Resize content widget to match the new total layout height
     if (content_widget_) {
         int content_height = std::max(static_cast<int>(total_height_), h());
+        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " resizing content widget to height: "
+                  << content_height << " (total_height_: " << total_height_ << ")" << std::endl;
         content_widget_->resize(x(), y(), w(), content_height);
+    } else {
+        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " no content widget to resize" << std::endl;
     }
 
     // Schedule a redraw
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " scheduling redraw for image: " << info.path << std::endl;
     redraw();
 }
 
 void Fl_JustifiedLayout::handle_thumbnail_ready(const std::string& hash) {
+    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id() << " handle_thumbnail_ready called for hash: " << hash << std::endl;
+
     // This is called when a thumbnail becomes available (stage 2)
     ThumbnailNotification notification(hash, true);
     thumbnail_notifications_.enqueue(notification);
+
+    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id() << " enqueued thumbnail notification and scheduling UI awake for hash: " << hash << std::endl;
 
     // Schedule UI update
     Fl::awake(thumbnail_notification_callback, this);
