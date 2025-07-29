@@ -18,6 +18,19 @@
 #include "../utils.h"
 #include "../simple_svg_1.0.0.hpp"
 
+// Helper function to wrap Fl::awake with debug logging
+inline void debug_awake(void (*callback)(void*), void* data, const std::string& description = "") {
+    std::cout << "[DEBUG] FLTK: Triggering Fl::awake() from thread " << std::this_thread::get_id();
+    if (!description.empty()) {
+        std::cout << " - " << description;
+    }
+    std::cout << std::endl;
+    
+    Fl::awake(callback, data);
+    
+    std::cout << "[DEBUG] FLTK: Fl::awake() call completed" << std::endl;
+}
+
 Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* label)
     : Fl_Scroll(X, Y, W, H, label)
     , content_widget_(nullptr)
@@ -256,7 +269,7 @@ void Fl_JustifiedLayout::thumbnail_worker_thread() {
                               << ", enqueueing result and triggering UI awake" << std::endl;
                     ThumbnailResult result(task.image_index, std::move(thumbnail), cache_key);
                     result_queue_.enqueue(std::move(result));
-                    Fl::awake(result_processor_callback, this);
+                    debug_awake(result_processor_callback, this, "thumbnail generation result");
                 } else {
                     std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id()
                               << " failed to create thumbnail for image " << task.image_index << std::endl;
@@ -438,7 +451,16 @@ bool Fl_JustifiedLayout::set_database_path(const std::string& db_path) {
 
     // Set up callback for two-stage processing
     database_->set_image_info_callback([this](const ImageInfo& info) {
-        this->handle_image_info_ready(info);
+        // This callback is called from worker threads, so we need to use Fl::awake
+        std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " image info callback triggered for: "
+                  << info.path << " (hash: " << info.hash << ")" << std::endl;
+        auto info_copy = std::make_shared<ImageInfo>(info);
+        debug_awake([](void* data) {
+            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " handling image info ready callback (from database)" << std::endl;
+            auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>*>(data);
+            params->first->handle_image_info_ready(*(params->second));
+            delete params;
+        }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>(this, info_copy), "image info ready from database");
     });
 
     // Try to open the database
@@ -602,14 +624,28 @@ void Fl_JustifiedLayout::prefetch_previous_region() {
 }
 
 int Fl_JustifiedLayout::handle(int event) {
+    std::cout << "[DEBUG] FLTK UI: Fl_JustifiedLayout::handle() event=" << event << " on thread " << std::this_thread::get_id() << std::endl;
+    
     switch (event) {
         case FL_FOCUS:
         case FL_UNFOCUS:
+            std::cout << "[DEBUG] FLTK UI: Focus event handled" << std::endl;
             return 1;
         case FL_MOVE:
         case FL_DRAG:
+            std::cout << "[DEBUG] FLTK UI: Mouse move/drag event - updating visibility" << std::endl;
             // Check for scroll position changes
             update_visibility_and_queue_thumbnails();
+            break;
+        case FL_PUSH:
+            std::cout << "[DEBUG] FLTK UI: Mouse push event" << std::endl;
+            break;
+        case FL_RELEASE:
+            std::cout << "[DEBUG] FLTK UI: Mouse release event" << std::endl;
+            break;
+        case FL_KEYDOWN:
+        case FL_KEYUP:
+            std::cout << "[DEBUG] FLTK UI: Keyboard event" << std::endl;
             break;
     }
 
@@ -987,6 +1023,8 @@ Fl_JustifiedLayout_Content::Fl_JustifiedLayout_Content(int X, int Y, int W, int 
 }
 
 void Fl_JustifiedLayout_Content::draw() {
+    std::cout << "[DEBUG] FLTK UI: Fl_JustifiedLayout_Content::draw() called on thread " << std::this_thread::get_id() << std::endl;
+    
     if (!parent_) return;
 
     // Clear background
@@ -994,6 +1032,7 @@ void Fl_JustifiedLayout_Content::draw() {
     fl_rectf(x(), y(), w(), h());
 
     if (parent_->images_.empty()) {
+        std::cout << "[DEBUG] FLTK UI: Drawing 'no images' message" << std::endl;
         // Draw "no images" message
         fl_color(FL_BLACK);
         fl_font(FL_HELVETICA, 14);
@@ -1071,11 +1110,14 @@ void Fl_JustifiedLayout_Content::draw() {
 }
 
 int Fl_JustifiedLayout_Content::handle(int event) {
+    std::cout << "[DEBUG] FLTK UI: Fl_JustifiedLayout_Content::handle() event=" << event << " on thread " << std::this_thread::get_id() << std::endl;
+    
     if (!parent_) return 0;
 
     switch (event) {
         case FL_PUSH:
             if (Fl::event_button() == FL_LEFT_MOUSE) {
+                std::cout << "[DEBUG] FLTK UI: Left mouse click at (" << Fl::event_x() << ", " << Fl::event_y() << ")" << std::endl;
                 parent_->handle_click(Fl::event_x(), Fl::event_y());
                 return 1;
             }
@@ -1136,7 +1178,7 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
         auto scan_database = std::make_unique<DatabaseManager>();
         if (!scan_database->open(db_path)) {
             std::cout << "[DEBUG] Directory scan thread " << std::this_thread::get_id() << " failed to open database" << std::endl;
-            Fl::awake([](void* data) {
+            debug_awake([](void* data) {
                 std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " directory scan database open failure callback" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
                 if (widget->progress_callback_) {
@@ -1155,12 +1197,12 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " image info callback triggered for: "
                       << info.path << " (hash: " << info.hash << ")" << std::endl;
             auto info_copy = std::make_shared<ImageInfo>(info);
-            Fl::awake([](void* data) {
+            debug_awake([](void* data) {
                 std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " handling image info ready callback" << std::endl;
                 auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>*>(data);
                 params->first->handle_image_info_ready(*(params->second));
                 delete params;
-            }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>(this, info_copy));
+            }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>(this, info_copy), "image info ready from scan");
         });
 
         // Create timer and reporter for the scan
@@ -1171,7 +1213,7 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
 
         // Forward initial progress
         std::cout << "[DEBUG] Directory scan thread " << std::this_thread::get_id() << " sending initial progress update" << std::endl;
-        Fl::awake([](void* data) {
+        debug_awake([](void* data) {
             std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " initial scan progress callback" << std::endl;
             Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
             if (widget->progress_callback_) {
@@ -1208,12 +1250,12 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
                         // Create a copy for the lambda to capture
                         auto new_images_copy = std::make_shared<std::vector<ImageInfo>>(std::move(new_images));
 
-                        Fl::awake([](void* data) {
+                        debug_awake([](void* data) {
                             std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " adding images incrementally" << std::endl;
                             auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>*>(data);
                             params->first->add_images_incremental(*(params->second));
                             delete params;
-                        }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>(this, new_images_copy));
+                        }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>(this, new_images_copy), "incremental image batch");
                     }
                 } catch (const std::exception& e) {
                     std::cerr << "Error during incremental update: " << e.what() << std::endl;
@@ -1242,19 +1284,19 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
         if (user_cancelled.load()) {
             scan_database->cancel_scan(); // Ensure cancellation is signaled
 	    std::cout << "[DEBUG] About to call Fl::awake for scan cancelled, thread id: " << std::this_thread::get_id() << std::endl;
-            Fl::awake([](void* data) {
+            debug_awake([](void* data) {
                 std::cout << "[DEBUG] Fl::awake (cancelled) lambda running" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
                 if (widget->progress_callback_) {
                     widget->progress_callback_(0, 0, "Scan cancelled");
                 }
-            }, this);
+            }, this, "scan cancelled");
         } else if (processed >= 0) {
             // Scan completed successfully - get any remaining images and finish
             std::vector<ImageInfo> remaining_images = scan_database->get_images_since_count(last_image_count.load());
             if (!remaining_images.empty()) {
                 auto remaining_images_copy = std::make_shared<std::vector<ImageInfo>>(std::move(remaining_images));
-                Fl::awake([](void* data) {
+                debug_awake([](void* data) {
                     auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>*>(data);
                     params->first->add_images_incremental(*(params->second));
                     delete params;
@@ -1266,7 +1308,7 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             database_ = std::move(scan_database);
 
 	    std::cout << "[DEBUG] About to call Fl::awake for scan complete, thread id: " << std::this_thread::get_id() << std::endl;
-            Fl::awake([](void* data) {
+            debug_awake([](void* data) {
                 std::cout << "[DEBUG] Fl::awake (scan complete) lambda running" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
                 if (widget->progress_callback_) {
@@ -1274,29 +1316,29 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
                 }
                 // Start background thumbnail generation
                 widget->start_background_generation();
-            }, this);
+            }, this, "scan complete");
         } else {
 	    std::cout << "[DEBUG] About to call Fl::awake for scan failed, thread id: " << std::this_thread::get_id() << std::endl;
-            Fl::awake([](void* data) {
+            debug_awake([](void* data) {
                 std::cout << "[DEBUG] Fl::awake (scan failed) lambda running" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
                 if (widget->progress_callback_) {
                     widget->progress_callback_(0, 0, "Scan failed");
                 }
-            }, this);
+            }, this, "scan failed");
         }
 
         std::cout << "[DEBUG] directory_scan_thread (end of try) scanning_ = " << scanning_.load() << std::endl;
     } catch (const std::exception& e) {
         std::cout << "[DEBUG] Exception caught in directory_scan_thread: " << e.what() << std::endl;
-        Fl::awake([](void* data) {
+        debug_awake([](void* data) {
             auto* params = static_cast<std::pair<Fl_JustifiedLayout*, std::string>*>(data);
             std::cout << "[DEBUG] Fl::awake (exception) lambda running" << std::endl;
             if (params->first->progress_callback_) {
                 params->first->progress_callback_(0, 0, "Scan error: " + params->second);
             }
             delete params;
-        }, new std::pair<Fl_JustifiedLayout*, std::string>(this, e.what()));
+        }, new std::pair<Fl_JustifiedLayout*, std::string>(this, e.what()), "scan exception");
     }
 
 }
@@ -1435,7 +1477,7 @@ void Fl_JustifiedLayout::handle_thumbnail_ready(const std::string& hash) {
     std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id() << " enqueued thumbnail notification and scheduling UI awake for hash: " << hash << std::endl;
 
     // Schedule UI update
-    Fl::awake(thumbnail_notification_callback, this);
+    debug_awake(thumbnail_notification_callback, this, "thumbnail ready notification");
 }
 
 void Fl_JustifiedLayout::process_thumbnail_notifications() {
@@ -1627,8 +1669,13 @@ void Fl_JustifiedLayout::write_debug_png(const std::string& filename) {
 }
 
 void Fl_JustifiedLayout::draw() {
+    std::cout << "[DEBUG] FLTK UI: Fl_JustifiedLayout::draw() called on thread " << std::this_thread::get_id() 
+              << " (images: " << images_.size() << ", visible: " << visible_start_idx_ << "-" << visible_end_idx_ << ")" << std::endl;
+    
     // Fl_Scroll handles its own drawing and scrollbar management
     // The content widget (Fl_JustifiedLayout_Content) handles the actual thumbnail drawing
     Fl_Scroll::draw();
+    
+    std::cout << "[DEBUG] FLTK UI: Fl_JustifiedLayout::draw() completed" << std::endl;
 }
 
