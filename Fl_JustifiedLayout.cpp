@@ -18,17 +18,9 @@
 #include "../utils.h"
 #include "../simple_svg_1.0.0.hpp"
 
-// Helper function to wrap Fl::awake with debug logging
+// Helper function to wrap Fl::awake call
 inline void debug_awake(void (*callback)(void*), void* data, const std::string& description = "") {
-    std::cout << "[DEBUG] FLTK: Triggering Fl::awake() from thread " << std::this_thread::get_id();
-    if (!description.empty()) {
-        std::cout << " - " << description;
-    }
-    std::cout << std::endl;
-    
     Fl::awake(callback, data);
-    
-    std::cout << "[DEBUG] FLTK: Fl::awake() call completed" << std::endl;
 }
 
 Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* label)
@@ -387,11 +379,8 @@ bool Fl_JustifiedLayout::set_database_path(const std::string& db_path) {
     // Set up callback for two-stage processing
     database_->set_image_info_callback([this](const ImageInfo& info) {
         // This callback is called from worker threads, so we need to use Fl::awake
-        std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " image info callback triggered for: "
-                  << info.path << " (hash: " << info.hash << ")" << std::endl;
         auto info_copy = std::make_shared<ImageInfo>(info);
         debug_awake([](void* data) {
-            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " handling image info ready callback (from database)" << std::endl;
             auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>*>(data);
             params->first->handle_image_info_ready(*(params->second));
             delete params;
@@ -436,20 +425,12 @@ void Fl_JustifiedLayout::start_background_generation() {
     // Start worker threads (use half of available cores, minimum 1, maximum 4)
     int num_workers = std::max(1, std::min(4, static_cast<int>(std::thread::hardware_concurrency() / 2)));
 
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " starting " << num_workers
-              << " thumbnail worker threads" << std::endl;
-
     worker_threads_.clear();
     worker_threads_.reserve(num_workers);
 
     for (int i = 0; i < num_workers; ++i) {
-        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " launching thumbnail worker thread #"
-                  << (i + 1) << std::endl;
         worker_threads_.emplace_back(&Fl_JustifiedLayout::thumbnail_worker_thread, this);
     }
-
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " Started background thumbnail generation with "
-              << num_workers << " workers" << std::endl;
 
     // Queue high priority tasks for visible region
     prefetch_visible_region();
@@ -470,21 +451,16 @@ void Fl_JustifiedLayout::start_background_generation() {
 }
 
 void Fl_JustifiedLayout::stop_background_generation() {
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " stopping background thumbnail generation" << std::endl;
     should_stop_.store(true);
 
     // Wait for all worker threads to complete
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " waiting for " << worker_threads_.size()
-              << " worker threads to join" << std::endl;
     for (size_t i = 0; i < worker_threads_.size(); ++i) {
         auto& thread = worker_threads_[i];
         if (thread.joinable()) {
-            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " joining worker thread #" << (i + 1) << std::endl;
             thread.join();
         }
     }
     worker_threads_.clear();
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " all worker threads joined" << std::endl;
 
     // Clear queues
     ThumbnailTask task;
@@ -496,15 +472,10 @@ void Fl_JustifiedLayout::stop_background_generation() {
     int results_cleared = 0;
     while (result_queue_.try_dequeue(result)) { results_cleared++; }
 
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " cleared " << high_cleared << " high priority tasks, "
-              << low_cleared << " low priority tasks, and " << results_cleared << " results from queues" << std::endl;
-
     generating_.store(false);
 
     // Remove any pending progress update timers
     Fl::remove_timeout(progress_update_callback, this);
-
-    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " Stopped background thumbnail generation" << std::endl;
 }
 
 void Fl_JustifiedLayout::prefetch_visible_region() {
@@ -518,9 +489,6 @@ void Fl_JustifiedLayout::prefetch_visible_region() {
 
     if (!visible_indices.empty()) {
 	int num_queued = queue_thumbnail_tasks(visible_indices, ThumbnailPriority::HIGH);
-        if (num_queued > 0) {
-            std::cout << "Queued visible region for high priority: " << visible_start_idx_ << " to " << visible_end_idx_ << std::endl;
-        }
     }
 }
 
@@ -537,7 +505,6 @@ void Fl_JustifiedLayout::prefetch_next_region() {
             next_indices.push_back(i);
         }
         queue_thumbnail_tasks(next_indices, ThumbnailPriority::HIGH);
-        std::cout << "Queued next region for high priority: " << next_start << " to " << next_end << std::endl;
     }
 }
 
@@ -554,33 +521,25 @@ void Fl_JustifiedLayout::prefetch_previous_region() {
             prev_indices.push_back(i);
         }
         queue_thumbnail_tasks(prev_indices, ThumbnailPriority::HIGH);
-        std::cout << "Queued previous region for high priority: " << prev_start << " to " << prev_end << std::endl;
     }
 }
 
 int Fl_JustifiedLayout::handle(int event) {
-    std::cout << "[DEBUG] FLTK UI: Fl_JustifiedLayout::handle() event=" << event << " on thread " << std::this_thread::get_id() << std::endl;
-    
     switch (event) {
         case FL_FOCUS:
         case FL_UNFOCUS:
-            std::cout << "[DEBUG] FLTK UI: Focus event handled" << std::endl;
             return 1;
         case FL_MOVE:
         case FL_DRAG:
-            std::cout << "[DEBUG] FLTK UI: Mouse move/drag event - updating visibility" << std::endl;
             // Check for scroll position changes
             update_visibility_and_queue_thumbnails();
             break;
         case FL_PUSH:
-            std::cout << "[DEBUG] FLTK UI: Mouse push event" << std::endl;
             break;
         case FL_RELEASE:
-            std::cout << "[DEBUG] FLTK UI: Mouse release event" << std::endl;
             break;
         case FL_KEYDOWN:
         case FL_KEYUP:
-            std::cout << "[DEBUG] FLTK UI: Keyboard event" << std::endl;
             break;
     }
 
@@ -946,7 +905,6 @@ void Fl_JustifiedLayout::handle_click(int click_x, int click_y) {
                 selection_callback_(images_[i].path, images_[i]);
             }
 
-            std::cout << "Selected image: " << images_[i].path << std::endl;
             break;
         }
     }
@@ -958,8 +916,6 @@ Fl_JustifiedLayout_Content::Fl_JustifiedLayout_Content(int X, int Y, int W, int 
 }
 
 void Fl_JustifiedLayout_Content::draw() {
-    std::cout << "[DEBUG] FLTK UI: Fl_JustifiedLayout_Content::draw() called on thread " << std::this_thread::get_id() << std::endl;
-    
     if (!parent_) return;
 
     // Clear background
@@ -967,7 +923,6 @@ void Fl_JustifiedLayout_Content::draw() {
     fl_rectf(x(), y(), w(), h());
 
     if (parent_->images_.empty()) {
-        std::cout << "[DEBUG] FLTK UI: Drawing 'no images' message" << std::endl;
         // Draw "no images" message
         fl_color(FL_BLACK);
         fl_font(FL_HELVETICA, 14);
@@ -1045,14 +1000,11 @@ void Fl_JustifiedLayout_Content::draw() {
 }
 
 int Fl_JustifiedLayout_Content::handle(int event) {
-    std::cout << "[DEBUG] FLTK UI: Fl_JustifiedLayout_Content::handle() event=" << event << " on thread " << std::this_thread::get_id() << std::endl;
-    
     if (!parent_) return 0;
 
     switch (event) {
         case FL_PUSH:
             if (Fl::event_button() == FL_LEFT_MOUSE) {
-                std::cout << "[DEBUG] FLTK UI: Left mouse click at (" << Fl::event_x() << ", " << Fl::event_y() << ")" << std::endl;
                 parent_->handle_click(Fl::event_x(), Fl::event_y());
                 return 1;
             }
@@ -1088,8 +1040,6 @@ void Fl_JustifiedLayout::start_directory_scan(const std::string& dir_path, const
         scan_thread_.join();
     }
     scan_thread_ = std::thread(&Fl_JustifiedLayout::directory_scan_thread, this, dir_path, db_path);
-
-    std::cout << "Started directory scan for: " << dir_path << std::endl;
 }
 
 void Fl_JustifiedLayout::cancel_directory_scan() {
@@ -1100,7 +1050,6 @@ void Fl_JustifiedLayout::cancel_directory_scan() {
     }
 
     scanning_.store(false);
-    std::cout << "Cancelled directory scan" << std::endl;
 }
 
 void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, const std::string& db_path) {
