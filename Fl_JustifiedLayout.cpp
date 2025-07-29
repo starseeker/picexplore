@@ -1400,7 +1400,7 @@ void Fl_JustifiedLayout::write_debug_output() {
     std::filesystem::create_directories(debug_output_dir_);
 
     // Generate filename with counter
-    std::string filename = debug_output_dir_ + "/layout_update_" + 
+    std::string filename = debug_output_dir_ + "/layout_update_" +
                           std::to_string(debug_update_counter_++) + "." + debug_output_format_;
 
     if (debug_output_format_ == "svg") {
@@ -1429,14 +1429,14 @@ void Fl_JustifiedLayout::write_debug_svg(const std::string& filename) {
         svg::Color stroke_color = svg::Color(0, 0, 0);  // Black
 
         // Draw rectangle for this image
-        doc << svg::Rectangle(svg::Point(item.l, item.t), item.w, item.h, 
+        doc << svg::Rectangle(svg::Point(item.l, item.t), item.w, item.h,
                              svg::Fill(fill_color), svg::Stroke(1, stroke_color));
 
         // Add text with image info
         if (item.w > 100 && item.h > 30) {  // Only add text if rectangle is large enough
-            std::string text = std::to_string(static_cast<int>(item.w)) + "x" + 
+            std::string text = std::to_string(static_cast<int>(item.w)) + "x" +
                               std::to_string(static_cast<int>(item.h));
-            doc << svg::Text(svg::Point(item.l + 10, item.t + 20), text, 
+            doc << svg::Text(svg::Point(item.l + 10, item.t + 20), text,
                            svg::Fill(svg::Color(0, 0, 0)), svg::Font(12, "Arial"));
         }
     }
@@ -1448,7 +1448,7 @@ void Fl_JustifiedLayout::write_debug_png(const std::string& filename) {
     // For PNG output, we'll create a simple image using FLTK's image surface
     // This is a placeholder implementation - for now we'll just create a simple colored rectangle
     std::cout << "PNG debug output not yet fully implemented, using SVG fallback" << std::endl;
-    
+
     // Fall back to SVG for now
     std::string svg_filename = filename;
     size_t dot_pos = svg_filename.find_last_of('.');
