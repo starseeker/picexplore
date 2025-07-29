@@ -40,7 +40,7 @@
 #define MAX_DB_SIZE 549755813888
 
 namespace fs = std::filesystem;
-DatabaseManager::DatabaseManager() : env_(nullptr), txn_(nullptr), dbi_(0), is_open_(false), stop_processing_(false) {
+DatabaseManager::DatabaseManager() : env_(nullptr), dbi_(0), is_open_(false), stop_processing_(false) {
 }
 
 DatabaseManager::~DatabaseManager() {
@@ -128,10 +128,6 @@ bool DatabaseManager::open(const std::string& db_path) {
 }
 
 void DatabaseManager::close() {
-    if (txn_) {
-        mdb_txn_abort(txn_);
-        txn_ = nullptr;
-    }
     if (env_) {
         mdb_env_close(env_);
         env_ = nullptr;
@@ -139,35 +135,45 @@ void DatabaseManager::close() {
     is_open_ = false;
 }
 
-bool DatabaseManager::begin_transaction() {
-    if (!is_open_ || txn_) return false;
+bool DatabaseManager::begin_write_transaction(MDB_txn*& txn) {
+    if (!is_open_) return false;
 
-    int rc = mdb_txn_begin(env_, nullptr, 0, &txn_);
+    int rc = mdb_txn_begin(env_, nullptr, 0, &txn);
     if (rc != 0) {
+        txn = nullptr;
         return false;
     }
 
-    // DBI is already opened in DatabaseManager::open(), so we don't need to open it again
     return true;
 }
 
-bool DatabaseManager::commit_transaction() {
-    if (!txn_) return false;
+bool DatabaseManager::begin_read_transaction(MDB_txn*& txn) {
+    if (!is_open_) return false;
 
-    int rc = mdb_txn_commit(txn_);
-    txn_ = nullptr;
+    int rc = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
+    if (rc != 0) {
+        txn = nullptr;
+        return false;
+    }
+
+    return true;
+}
+
+bool DatabaseManager::commit_transaction(MDB_txn* txn) {
+    if (!txn) return false;
+
+    int rc = mdb_txn_commit(txn);
     return (rc == 0);
 }
 
-void DatabaseManager::abort_transaction() {
-    if (txn_) {
-        mdb_txn_abort(txn_);
-        txn_ = nullptr;
+void DatabaseManager::abort_transaction(MDB_txn* txn) {
+    if (txn) {
+        mdb_txn_abort(txn);
     }
 }
 
-bool DatabaseManager::store_key_value(const std::string& key, const std::string& value) {
-    if (!txn_) return false;
+bool DatabaseManager::store_key_value(MDB_txn* txn, const std::string& key, const std::string& value) {
+    if (!txn) return false;
 
     MDB_val k, v;
     k.mv_data = (void*)key.c_str();
@@ -175,11 +181,11 @@ bool DatabaseManager::store_key_value(const std::string& key, const std::string&
     v.mv_data = (void*)value.c_str();
     v.mv_size = value.length();
 
-    return mdb_put(txn_, dbi_, &k, &v, 0) == 0;
+    return mdb_put(txn, dbi_, &k, &v, 0) == 0;
 }
 
-bool DatabaseManager::store_key_data(const std::string& key, const std::vector<uint8_t>& data) {
-    if (!txn_) return false;
+bool DatabaseManager::store_key_data(MDB_txn* txn, const std::string& key, const std::vector<uint8_t>& data) {
+    if (!txn) return false;
 
     MDB_val k, v;
     k.mv_data = (void*)key.c_str();
@@ -187,31 +193,31 @@ bool DatabaseManager::store_key_data(const std::string& key, const std::vector<u
     v.mv_data = (void*)data.data();
     v.mv_size = data.size();
 
-    return mdb_put(txn_, dbi_, &k, &v, 0) == 0;
+    return mdb_put(txn, dbi_, &k, &v, 0) == 0;
 }
 
-bool DatabaseManager::get_key_value(const std::string& key, std::string& value) {
-    if (!txn_) return false;
+bool DatabaseManager::get_key_value(MDB_txn* txn, const std::string& key, std::string& value) {
+    if (!txn) return false;
 
     MDB_val k, v;
     k.mv_data = (void*)key.c_str();
     k.mv_size = key.length();
 
-    if (mdb_get(txn_, dbi_, &k, &v) == 0) {
+    if (mdb_get(txn, dbi_, &k, &v) == 0) {
         value.assign((char*)v.mv_data, v.mv_size);
         return true;
     }
     return false;
 }
 
-bool DatabaseManager::get_key_data(const std::string& key, std::vector<uint8_t>& data) {
-    if (!txn_) return false;
+bool DatabaseManager::get_key_data(MDB_txn* txn, const std::string& key, std::vector<uint8_t>& data) {
+    if (!txn) return false;
 
     MDB_val k, v;
     k.mv_data = (void*)key.c_str();
     k.mv_size = key.length();
 
-    if (mdb_get(txn_, dbi_, &k, &v) == 0) {
+    if (mdb_get(txn, dbi_, &k, &v) == 0) {
         data.assign((uint8_t*)v.mv_data, (uint8_t*)v.mv_data + v.mv_size);
         return true;
     }
@@ -335,7 +341,7 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
     return rgb_data;
 }
 
-bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std::string& hash,
+bool DatabaseManager::generate_thumbnails(MDB_txn* txn, const std::string& filepath, const std::string& hash,
                                          unsigned char* image_data, int width, int height, int channels) {
     // Thumbnail sizes to generate (must match what PDF generator expects)
     std::vector<int> thumb_sizes = {32, 64, 128, 256, 512, 1024};
@@ -388,7 +394,7 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
 
                     if (!thumb_data.empty()) {
                         std::string thumb_key = hash + ":" + std::to_string(thumb_size);
-                        if (!store_key_data(thumb_key, thumb_data)) {
+                        if (!store_key_data(txn, thumb_key, thumb_data)) {
                             fprintf(stderr, "Error: Failed to store thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
                             thumbnails_generated = false;
                         }
@@ -482,7 +488,7 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
 
             if (thumb_success && !thumb_data.empty()) {
                 std::string thumb_key = hash + ":" + std::to_string(thumb_size);
-                if (!store_key_data(thumb_key, thumb_data)) {
+                if (!store_key_data(txn, thumb_key, thumb_data)) {
                     fprintf(stderr, "Error: Failed to store thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
                     thumbnails_generated = false;
                 }
@@ -566,27 +572,10 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
     snprintf(hash_str, sizeof(hash_str), "%016llx", (unsigned long long)hash);
 
     // Check if this hash already exists (duplicate detection)
+    // Note: We skip the duplicate check in parallel processing mode to avoid
+    // database access from worker threads. The writer thread will handle duplicates
+    // by checking if the key already exists before writing.
     std::string path_key = std::string(hash_str) + ":path";
-    std::string existing_path;
-
-    // Thread-safe check for existing path
-    {
-        std::lock_guard<std::mutex> lock(db_mutex_);
-        if (!begin_transaction()) {
-            stbi_image_free(image_data);
-            should_skip = true;
-            return false;
-        }
-
-        bool exists = get_key_value(path_key, existing_path);
-        abort_transaction();
-
-        if (exists) {
-            stbi_image_free(image_data);
-            should_skip = true;
-            return true; // Not an error, just a duplicate
-        }
-    }
 
     // Store file path as write task
     write_tasks.emplace_back(WriteTask::STORE_PATH, path_key, filepath);
@@ -805,37 +794,49 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
         }
 
         // Process batch in a single transaction
-        {
-            std::lock_guard<std::mutex> lock(db_mutex_);
+        MDB_txn* write_txn = nullptr;
+        if (!begin_write_transaction(write_txn)) {
+            fprintf(stderr, "Error: Failed to begin transaction for batch write\n");
+            continue;
+        }
 
-            if (!begin_transaction()) {
-                fprintf(stderr, "Error: Failed to begin transaction for batch write\n");
-                continue;
+        bool batch_success = true;
+        int successful_writes = 0;
+        
+        for (const auto& write_task : batch) {
+            bool success = false;
+
+            if (write_task.type == WriteTask::STORE_PATH) {
+                // Check for duplicates before storing path
+                std::string existing_value;
+                if (get_key_value(write_txn, write_task.key, existing_value)) {
+                    // Key already exists, skip this write (this is a duplicate)
+                    continue;
+                }
+                success = store_key_value(write_txn, write_task.key, write_task.string_value);
+                if (success) {
+                    successful_writes++; // Count new images
+                }
+            } else if (write_task.type == WriteTask::STORE_THUMBNAIL) {
+                // For thumbnails, we can overwrite if they exist
+                success = store_key_data(write_txn, write_task.key, write_task.data);
             }
 
-            bool batch_success = true;
-            for (const auto& write_task : batch) {
-                bool success = false;
-
-                if (write_task.type == WriteTask::STORE_PATH) {
-                    success = store_key_value(write_task.key, write_task.string_value);
-                } else if (write_task.type == WriteTask::STORE_THUMBNAIL) {
-                    success = store_key_data(write_task.key, write_task.data);
-                }
-
-                if (!success) {
-                    fprintf(stderr, "Error: Failed to store key '%s'\n", write_task.key.c_str());
-                    batch_success = false;
-                    break;
-                }
+            if (!success && write_task.type == WriteTask::STORE_PATH) {
+                fprintf(stderr, "Error: Failed to store key '%s'\n", write_task.key.c_str());
+                batch_success = false;
+                break;
             }
+        }
 
-            if (batch_success) {
-                commit_transaction();
-                write_count.fetch_add(batch.size());
+        if (batch_success) {
+            if (commit_transaction(write_txn)) {
+                write_count.fetch_add(successful_writes);
             } else {
-                abort_transaction();
+                fprintf(stderr, "Error: Failed to commit transaction\n");
             }
+        } else {
+            abort_transaction(write_txn);
         }
     }
 
@@ -929,10 +930,10 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
 
     reporter.update_status("Scanning complete");
 
-    std::cout << "[DEBUG] Parallel directory scan completed. Processed " << processed_count.load()
-              << " files from directory: " << directory << std::endl;
+    std::cout << "[DEBUG] Parallel directory scan completed. Processed " << write_count.load()
+              << " new images (out of " << processed_count.load() << " files processed) from directory: " << directory << std::endl;
 
-    return processed_count.load();
+    return write_count.load();
 }
 
 int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, StatusReporter& reporter) {
@@ -962,7 +963,8 @@ int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, 
     reporter.set_total_count(image_files.size());
     reporter.update_status("Processing images...");
 
-    if (!begin_transaction()) {
+    MDB_txn* write_txn = nullptr;
+    if (!begin_write_transaction(write_txn)) {
         return -1;
     }
 
@@ -1010,7 +1012,7 @@ int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, 
         // Check if this hash already exists (duplicate detection)
         std::string path_key = std::string(hash_str) + ":path";
         std::string existing_path;
-        if (get_key_value(path_key, existing_path)) {
+        if (get_key_value(write_txn, path_key, existing_path)) {
             stbi_image_free(image_data);
             skipped_count++;
             continue;
@@ -1019,7 +1021,7 @@ int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, 
         timer.start("Database Update");
 
         // Store file path
-        if (!store_key_value(path_key, filepath)) {
+        if (!store_key_value(write_txn, path_key, filepath)) {
             stbi_image_free(image_data);
             continue;
         }
@@ -1028,7 +1030,7 @@ int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, 
         timer.start("Thumbnail Generation");
 
         // Generate and store thumbnails
-        bool thumbnails_ok = generate_thumbnails(filepath, hash_str, image_data, width, height, channels);
+        bool thumbnails_ok = generate_thumbnails(write_txn, filepath, hash_str, image_data, width, height, channels);
 
         timer.stop("Thumbnail Generation");
 
@@ -1044,7 +1046,7 @@ int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, 
     timer.stop("Image Processing");
     timer.start("Database Commit");
 
-    bool success = commit_transaction();
+    bool success = commit_transaction(write_txn);
 
     timer.stop("Database Commit");
 
@@ -1064,7 +1066,7 @@ std::string DatabaseManager::extract_hash_from_key(const char* key, size_t key_s
     return "";
 }
 
-bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) {
+bool DatabaseManager::load_image_info(MDB_txn* txn, const std::string& hash, ImageInfo& info) {
     // Find largest thumbnail size available
     std::vector<int> sizes = {32, 64, 128, 256, 512, 1024};
     int best_size = 0;
@@ -1073,7 +1075,7 @@ bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) 
     for (int size : sizes) {
         std::string thumb_key = hash + ":" + std::to_string(size);
         std::vector<uint8_t> data;
-        if (get_key_data(thumb_key, data)) {
+        if (get_key_data(txn, thumb_key, data)) {
             best_size = size;
             best_data = std::move(data);
         }
@@ -1109,19 +1111,13 @@ std::vector<ImageInfo> DatabaseManager::get_all_images() {
     if (!is_open_) return images;
 
     MDB_txn* read_txn;
-    MDB_dbi read_dbi;
     MDB_cursor* cursor;
 
     if (mdb_txn_begin(env_, nullptr, MDB_RDONLY, &read_txn) != 0) {
         return images;
     }
 
-    if (mdb_dbi_open(read_txn, nullptr, 0, &read_dbi) != 0) {
-        mdb_txn_abort(read_txn);
-        return images;
-    }
-
-    if (mdb_cursor_open(read_txn, read_dbi, &cursor) != 0) {
+    if (mdb_cursor_open(read_txn, dbi_, &cursor) != 0) {
         mdb_txn_abort(read_txn);
         return images;
     }
@@ -1134,23 +1130,11 @@ std::vector<ImageInfo> DatabaseManager::get_all_images() {
             info.hash = hash;
             info.path = std::string((char*)data.mv_data, data.mv_size);
 
-            // Temporarily store current transaction state
-            MDB_txn* temp_txn = txn_;
-            MDB_dbi temp_dbi = dbi_;
-
-            // Use read transaction for loading image info
-            txn_ = read_txn;
-            dbi_ = read_dbi;
-
-            if (load_image_info(hash, info)) {
+            if (load_image_info(read_txn, hash, info)) {
                 images.push_back(std::move(info));
             } else {
                 fprintf(stderr, "Warning: Failed to load image info for '%s' (hash: %s)\n", info.path.c_str(), hash.c_str());
             }
-
-            // Restore transaction state
-            txn_ = temp_txn;
-            dbi_ = temp_dbi;
         }
     }
 
@@ -1176,6 +1160,23 @@ std::vector<ImageInfo> DatabaseManager::get_images_since_count(size_t last_count
     
     std::vector<ImageInfo> new_images(all_images.begin() + last_count, all_images.end());
     return new_images;
+}
+
+bool DatabaseManager::has_thumbnails(const std::string& hash) {
+    if (!is_open_) return false;
+
+    MDB_txn* read_txn;
+    if (!begin_read_transaction(read_txn)) {
+        return false;
+    }
+
+    // Check if any thumbnail exists for this hash
+    std::string thumb_key = hash + ":32"; // Check smallest size
+    std::vector<uint8_t> data;
+    bool has_thumb = get_key_data(read_txn, thumb_key, data);
+
+    abort_transaction(read_txn);
+    return has_thumb;
 }
 
 // Get EXIF orientation from JPEG file
