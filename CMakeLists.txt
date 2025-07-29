@@ -113,6 +113,42 @@ if(JPEG_FOUND)
     target_compile_options(layout_debug_test PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
 endif()
 
+# Incremental layout test (no GUI required)
+if(JPEG_FOUND)
+    add_executable(test_incremental_layout test_incremental_layout.cpp database.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
+    target_include_directories(test_incremental_layout PRIVATE
+        ${XXHASH_DIR}
+        ${STB_DIR}
+        ${LMDB_DIR}
+        ${STRUETYPE_DIR}
+        ${STRUETYPE_DIR}/examples
+        ${CONCURRENTQUEUE_DIR}
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${JPEG_INCLUDE_DIRS}
+        .
+    )
+    target_link_libraries(test_incremental_layout xxhash lmdb ${JPEG_LIBRARIES})
+    target_compile_options(test_incremental_layout PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
+endif()
+
+# Incremental scan test (no GUI required)
+if(JPEG_FOUND)
+    add_executable(test_incremental_scan test_incremental_scan.cpp database.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
+    target_include_directories(test_incremental_scan PRIVATE
+        ${XXHASH_DIR}
+        ${STB_DIR}
+        ${LMDB_DIR}
+        ${STRUETYPE_DIR}
+        ${STRUETYPE_DIR}/examples
+        ${CONCURRENTQUEUE_DIR}
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${JPEG_INCLUDE_DIRS}
+        .
+    )
+    target_link_libraries(test_incremental_scan xxhash lmdb ${JPEG_LIBRARIES})
+    target_compile_options(test_incremental_scan PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
+endif()
+
 # New unified picexplore executable
 if(JPEG_FOUND)
     add_executable(picexplore picexplore.cpp Fl_JustifiedLayout.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp third_party/TinyEXIF.cpp)
