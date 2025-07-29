@@ -82,6 +82,7 @@ public:
 
     // Database querying
     std::vector<ImageInfo> get_all_images();
+    std::vector<ImageInfo> get_images_since_count(size_t last_count);
     bool has_thumbnails(const std::string& hash);
 
     // Scanning control

@@ -1166,6 +1166,18 @@ std::vector<ImageInfo> DatabaseManager::get_all_images() {
     return images;
 }
 
+std::vector<ImageInfo> DatabaseManager::get_images_since_count(size_t last_count) {
+    std::vector<ImageInfo> all_images = get_all_images();
+    
+    // Return only the images beyond the last_count
+    if (last_count >= all_images.size()) {
+        return std::vector<ImageInfo>(); // No new images
+    }
+    
+    std::vector<ImageInfo> new_images(all_images.begin() + last_count, all_images.end());
+    return new_images;
+}
+
 // Get EXIF orientation from JPEG file
 int DatabaseManager::get_exif_orientation(const std::string& filepath) {
     // Only process JPEG files

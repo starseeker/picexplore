@@ -165,6 +165,7 @@ protected:
 
     // Database operations
     bool load_image_list();
+    void add_images_incremental(const std::vector<ImageInfo>& new_images);
 
     // Worker thread methods
     void thumbnail_worker_thread();
