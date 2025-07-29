@@ -4,7 +4,7 @@
  * Copyright (c) 2025 Clifford Yapp
  */
 
-#include "Fl_JustifiedLayout.h"
+#include "Fl_JustifiedLayout.hpp"
 #include <FL/fl_draw.H>
 #include <FL/Fl.H>
 #include <FL/Fl_RGB_Image.H>
@@ -15,7 +15,7 @@
 #include <thread>
 #include <filesystem>
 #include "stb_image.h"
-#include "utils.h"
+#include "utils.hpp"
 
 // Helper function to wrap Fl::awake call
 inline void debug_awake(void (*callback)(void*), void* data, const std::string& description = "") {
@@ -39,7 +39,7 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     , completed_tasks_(0)
     , total_tasks_(0)
     , thumbnail_notification_callback_(nullptr)
-    , batch_flush_scheduled_(false)
+      , batch_flush_scheduled_(false)
 {
     // Initialize layout configuration with reasonable defaults
     layout_config_.w = W - 20; // Leave some margin for scrollbar
@@ -63,20 +63,20 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
 static std::unique_ptr<Fl_RGB_Image> worker_decode_fl_rgb_image(const ImageInfo& info, int target_width, int target_height) {
     // Check if we have thumbnail data
     if (info.thumb_data.empty()) {
-        return nullptr;
+	return nullptr;
     }
 
     // Decode image from memory using stb_image
     int image_width, image_height, channels;
     unsigned char* pixels = stbi_load_from_memory(
-        info.thumb_data.data(),
-        static_cast<int>(info.thumb_data.size()),
-        &image_width, &image_height, &channels, 3  // Force RGB
-    );
+	    info.thumb_data.data(),
+	    static_cast<int>(info.thumb_data.size()),
+	    &image_width, &image_height, &channels, 3  // Force RGB
+	    );
 
     if (!pixels) {
-        std::cerr << "Failed to decode thumbnail for " << info.path << ": " << stbi_failure_reason() << std::endl;
-        return nullptr;
+	std::cerr << "Failed to decode thumbnail for " << info.path << ": " << stbi_failure_reason() << std::endl;
+	return nullptr;
     }
 
     // Calculate scaled dimensions while maintaining aspect ratio
@@ -84,13 +84,13 @@ static std::unique_ptr<Fl_RGB_Image> worker_decode_fl_rgb_image(const ImageInfo&
     int scaled_width, scaled_height;
 
     if (static_cast<double>(target_width) / target_height > aspect_ratio) {
-        // Target is wider than image - fit to height
-        scaled_height = target_height;
-        scaled_width = static_cast<int>(target_height * aspect_ratio);
+	// Target is wider than image - fit to height
+	scaled_height = target_height;
+	scaled_width = static_cast<int>(target_height * aspect_ratio);
     } else {
-        // Target is taller than image - fit to width
-        scaled_width = target_width;
-        scaled_height = static_cast<int>(target_width / aspect_ratio);
+	// Target is taller than image - fit to width
+	scaled_width = target_width;
+	scaled_height = static_cast<int>(target_width / aspect_ratio);
     }
 
     // Ensure minimum size
@@ -101,31 +101,31 @@ static std::unique_ptr<Fl_RGB_Image> worker_decode_fl_rgb_image(const ImageInfo&
 
     // Scale image if needed
     if (scaled_width != image_width || scaled_height != image_height) {
-        scaled_pixels = new unsigned char[scaled_width * scaled_height * 3];
+	scaled_pixels = new unsigned char[scaled_width * scaled_height * 3];
 
-        // Simple nearest-neighbor scaling for now
-        for (int y = 0; y < scaled_height; y++) {
-            for (int x = 0; x < scaled_width; x++) {
-                int src_x = (x * image_width) / scaled_width;
-                int src_y = (y * image_height) / scaled_height;
+	// Simple nearest-neighbor scaling for now
+	for (int y = 0; y < scaled_height; y++) {
+	    for (int x = 0; x < scaled_width; x++) {
+		int src_x = (x * image_width) / scaled_width;
+		int src_y = (y * image_height) / scaled_height;
 
-                // Ensure bounds
-                if (src_x >= image_width) src_x = image_width - 1;
-                if (src_y >= image_height) src_y = image_height - 1;
+		// Ensure bounds
+		if (src_x >= image_width) src_x = image_width - 1;
+		if (src_y >= image_height) src_y = image_height - 1;
 
-                int src_idx = (src_y * image_width + src_x) * 3;
-                int dst_idx = (y * scaled_width + x) * 3;
+		int src_idx = (src_y * image_width + src_x) * 3;
+		int dst_idx = (y * scaled_width + x) * 3;
 
-                scaled_pixels[dst_idx] = pixels[src_idx];
-                scaled_pixels[dst_idx + 1] = pixels[src_idx + 1];
-                scaled_pixels[dst_idx + 2] = pixels[src_idx + 2];
-            }
-        }
+		scaled_pixels[dst_idx] = pixels[src_idx];
+		scaled_pixels[dst_idx + 1] = pixels[src_idx + 1];
+		scaled_pixels[dst_idx + 2] = pixels[src_idx + 2];
+	    }
+	}
 
-        stbi_image_free(pixels);
-        pixels = scaled_pixels;
+	stbi_image_free(pixels);
+	pixels = scaled_pixels;
     } else {
-        scaled_pixels = pixels;
+	scaled_pixels = pixels;
     }
 
     // FLTK will take ownership of the pixel data, so we create a copy
@@ -133,9 +133,9 @@ static std::unique_ptr<Fl_RGB_Image> worker_decode_fl_rgb_image(const ImageInfo&
     std::memcpy(fltk_pixels, scaled_pixels, scaled_width * scaled_height * 3);
 
     if (scaled_pixels != pixels) {
-        delete[] scaled_pixels;
+	delete[] scaled_pixels;
     } else {
-        stbi_image_free(pixels);
+	stbi_image_free(pixels);
     }
 
     return std::make_unique<Fl_RGB_Image>(fltk_pixels, scaled_width, scaled_height, 3);
@@ -148,95 +148,95 @@ void Fl_JustifiedLayout::thumbnail_worker_thread() {
     int tasks_processed = 0;
 
     while (!should_stop_.load()) {
-        bool found_task = false;
+	bool found_task = false;
 
-        // Try high priority queue first
-        if (high_priority_queue_.try_dequeue(task)) {
-            found_task = true;
-            log_ui_debug("Worker dequeued HIGH priority task for image " + std::to_string(task.image_index) +
-                         " (" + std::to_string(task.target_width) + "x" + std::to_string(task.target_height) + ")");
-        }
-        // Fall back to low priority queue
-        else if (low_priority_queue_.try_dequeue(task)) {
-            found_task = true;
-            log_ui_debug("Worker dequeued LOW priority task for image " + std::to_string(task.image_index) +
-                         " (" + std::to_string(task.target_width) + "x" + std::to_string(task.target_height) + ")");
-        }
+	// Try high priority queue first
+	if (high_priority_queue_.try_dequeue(task)) {
+	    found_task = true;
+	    log_ui_debug("Worker dequeued HIGH priority task for image " + std::to_string(task.image_index) +
+		    " (" + std::to_string(task.target_width) + "x" + std::to_string(task.target_height) + ")");
+	}
+	// Fall back to low priority queue
+	else if (low_priority_queue_.try_dequeue(task)) {
+	    found_task = true;
+	    log_ui_debug("Worker dequeued LOW priority task for image " + std::to_string(task.image_index) +
+		    " (" + std::to_string(task.target_width) + "x" + std::to_string(task.target_height) + ")");
+	}
 
-        if (found_task) {
-            active_tasks_.fetch_add(1);
-            tasks_processed++;
+	if (found_task) {
+	    active_tasks_.fetch_add(1);
+	    tasks_processed++;
 
-            if (task.image_index >= 0 && task.image_index < static_cast<int>(images_.size())) {
-                const auto& img_info = images_[task.image_index];
+	    if (task.image_index >= 0 && task.image_index < static_cast<int>(images_.size())) {
+		const auto& img_info = images_[task.image_index];
 
-                // Create cache key
-                std::string cache_key = img_info.hash + "_" +
-                                      std::to_string(task.target_width) + "x" +
-                                      std::to_string(task.target_height);
+		// Create cache key
+		std::string cache_key = img_info.hash + "_" +
+		    std::to_string(task.target_width) + "x" +
+		    std::to_string(task.target_height);
 
-                // Check cache before generating thumbnail (avoid duplicate work)
-                {
-                    std::lock_guard<std::mutex> lock(image_cache_mutex_);
-                    if (image_cache_.find(cache_key) != image_cache_.end()) {
-                        // Thumbnail already cached
-                        active_tasks_.fetch_sub(1);
-                        completed_tasks_.fetch_add(1);
-                        continue;
-                    }
-                }
+		// Check cache before generating thumbnail (avoid duplicate work)
+		{
+		    std::lock_guard<std::mutex> lock(image_cache_mutex_);
+		    if (image_cache_.find(cache_key) != image_cache_.end()) {
+			// Thumbnail already cached
+			active_tasks_.fetch_sub(1);
+			completed_tasks_.fetch_add(1);
+			continue;
+		    }
+		}
 
-                std::unique_ptr<Fl_RGB_Image> thumbnail;
+		std::unique_ptr<Fl_RGB_Image> thumbnail;
 
-                // Check if image has thumbnails in database
-                if (img_info.has_thumbnails) {
-                    // Load from existing thumbnail data
-                    thumbnail = worker_decode_fl_rgb_image(img_info, task.target_width, task.target_height);
-                } else {
-                    // Generate thumbnail from source image using database
-                    if (database_) {
-                        // Generate thumbnails for this hash
-                        if (database_->generate_thumbnails_for_hash(img_info.hash, img_info.path)) {
-                            // Reload the image info to get the thumbnails
-                            ImageInfo updated_img = img_info;
-                            MDB_txn* read_txn;
-                            if (database_->begin_read_transaction(read_txn)) {
-                                if (database_->load_image_info(read_txn, img_info.hash, updated_img)) {
-                                    // Decode the thumbnail
-                                    thumbnail = worker_decode_fl_rgb_image(updated_img, task.target_width, task.target_height);
+		// Check if image has thumbnails in database
+		if (img_info.has_thumbnails) {
+		    // Load from existing thumbnail data
+		    thumbnail = worker_decode_fl_rgb_image(img_info, task.target_width, task.target_height);
+		} else {
+		    // Generate thumbnail from source image using database
+		    if (database_) {
+			// Generate thumbnails for this hash
+			if (database_->generate_thumbnails_for_hash(img_info.hash, img_info.path)) {
+			    // Reload the image info to get the thumbnails
+			    ImageInfo updated_img = img_info;
+			    MDB_txn* read_txn;
+			    if (database_->begin_read_transaction(read_txn)) {
+				if (database_->load_image_info(read_txn, img_info.hash, updated_img)) {
+				    // Decode the thumbnail
+				    thumbnail = worker_decode_fl_rgb_image(updated_img, task.target_width, task.target_height);
 
-                                    // Update the main image list
-                                    {
-                                        std::lock_guard<std::mutex> lock(image_cache_mutex_);
-                                        if (task.image_index < static_cast<int>(images_.size())) {
-                                            images_[task.image_index] = updated_img;
-                                        }
-                                    }
+				    // Update the main image list
+				    {
+					std::lock_guard<std::mutex> lock(image_cache_mutex_);
+					if (task.image_index < static_cast<int>(images_.size())) {
+					    images_[task.image_index] = updated_img;
+					}
+				    }
 
-                                    // Notify UI that thumbnail is ready
-                                    handle_thumbnail_ready(img_info.hash);
-                                }
-                                database_->abort_transaction(read_txn);
-                            }
-                        }
-                    }
-                }
+				    // Notify UI that thumbnail is ready
+				    handle_thumbnail_ready(img_info.hash);
+				}
+				database_->abort_transaction(read_txn);
+			    }
+			}
+		    }
+		}
 
-                if (thumbnail) {
-                    log_ui_debug("Thumbnail created for image " + std::to_string(task.image_index) + ", enqueueing result");
-                    ThumbnailResult result(task.image_index, std::move(thumbnail), cache_key);
-                    result_queue_.enqueue(std::move(result));
-                    debug_awake(result_processor_callback, this, "thumbnail generation result");
-                }
-            }
+		if (thumbnail) {
+		    log_ui_debug("Thumbnail created for image " + std::to_string(task.image_index) + ", enqueueing result");
+		    ThumbnailResult result(task.image_index, std::move(thumbnail), cache_key);
+		    result_queue_.enqueue(std::move(result));
+		    debug_awake(result_processor_callback, this, "thumbnail generation result");
+		}
+	    }
 
-            active_tasks_.fetch_sub(1);
-            completed_tasks_.fetch_add(1);
-        }
-        else {
-            // No tasks available, sleep briefly  
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
+	    active_tasks_.fetch_sub(1);
+	    completed_tasks_.fetch_add(1);
+	}
+	else {
+	    // No tasks available, sleep briefly  
+	    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
     }
 
     log_ui_debug("Thumbnail worker thread shutting down after processing " + std::to_string(tasks_processed) + " tasks");
@@ -244,25 +244,25 @@ void Fl_JustifiedLayout::thumbnail_worker_thread() {
 
 void Fl_JustifiedLayout::result_processor_callback(void* data) {
     if (data) {
-        static_cast<Fl_JustifiedLayout*>(data)->process_thumbnail_results();
+	static_cast<Fl_JustifiedLayout*>(data)->process_thumbnail_results();
     }
 }
 
 void Fl_JustifiedLayout::progress_update_callback(void* data) {
     if (data) {
-        Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
-        if (widget->generating_.load() && widget->content_widget_) {
-            widget->content_widget_->redraw();
-            // Schedule next update
-            Fl::add_timeout(0.1, progress_update_callback, data);
-        }
+	Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
+	if (widget->generating_.load() && widget->content_widget_) {
+	    widget->content_widget_->redraw();
+	    // Schedule next update
+	    Fl::add_timeout(0.1, progress_update_callback, data);
+	}
     }
 }
 
 void Fl_JustifiedLayout::process_thumbnail_results() {
     static std::atomic_flag processing = ATOMIC_FLAG_INIT;
     if (processing.test_and_set()) {
-        return;  // Avoid re-entry
+	return;  // Avoid re-entry
     }
 
     ThumbnailResult result;
@@ -271,96 +271,96 @@ void Fl_JustifiedLayout::process_thumbnail_results() {
 
     // Process all available results
     while (result_queue_.try_dequeue(result)) {
-        results_processed++;
+	results_processed++;
 
-        if (result.thumbnail) {
-            std::lock_guard<std::mutex> lock(image_cache_mutex_);
-            if (image_cache_.find(result.cache_key) != image_cache_.end()) {
-                continue; // Already in cache, skip duplicate job
-            }
-            image_cache_[result.cache_key] = std::move(result.thumbnail);
-            any_processed = true;
-        }
+	if (result.thumbnail) {
+	    std::lock_guard<std::mutex> lock(image_cache_mutex_);
+	    if (image_cache_.find(result.cache_key) != image_cache_.end()) {
+		continue; // Already in cache, skip duplicate job
+	    }
+	    image_cache_[result.cache_key] = std::move(result.thumbnail);
+	    any_processed = true;
+	}
     }
 
     log_batch_debug("Processed " + std::to_string(results_processed) + " thumbnail results, any_processed: " + 
-                   (any_processed ? "true" : "false"));
+	    (any_processed ? "true" : "false"));
 
     // Trigger redraw if any thumbnails were processed
     if (any_processed) {
-        if (content_widget_) {
-            content_widget_->redraw();
-        }
+	if (content_widget_) {
+	    content_widget_->redraw();
+	}
 
-        // Update progress if callback is set
-        if (progress_callback_) {
-            int completed = completed_tasks_.load();
-            int total = total_tasks_.load();
-            progress_callback_(completed, total, "Generating thumbnails...");
-        }
+	// Update progress if callback is set
+	if (progress_callback_) {
+	    int completed = completed_tasks_.load();
+	    int total = total_tasks_.load();
+	    progress_callback_(completed, total, "Generating thumbnails...");
+	}
     }
 
     processing.clear();
 }
 
 int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority) {
-	int num_queued = 0;
+    int num_queued = 0;
     for (int idx : indices) {
-        if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
-            const auto& item = layout_items_[idx];
-            const auto& img = images_[idx];
+	if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
+	    const auto& item = layout_items_[idx];
+	    const auto& img = images_[idx];
 
-            // Skip images that already have thumbnails
-            if (img.has_thumbnails) {
-                continue;
-            }
+	    // Skip images that already have thumbnails
+	    if (img.has_thumbnails) {
+		continue;
+	    }
 
-            int target_w = static_cast<int>(item.w) - 2 * THUMBNAIL_BORDER_WIDTH;
-            int target_h = static_cast<int>(item.h) - 2 * THUMBNAIL_BORDER_WIDTH;
+	    int target_w = static_cast<int>(item.w) - 2 * THUMBNAIL_BORDER_WIDTH;
+	    int target_h = static_cast<int>(item.h) - 2 * THUMBNAIL_BORDER_WIDTH;
 
-            // Check if we already have a cached version
-            std::string cache_key = img.hash + "_" +
-                std::to_string(target_w) + "x" + std::to_string(target_h);
-            {
-                std::lock_guard<std::mutex> lock(image_cache_mutex_);
-                if (image_cache_.find(cache_key) != image_cache_.end()) {
-                    continue; // Already cached, do not queue
-                }
-            }
+	    // Check if we already have a cached version
+	    std::string cache_key = img.hash + "_" +
+		std::to_string(target_w) + "x" + std::to_string(target_h);
+	    {
+		std::lock_guard<std::mutex> lock(image_cache_mutex_);
+		if (image_cache_.find(cache_key) != image_cache_.end()) {
+		    continue; // Already cached, do not queue
+		}
+	    }
 
-            // Queue thumbnail generation task for this image
-            ThumbnailTask task(idx, priority, target_w, target_h);
+	    // Queue thumbnail generation task for this image
+	    ThumbnailTask task(idx, priority, target_w, target_h);
 
-            if (priority == ThumbnailPriority::HIGH) {
-                high_priority_queue_.enqueue(task);
-            } else {
-                low_priority_queue_.enqueue(task);
-            }
+	    if (priority == ThumbnailPriority::HIGH) {
+		high_priority_queue_.enqueue(task);
+	    } else {
+		low_priority_queue_.enqueue(task);
+	    }
 
-            total_tasks_.fetch_add(1);
-            num_queued++;
-        }
+	    total_tasks_.fetch_add(1);
+	    num_queued++;
+	}
     }
-    
+
     if (num_queued > 0) {
-        log_ui_debug("Queued " + std::to_string(num_queued) + " " + 
-                    (priority == ThumbnailPriority::HIGH ? "HIGH" : "LOW") + 
-                    " priority thumbnail tasks, total tasks now: " + std::to_string(total_tasks_.load()));
+	log_ui_debug("Queued " + std::to_string(num_queued) + " " + 
+		(priority == ThumbnailPriority::HIGH ? "HIGH" : "LOW") + 
+		" priority thumbnail tasks, total tasks now: " + std::to_string(total_tasks_.load()));
     }
-    
+
     return num_queued;
 }
 
 Fl_JustifiedLayout::~Fl_JustifiedLayout() {
     // Cancel any pending batch flush timers
     if (batch_flush_scheduled_.load()) {
-        Fl::remove_timeout(batch_flush_callback, this);
-        batch_flush_scheduled_.store(false);
+	Fl::remove_timeout(batch_flush_callback, this);
+	batch_flush_scheduled_.store(false);
     }
-    
+
     // Flush any remaining batch before shutdown
     flush_pending_image_batch(true);
-    
+
     cancel_directory_scan();
     stop_background_generation();
     clear_image_cache();
@@ -377,20 +377,20 @@ bool Fl_JustifiedLayout::set_database_path(const std::string& db_path) {
 
     // Set up callback for two-stage processing
     database_->set_image_info_callback([this](const ImageInfo& info) {
-        // This callback is called from worker threads, so we need to use Fl::awake
-        auto info_copy = std::make_shared<ImageInfo>(info);
-        debug_awake([](void* data) {
-            auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>*>(data);
-            params->first->handle_image_info_ready(*(params->second));
-            delete params;
-        }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>(this, info_copy), "image info ready from database");
-    });
+	    // This callback is called from worker threads, so we need to use Fl::awake
+	    auto info_copy = std::make_shared<ImageInfo>(info);
+	    debug_awake([](void* data) {
+		    auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>*>(data);
+		    params->first->handle_image_info_ready(*(params->second));
+		    delete params;
+		    }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>(this, info_copy), "image info ready from database");
+	    });
 
     // Try to open the database
     if (!database_->open(db_path)) {
-        std::cerr << "Failed to open database: " << db_path << std::endl;
-        database_.reset();
-        return false;
+	std::cerr << "Failed to open database: " << db_path << std::endl;
+	database_.reset();
+	return false;
     }
 
     // Load image list
@@ -428,7 +428,7 @@ void Fl_JustifiedLayout::start_background_generation() {
     worker_threads_.reserve(num_workers);
 
     for (int i = 0; i < num_workers; ++i) {
-        worker_threads_.emplace_back(&Fl_JustifiedLayout::thumbnail_worker_thread, this);
+	worker_threads_.emplace_back(&Fl_JustifiedLayout::thumbnail_worker_thread, this);
     }
 
     // Queue high priority tasks for visible region
@@ -437,12 +437,12 @@ void Fl_JustifiedLayout::start_background_generation() {
     // Queue low priority tasks for all images
     std::vector<int> all_indices;
     for (int i = 0; i < static_cast<int>(images_.size()); ++i) {
-        all_indices.push_back(i);
+	all_indices.push_back(i);
     }
     queue_thumbnail_tasks(all_indices, ThumbnailPriority::LOW);
 
     if (progress_callback_) {
-        progress_callback_(0, total_tasks_.load(), "Starting background generation...");
+	progress_callback_(0, total_tasks_.load(), "Starting background generation...");
     }
 
     // Start periodic progress updates
@@ -454,10 +454,10 @@ void Fl_JustifiedLayout::stop_background_generation() {
 
     // Wait for all worker threads to complete
     for (size_t i = 0; i < worker_threads_.size(); ++i) {
-        auto& thread = worker_threads_[i];
-        if (thread.joinable()) {
-            thread.join();
-        }
+	auto& thread = worker_threads_[i];
+	if (thread.joinable()) {
+	    thread.join();
+	}
     }
     worker_threads_.clear();
 
@@ -483,7 +483,7 @@ void Fl_JustifiedLayout::prefetch_visible_region() {
     // Queue visible region for high priority processing
     std::vector<int> visible_indices;
     for (int i = visible_start_idx_; i <= visible_end_idx_; ++i) {
-        visible_indices.push_back(i);
+	visible_indices.push_back(i);
     }
 
     if (!visible_indices.empty()) {
@@ -499,11 +499,11 @@ void Fl_JustifiedLayout::prefetch_next_region() {
     int next_end = std::min(next_start + 20, static_cast<int>(images_.size()) - 1);
 
     if (next_start <= next_end) {
-        std::vector<int> next_indices;
-        for (int i = next_start; i <= next_end; ++i) {
-            next_indices.push_back(i);
-        }
-        queue_thumbnail_tasks(next_indices, ThumbnailPriority::HIGH);
+	std::vector<int> next_indices;
+	for (int i = next_start; i <= next_end; ++i) {
+	    next_indices.push_back(i);
+	}
+	queue_thumbnail_tasks(next_indices, ThumbnailPriority::HIGH);
     }
 }
 
@@ -515,31 +515,31 @@ void Fl_JustifiedLayout::prefetch_previous_region() {
     int prev_start = std::max(prev_end - 20, 0);
 
     if (prev_start <= prev_end) {
-        std::vector<int> prev_indices;
-        for (int i = prev_start; i <= prev_end; ++i) {
-            prev_indices.push_back(i);
-        }
-        queue_thumbnail_tasks(prev_indices, ThumbnailPriority::HIGH);
+	std::vector<int> prev_indices;
+	for (int i = prev_start; i <= prev_end; ++i) {
+	    prev_indices.push_back(i);
+	}
+	queue_thumbnail_tasks(prev_indices, ThumbnailPriority::HIGH);
     }
 }
 
 int Fl_JustifiedLayout::handle(int event) {
     switch (event) {
-        case FL_FOCUS:
-        case FL_UNFOCUS:
-            return 1;
-        case FL_MOVE:
-        case FL_DRAG:
-            // Check for scroll position changes
-            update_visibility_and_queue_thumbnails();
-            break;
-        case FL_PUSH:
-            break;
-        case FL_RELEASE:
-            break;
-        case FL_KEYDOWN:
-        case FL_KEYUP:
-            break;
+	case FL_FOCUS:
+	case FL_UNFOCUS:
+	    return 1;
+	case FL_MOVE:
+	case FL_DRAG:
+	    // Check for scroll position changes
+	    update_visibility_and_queue_thumbnails();
+	    break;
+	case FL_PUSH:
+	    break;
+	case FL_RELEASE:
+	    break;
+	case FL_KEYDOWN:
+	case FL_KEYUP:
+	    break;
     }
 
     // Let Fl_Scroll handle scrolling and other events
@@ -548,7 +548,7 @@ int Fl_JustifiedLayout::handle(int event) {
 
     // After any scroll handling, update visibility
     if (event == FL_MOUSEWHEEL || event == FL_PUSH || event == FL_DRAG) {
-        update_visibility_and_queue_thumbnails();
+	update_visibility_and_queue_thumbnails();
     }
 
     return result;
@@ -565,17 +565,17 @@ void Fl_JustifiedLayout::resize(int X, int Y, int W, int H) {
 
     // If generation is active, queue visible region for high priority
     if (generating_.load()) {
-        prefetch_visible_region();
+	prefetch_visible_region();
     }
 }
 
 void Fl_JustifiedLayout::relayout() {
     if (images_.empty()) {
-        if (content_widget_) {
-            content_widget_->resize(x(), y(), w(), h());
-        }
-        redraw();
-        return;
+	if (content_widget_) {
+	    content_widget_->resize(x(), y(), w(), h());
+	}
+	redraw();
+	return;
     }
 
     clear_layout();
@@ -584,8 +584,8 @@ void Fl_JustifiedLayout::relayout() {
 
     // Resize content widget to match the total layout height
     if (content_widget_) {
-        int content_height = std::max(static_cast<int>(total_height_), h());
-        content_widget_->resize(x(), y(), w(), content_height);
+	int content_height = std::max(static_cast<int>(total_height_), h());
+	content_widget_->resize(x(), y(), w(), content_height);
     }
 
     redraw();
@@ -602,9 +602,9 @@ void Fl_JustifiedLayout::calculate_layout() {
     // Convert images to layout input format
     std::vector<Item> input_items;
     for (const auto& img : images_) {
-        Item item;
-        item.ar = img.aspect_ratio;
-        input_items.push_back(item);
+	Item item;
+	item.ar = img.aspect_ratio;
+	input_items.push_back(item);
     }
 
     // Calculate justified layout
@@ -626,23 +626,23 @@ void Fl_JustifiedLayout::calculate_layout() {
     // Visibility calculation
     bool found_first = false;
     for (size_t i = 0; i < layout_items_.size(); ++i) {
-        const auto& item = layout_items_[i];
-        int item_top = static_cast<int>(item.t);
-        int item_bottom = item_top + static_cast<int>(item.h);
+	const auto& item = layout_items_[i];
+	int item_top = static_cast<int>(item.t);
+	int item_bottom = item_top + static_cast<int>(item.h);
 
-        // Check if item intersects with visible viewport
-        if (item_bottom >= scroll_y && item_top <= scroll_y + viewport_height) {
-            if (!found_first) {
-                visible_start_idx_ = static_cast<int>(i);
-                found_first = true;
-            }
-            visible_end_idx_ = static_cast<int>(i);
-        }
+	// Check if item intersects with visible viewport
+	if (item_bottom >= scroll_y && item_top <= scroll_y + viewport_height) {
+	    if (!found_first) {
+		visible_start_idx_ = static_cast<int>(i);
+		found_first = true;
+	    }
+	    visible_end_idx_ = static_cast<int>(i);
+	}
     }
 
     // Trigger prefetching when visible region is calculated
     if (generating_.load()) {
-        prefetch_visible_region();
+	prefetch_visible_region();
     }
 
 }
@@ -660,7 +660,7 @@ void Fl_JustifiedLayout::clear_image_cache() {
 Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, int target_width, int target_height) {
     // Check if we have thumbnail data
     if (info.thumb_data.empty()) {
-        return nullptr;
+	return nullptr;
     }
 
     // Create cache key based on hash and target dimensions
@@ -668,24 +668,24 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
 
     // Check cache first (thread-safe)
     {
-        std::lock_guard<std::mutex> lock(image_cache_mutex_);
-        auto cache_it = image_cache_.find(cache_key);
-        if (cache_it != image_cache_.end()) {
-            return cache_it->second.get();
-        }
+	std::lock_guard<std::mutex> lock(image_cache_mutex_);
+	auto cache_it = image_cache_.find(cache_key);
+	if (cache_it != image_cache_.end()) {
+	    return cache_it->second.get();
+	}
     }
 
     // Decode image from memory using stb_image
     int image_width, image_height, channels;
     unsigned char* pixels = stbi_load_from_memory(
-        info.thumb_data.data(),
-        static_cast<int>(info.thumb_data.size()),
-        &image_width, &image_height, &channels, 3  // Force RGB
-    );
+	    info.thumb_data.data(),
+	    static_cast<int>(info.thumb_data.size()),
+	    &image_width, &image_height, &channels, 3  // Force RGB
+	    );
 
     if (!pixels) {
-        std::cerr << "Failed to decode thumbnail for " << info.path << ": " << stbi_failure_reason() << std::endl;
-        return nullptr;
+	std::cerr << "Failed to decode thumbnail for " << info.path << ": " << stbi_failure_reason() << std::endl;
+	return nullptr;
     }
 
     // Calculate scaled dimensions while maintaining aspect ratio
@@ -693,13 +693,13 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
     int scaled_width, scaled_height;
 
     if (static_cast<double>(target_width) / target_height > aspect_ratio) {
-        // Target is wider than image - fit to height
-        scaled_height = target_height;
-        scaled_width = static_cast<int>(target_height * aspect_ratio);
+	// Target is wider than image - fit to height
+	scaled_height = target_height;
+	scaled_width = static_cast<int>(target_height * aspect_ratio);
     } else {
-        // Target is taller than image - fit to width
-        scaled_width = target_width;
-        scaled_height = static_cast<int>(target_width / aspect_ratio);
+	// Target is taller than image - fit to width
+	scaled_width = target_width;
+	scaled_height = static_cast<int>(target_width / aspect_ratio);
     }
 
     // Ensure minimum size
@@ -710,31 +710,31 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
 
     // Scale image if needed
     if (scaled_width != image_width || scaled_height != image_height) {
-        scaled_pixels = new unsigned char[scaled_width * scaled_height * 3];
+	scaled_pixels = new unsigned char[scaled_width * scaled_height * 3];
 
-        // Simple nearest-neighbor scaling for now
-        for (int y = 0; y < scaled_height; y++) {
-            for (int x = 0; x < scaled_width; x++) {
-                int src_x = (x * image_width) / scaled_width;
-                int src_y = (y * image_height) / scaled_height;
+	// Simple nearest-neighbor scaling for now
+	for (int y = 0; y < scaled_height; y++) {
+	    for (int x = 0; x < scaled_width; x++) {
+		int src_x = (x * image_width) / scaled_width;
+		int src_y = (y * image_height) / scaled_height;
 
-                // Ensure bounds
-                if (src_x >= image_width) src_x = image_width - 1;
-                if (src_y >= image_height) src_y = image_height - 1;
+		// Ensure bounds
+		if (src_x >= image_width) src_x = image_width - 1;
+		if (src_y >= image_height) src_y = image_height - 1;
 
-                int src_idx = (src_y * image_width + src_x) * 3;
-                int dst_idx = (y * scaled_width + x) * 3;
+		int src_idx = (src_y * image_width + src_x) * 3;
+		int dst_idx = (y * scaled_width + x) * 3;
 
-                scaled_pixels[dst_idx] = pixels[src_idx];
-                scaled_pixels[dst_idx + 1] = pixels[src_idx + 1];
-                scaled_pixels[dst_idx + 2] = pixels[src_idx + 2];
-            }
-        }
+		scaled_pixels[dst_idx] = pixels[src_idx];
+		scaled_pixels[dst_idx + 1] = pixels[src_idx + 1];
+		scaled_pixels[dst_idx + 2] = pixels[src_idx + 2];
+	    }
+	}
 
-        stbi_image_free(pixels);
-        pixels = scaled_pixels;
+	stbi_image_free(pixels);
+	pixels = scaled_pixels;
     } else {
-        scaled_pixels = pixels;
+	scaled_pixels = pixels;
     }
 
     // Create FLTK RGB image
@@ -743,9 +743,9 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
     std::memcpy(fltk_pixels, scaled_pixels, scaled_width * scaled_height * 3);
 
     if (scaled_pixels != pixels) {
-        delete[] scaled_pixels;
+	delete[] scaled_pixels;
     } else {
-        stbi_image_free(pixels);
+	stbi_image_free(pixels);
     }
 
     auto fltk_image = std::make_unique<Fl_RGB_Image>(fltk_pixels, scaled_width, scaled_height, 3);
@@ -753,8 +753,8 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
 
     // Cache the image (thread-safe)
     {
-        std::lock_guard<std::mutex> lock(image_cache_mutex_);
-        image_cache_[cache_key] = std::move(fltk_image);
+	std::lock_guard<std::mutex> lock(image_cache_mutex_);
+	image_cache_[cache_key] = std::move(fltk_image);
     }
 
     return result;
@@ -765,26 +765,26 @@ void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const 
     Fl_RGB_Image* thumb_image = load_thumbnail_image(info, w - 2 * THUMBNAIL_BORDER_WIDTH, h - 2 * THUMBNAIL_BORDER_WIDTH);
 
     if (thumb_image) {
-        // Draw border
-        fl_color(FL_GRAY);
-        fl_rect(x, y, w, h);
+	// Draw border
+	fl_color(FL_GRAY);
+	fl_rect(x, y, w, h);
 
-        // Fill background
-        fl_color(FL_WHITE);
-        fl_rectf(x + THUMBNAIL_BORDER_WIDTH, y + THUMBNAIL_BORDER_WIDTH,
-                w - 2 * THUMBNAIL_BORDER_WIDTH, h - 2 * THUMBNAIL_BORDER_WIDTH);
+	// Fill background
+	fl_color(FL_WHITE);
+	fl_rectf(x + THUMBNAIL_BORDER_WIDTH, y + THUMBNAIL_BORDER_WIDTH,
+		w - 2 * THUMBNAIL_BORDER_WIDTH, h - 2 * THUMBNAIL_BORDER_WIDTH);
 
-        // Center the image within the allocated space
-        int img_w = thumb_image->w();
-        int img_h = thumb_image->h();
-        int img_x = x + THUMBNAIL_BORDER_WIDTH + (w - 2 * THUMBNAIL_BORDER_WIDTH - img_w) / 2;
-        int img_y = y + THUMBNAIL_BORDER_WIDTH + (h - 2 * THUMBNAIL_BORDER_WIDTH - img_h) / 2;
+	// Center the image within the allocated space
+	int img_w = thumb_image->w();
+	int img_h = thumb_image->h();
+	int img_x = x + THUMBNAIL_BORDER_WIDTH + (w - 2 * THUMBNAIL_BORDER_WIDTH - img_w) / 2;
+	int img_y = y + THUMBNAIL_BORDER_WIDTH + (h - 2 * THUMBNAIL_BORDER_WIDTH - img_h) / 2;
 
-        // Draw the image
-        thumb_image->draw(img_x, img_y);
+	// Draw the image
+	thumb_image->draw(img_x, img_y);
     } else {
-        // Fallback to placeholder rendering
-        draw_thumbnail_placeholder(x, y, w, h, info);
+	// Fallback to placeholder rendering
+	draw_thumbnail_placeholder(x, y, w, h, info);
     }
 }
 
@@ -794,16 +794,16 @@ void Fl_JustifiedLayout::draw_thumbnail_placeholder(int x, int y, int w, int h, 
 
     // Draw outer border with different color based on state
     if (is_loading) {
-        fl_color(FL_BLUE);  // Blue border when thumbnails are being generated
+	fl_color(FL_BLUE);  // Blue border when thumbnails are being generated
     } else {
-        fl_color(FL_DARK2); // Darker border for newly discovered images
+	fl_color(FL_DARK2); // Darker border for newly discovered images
     }
     fl_rect(x, y, w, h);
 
     // Fill interior with light gray background
     fl_color(FL_LIGHT2);
     fl_rectf(x + THUMBNAIL_BORDER_WIDTH, y + THUMBNAIL_BORDER_WIDTH,
-            w - 2 * THUMBNAIL_BORDER_WIDTH, h - 2 * THUMBNAIL_BORDER_WIDTH);
+	    w - 2 * THUMBNAIL_BORDER_WIDTH, h - 2 * THUMBNAIL_BORDER_WIDTH);
 
     // Draw placeholder content with dark text
     fl_color(FL_DARK3);
@@ -813,12 +813,12 @@ void Fl_JustifiedLayout::draw_thumbnail_placeholder(int x, int y, int w, int h, 
     std::string filename = info.path;
     size_t pos = filename.find_last_of('/');
     if (pos != std::string::npos) {
-        filename = filename.substr(pos + 1);
+	filename = filename.substr(pos + 1);
     }
 
     // Truncate filename if too long
     if (filename.length() > 20) {
-        filename = filename.substr(0, 17) + "...";
+	filename = filename.substr(0, 17) + "...";
     }
 
     int text_w = 0, text_h = 0;
@@ -827,22 +827,22 @@ void Fl_JustifiedLayout::draw_thumbnail_placeholder(int x, int y, int w, int h, 
 
     // Show loading indicator if generating
     if (is_loading) {
-        fl_color(FL_BLUE);
-        int loading_w = 0, loading_h = 0;
-        const char* loading_text = "[ Loading... ]";
-        fl_measure(loading_text, loading_w, loading_h);
-        fl_draw(loading_text, x + (w - loading_w) / 2, text_y);
-        fl_color(FL_DARK3);
-        text_y += 15;
+	fl_color(FL_BLUE);
+	int loading_w = 0, loading_h = 0;
+	const char* loading_text = "[ Loading... ]";
+	fl_measure(loading_text, loading_w, loading_h);
+	fl_draw(loading_text, x + (w - loading_w) / 2, text_y);
+	fl_color(FL_DARK3);
+	text_y += 15;
     } else {
-        // Show "New Image" indicator for newly discovered images
-        fl_color(FL_DARK_GREEN);
-        int new_w = 0, new_h = 0;
-        const char* new_text = "[ New Image ]";
-        fl_measure(new_text, new_w, new_h);
-        fl_draw(new_text, x + (w - new_w) / 2, text_y);
-        fl_color(FL_DARK3);
-        text_y += 15;
+	// Show "New Image" indicator for newly discovered images
+	fl_color(FL_DARK_GREEN);
+	int new_w = 0, new_h = 0;
+	const char* new_text = "[ New Image ]";
+	fl_measure(new_text, new_w, new_h);
+	fl_draw(new_text, x + (w - new_w) / 2, text_y);
+	fl_color(FL_DARK3);
+	text_y += 15;
     }
 
     // Draw filename
@@ -881,34 +881,34 @@ void Fl_JustifiedLayout::handle_click(int click_x, int click_y) {
 
     // Find clicked thumbnail
     for (size_t i = visible_start_idx_; i <= visible_end_idx_ && i < layout_items_.size(); ++i) {
-        const auto& item = layout_items_[i];
+	const auto& item = layout_items_[i];
 
-        int item_x = static_cast<int>(item.l);
-        int item_y = static_cast<int>(item.t);
-        int item_w = static_cast<int>(item.w);
-        int item_h = static_cast<int>(item.h);
+	int item_x = static_cast<int>(item.l);
+	int item_y = static_cast<int>(item.t);
+	int item_w = static_cast<int>(item.w);
+	int item_h = static_cast<int>(item.h);
 
-        if (rel_x >= item_x && rel_x < item_x + item_w &&
-            rel_y >= item_y && rel_y < item_y + item_h) {
+	if (rel_x >= item_x && rel_x < item_x + item_w &&
+		rel_y >= item_y && rel_y < item_y + item_h) {
 
-            // Update selection
-            selected_index_ = static_cast<int>(i);
-            redraw();
+	    // Update selection
+	    selected_index_ = static_cast<int>(i);
+	    redraw();
 
-            // Call selection callback
-            if (selection_callback_ && i < images_.size()) {
-                selection_callback_(images_[i].path, images_[i]);
-            }
+	    // Call selection callback
+	    if (selection_callback_ && i < images_.size()) {
+		selection_callback_(images_[i].path, images_[i]);
+	    }
 
-            break;
-        }
+	    break;
+	}
     }
 }
 
 // Fl_JustifiedLayout_Content implementation
 Fl_JustifiedLayout_Content::Fl_JustifiedLayout_Content(int X, int Y, int W, int H, Fl_JustifiedLayout* parent)
     : Fl_Widget(X, Y, W, H), parent_(parent) {
-}
+    }
 
 void Fl_JustifiedLayout_Content::draw() {
     if (!parent_) return;
@@ -918,14 +918,14 @@ void Fl_JustifiedLayout_Content::draw() {
     fl_rectf(x(), y(), w(), h());
 
     if (parent_->images_.empty()) {
-        // Draw "no images" message
-        fl_color(FL_BLACK);
-        fl_font(FL_HELVETICA, 14);
-        const char* msg = "No images to display. Set database or directory path.";
-        int tw = 0, th = 0;
-        fl_measure(msg, tw, th);
-        fl_draw(msg, x() + (w() - tw) / 2, y() + (h() - th) / 2);
-        return;
+	// Draw "no images" message
+	fl_color(FL_BLACK);
+	fl_font(FL_HELVETICA, 14);
+	const char* msg = "No images to display. Set database or directory path.";
+	int tw = 0, th = 0;
+	fl_measure(msg, tw, th);
+	fl_draw(msg, x() + (w() - tw) / 2, y() + (h() - th) / 2);
+	return;
     }
 
     // Calculate visible items based on current scroll position
@@ -935,62 +935,62 @@ void Fl_JustifiedLayout_Content::draw() {
     fl_push_clip(x(), y(), w(), h());
 
     for (size_t i = parent_->visible_start_idx_; i <= parent_->visible_end_idx_ && i < parent_->layout_items_.size(); ++i) {
-        const auto& item = parent_->layout_items_[i];
-        const auto& img = parent_->images_[i];
+	const auto& item = parent_->layout_items_[i];
+	const auto& img = parent_->images_[i];
 
-        int item_x = x() + static_cast<int>(item.l);
-        int item_y = y() + static_cast<int>(item.t);
-        int item_w = static_cast<int>(item.w);
-        int item_h = static_cast<int>(item.h);
+	int item_x = x() + static_cast<int>(item.l);
+	int item_y = y() + static_cast<int>(item.t);
+	int item_w = static_cast<int>(item.w);
+	int item_h = static_cast<int>(item.h);
 
-        // Skip items completely outside visible area
-        if (item_y + item_h < y() || item_y > y() + h()) continue;
+	// Skip items completely outside visible area
+	if (item_y + item_h < y() || item_y > y() + h()) continue;
 
-        // Draw selection highlight if selected
-        if (static_cast<int>(i) == parent_->selected_index_) {
-            parent_->draw_selection_highlight(item_x, item_y, item_w, item_h);
-        }
+	// Draw selection highlight if selected
+	if (static_cast<int>(i) == parent_->selected_index_) {
+	    parent_->draw_selection_highlight(item_x, item_y, item_w, item_h);
+	}
 
-        // Check if image has thumbnails
-        if (img.has_thumbnails) {
-            parent_->draw_thumbnail_image(item_x, item_y, item_w, item_h, img);
-        } else {
-            // Draw loading indicator for images without thumbnails
-            parent_->draw_loading_indicator(item_x, item_y, item_w, item_h);
-        }
+	// Check if image has thumbnails
+	if (img.has_thumbnails) {
+	    parent_->draw_thumbnail_image(item_x, item_y, item_w, item_h, img);
+	} else {
+	    // Draw loading indicator for images without thumbnails
+	    parent_->draw_loading_indicator(item_x, item_y, item_w, item_h);
+	}
     }
 
     fl_pop_clip();
 
     // Draw progress indicator if generating
     if (parent_->generating_.load()) {
-        int completed = parent_->completed_tasks_.load();
-        int total = parent_->total_tasks_.load();
-        int active = parent_->active_tasks_.load();
+	int completed = parent_->completed_tasks_.load();
+	int total = parent_->total_tasks_.load();
+	int active = parent_->active_tasks_.load();
 
-        // Draw progress background
-        fl_color(FL_YELLOW);
-        fl_rectf(x() + w() - 150, y() + 5, 145, 25);
-        fl_color(FL_BLACK);
-        fl_rect(x() + w() - 150, y() + 5, 145, 25);
+	// Draw progress background
+	fl_color(FL_YELLOW);
+	fl_rectf(x() + w() - 150, y() + 5, 145, 25);
+	fl_color(FL_BLACK);
+	fl_rect(x() + w() - 150, y() + 5, 145, 25);
 
-        // Draw progress bar
-        if (total > 0) {
-            int progress_width = (completed * 140) / total;
-            fl_color(FL_GREEN);
-            fl_rectf(x() + w() - 148, y() + 7, progress_width, 8);
-        }
+	// Draw progress bar
+	if (total > 0) {
+	    int progress_width = (completed * 140) / total;
+	    fl_color(FL_GREEN);
+	    fl_rectf(x() + w() - 148, y() + 7, progress_width, 8);
+	}
 
-        // Draw progress text
-        fl_font(FL_HELVETICA, 9);
-        char progress_text[64];
-        if (total > 0) {
-            snprintf(progress_text, sizeof(progress_text), "%d/%d (%d active)", completed, total, active);
-        } else {
-            snprintf(progress_text, sizeof(progress_text), "Initializing...");
-        }
-        fl_color(FL_BLACK);
-        fl_draw(progress_text, x() + w() - 145, y() + 23);
+	// Draw progress text
+	fl_font(FL_HELVETICA, 9);
+	char progress_text[64];
+	if (total > 0) {
+	    snprintf(progress_text, sizeof(progress_text), "%d/%d (%d active)", completed, total, active);
+	} else {
+	    snprintf(progress_text, sizeof(progress_text), "Initializing...");
+	}
+	fl_color(FL_BLACK);
+	fl_draw(progress_text, x() + w() - 145, y() + 23);
     }
 }
 
@@ -998,19 +998,19 @@ int Fl_JustifiedLayout_Content::handle(int event) {
     if (!parent_) return 0;
 
     switch (event) {
-        case FL_PUSH:
-            if (Fl::event_button() == FL_LEFT_MOUSE) {
-                parent_->handle_click(Fl::event_x(), Fl::event_y());
-                return 1;
-            }
-            break;
+	case FL_PUSH:
+	    if (Fl::event_button() == FL_LEFT_MOUSE) {
+		parent_->handle_click(Fl::event_x(), Fl::event_y());
+		return 1;
+	    }
+	    break;
     }
 
     return Fl_Widget::handle(event);
 }
 
 void Fl_JustifiedLayout::start_directory_scan(const std::string& dir_path, const std::string& db_path) {
-	should_cancel_scan_.store(false);
+    should_cancel_scan_.store(false);
     if (scanning_.load()) return;
 
     scanning_.store(true);
@@ -1022,17 +1022,17 @@ void Fl_JustifiedLayout::start_directory_scan(const std::string& dir_path, const
     clear_image_cache();
 
     if (content_widget_) {
-        content_widget_->redraw();
+	content_widget_->redraw();
     }
 
     // Report start of scanning
     if (progress_callback_) {
-        progress_callback_(0, 0, "Starting directory scan...");
+	progress_callback_(0, 0, "Starting directory scan...");
     }
 
     // Start scan thread
     if (scan_thread_.joinable()) {
-        scan_thread_.join();
+	scan_thread_.join();
     }
     scan_thread_ = std::thread(&Fl_JustifiedLayout::directory_scan_thread, this, dir_path, db_path);
 }
@@ -1041,7 +1041,7 @@ void Fl_JustifiedLayout::cancel_directory_scan() {
     should_cancel_scan_.store(true);
 
     if (scan_thread_.joinable()) {
-        scan_thread_.join();
+	scan_thread_.join();
     }
 
     scanning_.store(false);
@@ -1050,83 +1050,83 @@ void Fl_JustifiedLayout::cancel_directory_scan() {
 void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, const std::string& db_path) {
 
     try {
-        // Create/open database
-        auto scan_database = std::make_unique<DatabaseManager>();
-        if (!scan_database->open(db_path)) {
-            debug_awake([](void* data) {
-                Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
-                if (widget->progress_callback_) {
-                    widget->progress_callback_(0, 0, "Failed to open database");
-                }
-            }, this);
-            scanning_.store(false);
-            return;
-        }
+	// Create/open database
+	auto scan_database = std::make_unique<DatabaseManager>();
+	if (!scan_database->open(db_path)) {
+	    debug_awake([](void* data) {
+		    Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
+		    if (widget->progress_callback_) {
+		    widget->progress_callback_(0, 0, "Failed to open database");
+		    }
+		    }, this);
+	    scanning_.store(false);
+	    return;
+	}
 
-        // Set up callback for immediate layout population as metadata becomes available
-        scan_database->set_image_info_callback([this](const ImageInfo& info) {
-            // This callback is called from worker threads, so we need to use Fl::awake
-            auto info_copy = std::make_shared<ImageInfo>(info);
-            debug_awake([](void* data) {
-                auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>*>(data);
-                params->first->handle_image_info_ready(*(params->second));
-                delete params;
-            }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>(this, info_copy), "image info ready from scan");
-        });
+	// Set up callback for immediate layout population as metadata becomes available
+	scan_database->set_image_info_callback([this](const ImageInfo& info) {
+		// This callback is called from worker threads, so we need to use Fl::awake
+		auto info_copy = std::make_shared<ImageInfo>(info);
+		debug_awake([](void* data) {
+			auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>*>(data);
+			params->first->handle_image_info_ready(*(params->second));
+			delete params;
+			}, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>(this, info_copy), "image info ready from scan");
+		});
 
-        // Create timer and reporter for the scan
-        Timer timer;
-        StatusReporter reporter(1); // Report every second
-        reporter.start();
+	// Create timer and reporter for the scan
+	Timer timer;
+	StatusReporter reporter(1); // Report every second
+	reporter.start();
 
-        // Forward initial progress
-        debug_awake([](void* data) {
-            Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
-            if (widget->progress_callback_) {
-                widget->progress_callback_(0, 0, "Starting directory scan...");
-            }
-        }, this);
+	// Forward initial progress
+	debug_awake([](void* data) {
+		Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
+		if (widget->progress_callback_) {
+		widget->progress_callback_(0, 0, "Starting directory scan...");
+		}
+		}, this);
 
-        // Track explicit user cancellation
-        std::atomic<bool> user_cancelled(false);
-        std::atomic<size_t> last_image_count(0);
+	// Track explicit user cancellation
+	std::atomic<bool> user_cancelled(false);
+	std::atomic<size_t> last_image_count(0);
 
-        // Start a cancellation monitor thread that also provides incremental updates
-        std::thread update_monitor([this, scan_database = scan_database.get(), &user_cancelled, &last_image_count]() {
-            int update_count = 0;
-            while (scanning_.load()) {
-                update_count++;
-                if (should_cancel_scan_.load()) {
-                    user_cancelled.store(true);
-                    scan_database->cancel_scan();
-                    break;
-                }
+	// Start a cancellation monitor thread that also provides incremental updates
+	std::thread update_monitor([this, scan_database = scan_database.get(), &user_cancelled, &last_image_count]() {
+		int update_count = 0;
+		while (scanning_.load()) {
+		update_count++;
+		if (should_cancel_scan_.load()) {
+		user_cancelled.store(true);
+		scan_database->cancel_scan();
+		break;
+		}
 
-                // Check for new images and provide incremental updates
-                try {
-                    std::vector<ImageInfo> new_images = scan_database->get_images_since_count(last_image_count.load());
-                    if (!new_images.empty()) {
-                        last_image_count.store(last_image_count.load() + new_images.size());
+		// Check for new images and provide incremental updates
+		try {
+		std::vector<ImageInfo> new_images = scan_database->get_images_since_count(last_image_count.load());
+		if (!new_images.empty()) {
+		last_image_count.store(last_image_count.load() + new_images.size());
 
-                        // Create a copy for the lambda to capture
-                        auto new_images_copy = std::make_shared<std::vector<ImageInfo>>(std::move(new_images));
+		// Create a copy for the lambda to capture
+		auto new_images_copy = std::make_shared<std::vector<ImageInfo>>(std::move(new_images));
 
-                        debug_awake([](void* data) {
-                            auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>*>(data);
-                            params->first->add_images_incremental(*(params->second));
-                            delete params;
-                        }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>(this, new_images_copy), "incremental image batch");
-                    }
-                } catch (const std::exception& e) {
-                    std::cerr << "Error during incremental update: " << e.what() << std::endl;
-                }
+		debug_awake([](void* data) {
+			auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>*>(data);
+			params->first->add_images_incremental(*(params->second));
+			delete params;
+			}, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>(this, new_images_copy), "incremental image batch");
+		}
+		} catch (const std::exception& e) {
+		    std::cerr << "Error during incremental update: " << e.what() << std::endl;
+		}
 
-                std::this_thread::sleep_for(std::chrono::milliseconds(250)); // Check 4 times per second
-            }
-        });
+		std::this_thread::sleep_for(std::chrono::milliseconds(250)); // Check 4 times per second
+		}
+	});
 
-        // Perform the actual directory scan
-        int processed = scan_database->scan_directory_parallel(dir_path, timer, reporter);
+	// Perform the actual directory scan
+	int processed = scan_database->scan_directory_parallel(dir_path, timer, reporter);
 
 	// Done with scanning
 	scanning_.store(false);
@@ -1135,79 +1135,79 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
 	update_monitor.join();
 
 	// We can stop reporting now
-        reporter.stop();
+	reporter.stop();
 
 
-        if (user_cancelled.load()) {
-            scan_database->cancel_scan(); // Ensure cancellation is signaled
-            debug_awake([](void* data) {
-                Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
-                if (widget->progress_callback_) {
-                    widget->progress_callback_(0, 0, "Scan cancelled");
-                }
-            }, this, "scan cancelled");
-        } else if (processed >= 0) {
-            // Scan completed successfully - get any remaining images and finish
-            std::vector<ImageInfo> remaining_images = scan_database->get_images_since_count(last_image_count.load());
-            if (!remaining_images.empty()) {
-                auto remaining_images_copy = std::make_shared<std::vector<ImageInfo>>(std::move(remaining_images));
-                debug_awake([](void* data) {
-                    auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>*>(data);
-                    params->first->add_images_incremental(*(params->second));
-                    delete params;
-                }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>(this, remaining_images_copy));
-            }
+	if (user_cancelled.load()) {
+	    scan_database->cancel_scan(); // Ensure cancellation is signaled
+	    debug_awake([](void* data) {
+		    Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
+		    if (widget->progress_callback_) {
+		    widget->progress_callback_(0, 0, "Scan cancelled");
+		    }
+		    }, this, "scan cancelled");
+	} else if (processed >= 0) {
+	    // Scan completed successfully - get any remaining images and finish
+	    std::vector<ImageInfo> remaining_images = scan_database->get_images_since_count(last_image_count.load());
+	    if (!remaining_images.empty()) {
+		auto remaining_images_copy = std::make_shared<std::vector<ImageInfo>>(std::move(remaining_images));
+		debug_awake([](void* data) {
+			auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>*>(data);
+			params->first->add_images_incremental(*(params->second));
+			delete params;
+			}, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>(this, remaining_images_copy));
+	    }
 
-            // Update database and complete
-            current_db_path_ = db_path;
-            database_ = std::move(scan_database);
+	    // Update database and complete
+	    current_db_path_ = db_path;
+	    database_ = std::move(scan_database);
 
-            debug_awake([](void* data) {
-                Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
-                if (widget->progress_callback_) {
-                    widget->progress_callback_(0, 0, "Scan complete - " + std::to_string(widget->images_.size()) + " images loaded");
-                }
-                // Start background thumbnail generation
-                widget->start_background_generation();
-            }, this, "scan complete");
-        } else {
-            debug_awake([](void* data) {
-                Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
-                if (widget->progress_callback_) {
-                    widget->progress_callback_(0, 0, "Scan failed");
-                }
-            }, this, "scan failed");
-        }
+	    debug_awake([](void* data) {
+		    Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
+		    if (widget->progress_callback_) {
+		    widget->progress_callback_(0, 0, "Scan complete - " + std::to_string(widget->images_.size()) + " images loaded");
+		    }
+		    // Start background thumbnail generation
+		    widget->start_background_generation();
+		    }, this, "scan complete");
+	} else {
+	    debug_awake([](void* data) {
+		    Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
+		    if (widget->progress_callback_) {
+		    widget->progress_callback_(0, 0, "Scan failed");
+		    }
+		    }, this, "scan failed");
+	}
 
     } catch (const std::exception& e) {
-        debug_awake([](void* data) {
-            auto* params = static_cast<std::pair<Fl_JustifiedLayout*, std::string>*>(data);
-            if (params->first->progress_callback_) {
-                params->first->progress_callback_(0, 0, "Scan error: " + params->second);
-            }
-            delete params;
-        }, new std::pair<Fl_JustifiedLayout*, std::string>(this, e.what()), "scan exception");
+	debug_awake([](void* data) {
+		auto* params = static_cast<std::pair<Fl_JustifiedLayout*, std::string>*>(data);
+		if (params->first->progress_callback_) {
+		params->first->progress_callback_(0, 0, "Scan error: " + params->second);
+		}
+		delete params;
+		}, new std::pair<Fl_JustifiedLayout*, std::string>(this, e.what()), "scan exception");
     }
 
 }
 
 void Fl_JustifiedLayout::complete_directory_scan() {
     if (progress_callback_) {
-        progress_callback_(0, 0, "Loading images from database...");
+	progress_callback_(0, 0, "Loading images from database...");
     }
 
     // Reload images from the updated database
     if (load_image_list()) {
-        if (progress_callback_) {
-            progress_callback_(0, 0, "Scan complete - " + std::to_string(images_.size()) + " images loaded");
-        }
+	if (progress_callback_) {
+	    progress_callback_(0, 0, "Scan complete - " + std::to_string(images_.size()) + " images loaded");
+	}
 
-        // Start background thumbnail generation
-        start_background_generation();
+	// Start background thumbnail generation
+	start_background_generation();
     } else {
-        if (progress_callback_) {
-            progress_callback_(0, 0, "Failed to load images from database");
-        }
+	if (progress_callback_) {
+	    progress_callback_(0, 0, "Failed to load images from database");
+	}
     }
 }
 
@@ -1216,15 +1216,15 @@ bool Fl_JustifiedLayout::load_image_list() {
     clear_image_cache();  // Clear cached images when loading new list
 
     if (!database_) {
-        // ... [mock image code unchanged] ...
+	// ... [mock image code unchanged] ...
     } else {
-        // Load real images from database
-        try {
-            images_ = database_->get_all_images();
-        } catch (const std::exception& e) {
-            std::cerr << "Error loading images from database: " << e.what() << std::endl;
-            return false;
-        }
+	// Load real images from database
+	try {
+	    images_ = database_->get_all_images();
+	} catch (const std::exception& e) {
+	    std::cerr << "Error loading images from database: " << e.what() << std::endl;
+	    return false;
+	}
     }
 
     // Trigger layout calculation
@@ -1236,7 +1236,7 @@ bool Fl_JustifiedLayout::load_image_list() {
 void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& new_images) {
 
     if (new_images.empty()) {
-        return;
+	return;
     }
 
     // Add new images to our list
@@ -1251,8 +1251,8 @@ void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& ne
 
     // Resize content widget to match the new total layout height
     if (content_widget_) {
-        int content_height = std::max(static_cast<int>(total_height_), h());
-        content_widget_->resize(x(), y(), w(), content_height);
+	int content_height = std::max(static_cast<int>(total_height_), h());
+	content_widget_->resize(x(), y(), w(), content_height);
     } else {
     }
 
@@ -1272,127 +1272,127 @@ void Fl_JustifiedLayout::log_ui_debug(const std::string& message) const {
 
 void Fl_JustifiedLayout::queue_image_info_batch(const ImageInfo& info) {
     log_batch_debug("queue_image_info_batch called for: " + info.path + " (hash: " + info.hash + ")");
-    
+
     std::lock_guard<std::mutex> lock(batch_mutex_);
-    
+
     current_batch_.pending_images.push_back(info);
     current_batch_.total_images_added++;
-    
+
     size_t pending_count = current_batch_.pending_images.size();
     log_batch_debug("Added image to batch, pending count: " + std::to_string(pending_count) + 
-                   ", total added: " + std::to_string(current_batch_.total_images_added));
-    
+	    ", total added: " + std::to_string(current_batch_.total_images_added));
+
     // Check if we should process immediately (small batch) or schedule for later
     if (pending_count <= batch_config_.small_batch_threshold) {
-        log_batch_debug("Small batch detected (" + std::to_string(pending_count) + 
-                       " <= " + std::to_string(batch_config_.small_batch_threshold) + 
-                       "), processing immediately for snappy UI feedback");
-        
-        // Process immediately for small batches to maintain snappy UI
-        std::vector<ImageInfo> immediate_batch = std::move(current_batch_.pending_images);
-        current_batch_.pending_images.clear();
-        current_batch_.last_batch_time = std::chrono::steady_clock::now();
-        
-        // Release lock before processing
-        lock.~lock_guard();
-        process_image_info_batch(immediate_batch);
+	log_batch_debug("Small batch detected (" + std::to_string(pending_count) + 
+		" <= " + std::to_string(batch_config_.small_batch_threshold) + 
+		"), processing immediately for snappy UI feedback");
+
+	// Process immediately for small batches to maintain snappy UI
+	std::vector<ImageInfo> immediate_batch = std::move(current_batch_.pending_images);
+	current_batch_.pending_images.clear();
+	current_batch_.last_batch_time = std::chrono::steady_clock::now();
+
+	// Release lock before processing
+	lock.~lock_guard();
+	process_image_info_batch(immediate_batch);
     } else {
-        // For larger batches, schedule a flush if not already scheduled
-        if (!batch_flush_scheduled_.load()) {
-            log_batch_debug("Large batch detected (" + std::to_string(pending_count) + 
-                           " > " + std::to_string(batch_config_.small_batch_threshold) + 
-                           "), scheduling batch flush");
-            
-            batch_flush_scheduled_.store(true);
-            Fl::add_timeout(batch_config_.batch_timeout_ms / 1000.0, batch_flush_callback, this);
-        }
+	// For larger batches, schedule a flush if not already scheduled
+	if (!batch_flush_scheduled_.load()) {
+	    log_batch_debug("Large batch detected (" + std::to_string(pending_count) + 
+		    " > " + std::to_string(batch_config_.small_batch_threshold) + 
+		    "), scheduling batch flush");
+
+	    batch_flush_scheduled_.store(true);
+	    Fl::add_timeout(batch_config_.batch_timeout_ms / 1000.0, batch_flush_callback, this);
+	}
     }
 }
 
 void Fl_JustifiedLayout::flush_pending_image_batch(bool force) {
     std::lock_guard<std::mutex> lock(batch_mutex_);
-    
+
     if (current_batch_.pending_images.empty()) {
-        log_batch_debug("Flush called but no pending images");
-        return;
+	log_batch_debug("Flush called but no pending images");
+	return;
     }
-    
+
     auto now = std::chrono::steady_clock::now();
     double elapsed_ms = std::chrono::duration<double, std::milli>(now - current_batch_.last_batch_time).count();
-    
+
     size_t pending_count = current_batch_.pending_images.size();
-    
+
     if (force || pending_count >= batch_config_.large_batch_size || elapsed_ms >= batch_config_.batch_timeout_ms) {
-        log_batch_debug("Flushing batch: force=" + std::string(force ? "true" : "false") + 
-                       ", pending=" + std::to_string(pending_count) + 
-                       ", elapsed=" + std::to_string(elapsed_ms) + "ms");
-        
-        std::vector<ImageInfo> batch_to_process = std::move(current_batch_.pending_images);
-        current_batch_.pending_images.clear();
-        current_batch_.last_batch_time = now;
-        current_batch_.total_batches_processed++;
-        
-        // Release lock before processing
-        lock.~lock_guard();
-        process_image_info_batch(batch_to_process);
+	log_batch_debug("Flushing batch: force=" + std::string(force ? "true" : "false") + 
+		", pending=" + std::to_string(pending_count) + 
+		", elapsed=" + std::to_string(elapsed_ms) + "ms");
+
+	std::vector<ImageInfo> batch_to_process = std::move(current_batch_.pending_images);
+	current_batch_.pending_images.clear();
+	current_batch_.last_batch_time = now;
+	current_batch_.total_batches_processed++;
+
+	// Release lock before processing
+	lock.~lock_guard();
+	process_image_info_batch(batch_to_process);
     } else {
-        log_batch_debug("Flush conditions not met: pending=" + std::to_string(pending_count) + 
-                       ", elapsed=" + std::to_string(elapsed_ms) + "ms, will wait");
+	log_batch_debug("Flush conditions not met: pending=" + std::to_string(pending_count) + 
+		", elapsed=" + std::to_string(elapsed_ms) + "ms, will wait");
     }
 }
 
 void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& batch) {
     if (batch.empty()) {
-        log_batch_debug("process_image_info_batch called with empty batch");
-        return;
+	log_batch_debug("process_image_info_batch called with empty batch");
+	return;
     }
-    
+
     log_batch_debug("Processing batch of " + std::to_string(batch.size()) + " images");
-    
+
     // Add images to our list in batch
     size_t old_size = images_.size();
     {
-        std::lock_guard<std::mutex> lock(image_cache_mutex_);
-        
-        for (const auto& info : batch) {
-            images_.push_back(info);
-            hash_to_index_map_[info.hash] = images_.size() - 1;
-            
-            log_batch_debug("Added image to main list: " + info.path + 
-                           " (index: " + std::to_string(images_.size() - 1) + 
-                           ", has_thumbnails: " + (info.has_thumbnails ? "true" : "false") + ")");
-        }
+	std::lock_guard<std::mutex> lock(image_cache_mutex_);
+
+	for (const auto& info : batch) {
+	    images_.push_back(info);
+	    hash_to_index_map_[info.hash] = images_.size() - 1;
+
+	    log_batch_debug("Added image to main list: " + info.path + 
+		    " (index: " + std::to_string(images_.size() - 1) + 
+		    ", has_thumbnails: " + (info.has_thumbnails ? "true" : "false") + ")");
+	}
     }
-    
+
     log_batch_debug("Batch processed: added " + std::to_string(batch.size()) + 
-                   " images, total count increased from " + std::to_string(old_size) + 
-                   " to " + std::to_string(images_.size()));
-    
+	    " images, total count increased from " + std::to_string(old_size) + 
+	    " to " + std::to_string(images_.size()));
+
     // Recalculate layout for the batch
     log_ui_debug("Recalculating layout for batch of " + std::to_string(batch.size()) + " images");
     calculate_layout();
-    
+
     // Resize content widget to match the new total layout height
     if (content_widget_) {
-        int content_height = std::max(static_cast<int>(total_height_), h());
-        log_ui_debug("Resizing content widget for batch, new height: " + std::to_string(content_height));
-        content_widget_->resize(x(), y(), w(), content_height);
+	int content_height = std::max(static_cast<int>(total_height_), h());
+	log_ui_debug("Resizing content widget for batch, new height: " + std::to_string(content_height));
+	content_widget_->resize(x(), y(), w(), content_height);
     }
-    
+
     // Trigger redraw to show new placeholders
     log_ui_debug("Triggering redraw for batch of " + std::to_string(batch.size()) + " images");
     redraw();
-    
+
     log_batch_debug("Completed processing batch of " + std::to_string(batch.size()) + " images");
 }
 
 // Static callback for batch processing
 void Fl_JustifiedLayout::batch_flush_callback(void* data) {
     if (!data) return;
-    
+
     Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
     widget->log_batch_debug("Batch flush callback triggered by timeout");
-    
+
     widget->batch_flush_scheduled_.store(false);
     widget->flush_pending_image_batch(false);
 }
@@ -1400,9 +1400,9 @@ void Fl_JustifiedLayout::batch_flush_callback(void* data) {
 // Two-stage population support methods
 void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
     log_ui_debug("handle_image_info_ready called for: " + info.path + 
-                " (hash: " + info.hash + ", has_thumbnails: " + 
-                (info.has_thumbnails ? "true" : "false") + ")");
-    
+	    " (hash: " + info.hash + ", has_thumbnails: " + 
+	    (info.has_thumbnails ? "true" : "false") + ")");
+
     // Instead of processing immediately, queue for batch processing
     queue_image_info_batch(info);
 }
@@ -1423,36 +1423,36 @@ void Fl_JustifiedLayout::process_thumbnail_notifications() {
     bool needs_redraw = false;
 
     while (thumbnail_notifications_.try_dequeue(notification)) {
-        if (notification.is_ready) {
-            // Find the image by hash and update it
-            auto it = hash_to_index_map_.find(notification.hash);
-            if (it != hash_to_index_map_.end()) {
-                int index = it->second;
-                if (index >= 0 && index < static_cast<int>(images_.size())) {
-                    std::lock_guard<std::mutex> lock(image_cache_mutex_);
+	if (notification.is_ready) {
+	    // Find the image by hash and update it
+	    auto it = hash_to_index_map_.find(notification.hash);
+	    if (it != hash_to_index_map_.end()) {
+		int index = it->second;
+		if (index >= 0 && index < static_cast<int>(images_.size())) {
+		    std::lock_guard<std::mutex> lock(image_cache_mutex_);
 
-                    // Reload image info from database to get thumbnail data
-                    if (database_) {
-                        MDB_txn* read_txn;
-                        if (database_->begin_read_transaction(read_txn)) {
-                            if (database_->load_image_info(read_txn, notification.hash, images_[index])) {
-                                // Clear cached image so it will be reloaded with thumbnail
-                                auto cache_it = image_cache_.find(notification.hash);
-                                if (cache_it != image_cache_.end()) {
-                                    image_cache_.erase(cache_it);
-                                }
-                                needs_redraw = true;
-                            }
-                            database_->abort_transaction(read_txn);
-                        }
-                    }
-                }
-            }
-        }
+		    // Reload image info from database to get thumbnail data
+		    if (database_) {
+			MDB_txn* read_txn;
+			if (database_->begin_read_transaction(read_txn)) {
+			    if (database_->load_image_info(read_txn, notification.hash, images_[index])) {
+				// Clear cached image so it will be reloaded with thumbnail
+				auto cache_it = image_cache_.find(notification.hash);
+				if (cache_it != image_cache_.end()) {
+				    image_cache_.erase(cache_it);
+				}
+				needs_redraw = true;
+			    }
+			    database_->abort_transaction(read_txn);
+			}
+		    }
+		}
+	    }
+	}
     }
 
     if (needs_redraw) {
-        redraw();
+	redraw();
     }
 }
 
@@ -1482,13 +1482,13 @@ void Fl_JustifiedLayout::draw_loading_indicator(int x, int y, int w, int h) {
 // Static callback for thumbnail notifications
 void Fl_JustifiedLayout::thumbnail_notification_callback(void* data) {
     if (data) {
-        static_cast<Fl_JustifiedLayout*>(data)->process_thumbnail_notifications();
+	static_cast<Fl_JustifiedLayout*>(data)->process_thumbnail_notifications();
     }
 }
 
 void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
     if (layout_items_.empty() || images_.empty()) {
-        return;
+	return;
     }
 
     // Get current scroll position
@@ -1503,37 +1503,37 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
     std::vector<int> low_priority_indices;
 
     for (size_t i = 0; i < layout_items_.size() && i < images_.size(); i++) {
-        const auto& item = layout_items_[i];
-        const auto& img = images_[i];
+	const auto& item = layout_items_[i];
+	const auto& img = images_[i];
 
-        // Skip images that already have thumbnails
-        if (img.has_thumbnails) {
-            continue;
-        }
+	// Skip images that already have thumbnails
+	if (img.has_thumbnails) {
+	    continue;
+	}
 
-        int item_y = static_cast<int>(item.t);
-        int item_bottom = item_y + static_cast<int>(item.h);
+	int item_y = static_cast<int>(item.t);
+	int item_bottom = item_y + static_cast<int>(item.h);
 
-        // Check if item intersects with visible area
-        if (item_bottom >= visible_start && item_y <= visible_end) {
-            // Check if actually visible in current viewport
-            if (item_bottom >= scroll_y && item_y <= scroll_y + viewport_height) {
-                high_priority_indices.push_back(static_cast<int>(i));
-            } else {
-                // Near visible area, lower priority
-                low_priority_indices.push_back(static_cast<int>(i));
-            }
-        }
+	// Check if item intersects with visible area
+	if (item_bottom >= visible_start && item_y <= visible_end) {
+	    // Check if actually visible in current viewport
+	    if (item_bottom >= scroll_y && item_y <= scroll_y + viewport_height) {
+		high_priority_indices.push_back(static_cast<int>(i));
+	    } else {
+		// Near visible area, lower priority
+		low_priority_indices.push_back(static_cast<int>(i));
+	    }
+	}
     }
 
     // Queue high priority thumbnails first
     if (!high_priority_indices.empty()) {
-        int queued = queue_thumbnail_tasks(high_priority_indices, ThumbnailPriority::HIGH);
+	int queued = queue_thumbnail_tasks(high_priority_indices, ThumbnailPriority::HIGH);
     }
 
     // Queue lower priority thumbnails
     if (!low_priority_indices.empty()) {
-        int queued = queue_thumbnail_tasks(low_priority_indices, ThumbnailPriority::LOW);
+	int queued = queue_thumbnail_tasks(low_priority_indices, ThumbnailPriority::LOW);
     }
 }
 
@@ -1545,3 +1545,12 @@ void Fl_JustifiedLayout::draw() {
 
 }
 
+
+// Local Variables:
+// tab-width: 8
+// mode: C++
+// c-basic-offset: 4
+// indent-tabs-mode: t
+// c-file-style: "stroustrup"
+// End:
+// ex: shiftwidth=4 tabstop=8 cino=N-s

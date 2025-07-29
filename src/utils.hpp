@@ -35,40 +35,40 @@
 
 // Timer class for measuring execution time of different phases
 class Timer {
-public:
-    void start(const std::string& phase);
-    void stop(const std::string& phase);
-    void print_summary() const;
+    public:
+	void start(const std::string& phase);
+	void stop(const std::string& phase);
+	void print_summary() const;
 
-private:
-    std::map<std::string, std::chrono::milliseconds> phase_times_;
-    std::map<std::string, std::chrono::high_resolution_clock::time_point> active_timers_;
+    private:
+	std::map<std::string, std::chrono::milliseconds> phase_times_;
+	std::map<std::string, std::chrono::high_resolution_clock::time_point> active_timers_;
 };
 
 // Status reporter for periodic updates
 class StatusReporter {
-public:
-    StatusReporter(int interval_seconds = 10);
-    ~StatusReporter();
+    public:
+	StatusReporter(int interval_seconds = 10);
+	~StatusReporter();
 
-    void update_status(const std::string& message);
-    void set_total_count(int total);
-    void set_current_count(int current);
-    void start();
-    void stop();
-    void mark_complete();  // Stop reporting and mark as completed
+	void update_status(const std::string& message);
+	void set_total_count(int total);
+	void set_current_count(int current);
+	void start();
+	void stop();
+	void mark_complete();  // Stop reporting and mark as completed
 
-private:
-    void report_thread();
+    private:
+	void report_thread();
 
-    int interval_seconds_;
-    std::string current_status_;
-    int total_count_;
-    int current_count_;
-    bool running_;
-    bool completed_;  // Track completion state
-    std::thread* reporter_thread_;
-    std::mutex status_mutex_;
+	int interval_seconds_;
+	std::string current_status_;
+	int total_count_;
+	int current_count_;
+	bool running_;
+	bool completed_;  // Track completion state
+	std::thread* reporter_thread_;
+	std::mutex status_mutex_;
 };
 
 // Utility functions
@@ -77,3 +77,11 @@ bool is_image_file(const std::string& filepath);
 
 // Cross-platform cache path management
 std::string get_cache_db_path(bool silent = false);
+// Local Variables:
+// tab-width: 8
+// mode: C++
+// c-basic-offset: 4
+// indent-tabs-mode: t
+// c-file-style: "stroustrup"
+// End:
+// ex: shiftwidth=4 tabstop=8 cino=N-s

@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
-#include "database.h"
+#include "database.hpp"
 
 namespace fs = std::filesystem;
 

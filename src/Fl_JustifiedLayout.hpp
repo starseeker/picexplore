@@ -38,8 +38,8 @@
 #include <mutex>
 #include <condition_variable>
 #include <queue>
-#include "database.h"
-#include "utils.h"
+#include "database.hpp"
+#include "utils.hpp"
 #include "justified_layout.hpp"
 #include "concurrentqueue.h"
 
@@ -62,7 +62,7 @@ struct ThumbnailTask {
 
     ThumbnailTask() = default;
     ThumbnailTask(int idx, ThumbnailPriority prio, int w, int h)
-        : image_index(idx), priority(prio), target_width(w), target_height(h) {}
+	: image_index(idx), priority(prio), target_width(w), target_height(h) {}
 };
 
 // Result of thumbnail generation
@@ -73,7 +73,7 @@ struct ThumbnailResult {
 
     ThumbnailResult() = default;
     ThumbnailResult(int idx, std::unique_ptr<Fl_RGB_Image> thumb, const std::string& key)
-        : image_index(idx), thumbnail(std::move(thumb)), cache_key(key) {}
+	: image_index(idx), thumbnail(std::move(thumb)), cache_key(key) {}
 };
 
 // Thumbnail readiness notification
@@ -90,7 +90,7 @@ struct BatchConfig {
     size_t large_batch_size = 50;         // Process in batches of this size for large operations
     double batch_timeout_ms = 100.0;      // Maximum time to wait before flushing a batch
     bool enable_debug_logging = true;     // Enable detailed batch processing logs
-    
+
     BatchConfig() = default;
 };
 
@@ -100,7 +100,7 @@ struct ImageInfoBatch {
     std::chrono::steady_clock::time_point last_batch_time;
     size_t total_images_added = 0;
     size_t total_batches_processed = 0;
-    
+
     ImageInfoBatch() : last_batch_time(std::chrono::steady_clock::now()) {}
 };
 
@@ -123,7 +123,7 @@ using SelectionCallback = std::function<void(const std::string& image_path, cons
  */
 class Fl_JustifiedLayout : public Fl_Scroll {
     friend class Fl_JustifiedLayout_Content;
-public:
+    public:
     // Constructor
     Fl_JustifiedLayout(int X, int Y, int W, int H, const char* label = nullptr);
 
@@ -142,7 +142,7 @@ public:
     // Two-stage population support  
     using ThumbnailNotificationCallback = std::function<void(const ThumbnailNotification&)>;
     void set_thumbnail_notification_callback(ThumbnailNotificationCallback callback) {
-        thumbnail_notification_callback_ = callback;
+	thumbnail_notification_callback_ = callback;
     }
     void handle_image_info_ready(const ImageInfo& info);  // Stage 1: Add placeholder
     void handle_thumbnail_ready(const std::string& hash);  // Stage 2: Update with thumbnail
@@ -150,12 +150,12 @@ public:
     // Batch processing support
     void set_batch_config(const BatchConfig& config) { batch_config_ = config; }
     BatchConfig get_batch_config() const { return batch_config_; }
-    
+
     // Batch processing methods
     void queue_image_info_batch(const ImageInfo& info);
     void flush_pending_image_batch(bool force = false);
     void process_image_info_batch(const std::vector<ImageInfo>& batch);
-    
+
     // Enhanced debug logging
     void log_batch_debug(const std::string& message) const;
     void log_ui_debug(const std::string& message) const;
@@ -163,24 +163,24 @@ public:
     // Layout configuration
     void set_row_height(double height) { layout_config_.rh = height; relayout(); }
     void set_spacing(double horizontal, double vertical) {
-        layout_config_.sh = horizontal;
-        layout_config_.sv = vertical;
-        relayout();
+	layout_config_.sh = horizontal;
+	layout_config_.sv = vertical;
+	relayout();
     }
     void set_padding(double top, double right, double bottom, double left) {
-        layout_config_.pt = top;
-        layout_config_.pr = right;
-        layout_config_.pb = bottom;
-        layout_config_.pl = left;
-        relayout();
+	layout_config_.pt = top;
+	layout_config_.pr = right;
+	layout_config_.pb = bottom;
+	layout_config_.pl = left;
+	relayout();
     }
 
     // Debug output configuration
     void enable_debug_output(const std::string& output_dir, const std::string& format = "svg") {
-        debug_output_enabled_ = true;
-        debug_output_dir_ = output_dir;
-        debug_output_format_ = format;
-        debug_update_counter_ = 0;
+	debug_output_enabled_ = true;
+	debug_output_dir_ = output_dir;
+	debug_output_format_ = format;
+	debug_update_counter_ = 0;
     }
     void disable_debug_output() { debug_output_enabled_ = false; }
 
@@ -204,7 +204,7 @@ public:
     int handle(int event) override;
     void resize(int X, int Y, int W, int H) override;
 
-protected:
+    protected:
     // Internal layout management
     void relayout();
     void calculate_layout();
@@ -242,7 +242,7 @@ protected:
     void directory_scan_thread(const std::string& dir_path, const std::string& db_path);
     void complete_directory_scan();
 
-private:
+    private:
     // Content widget for scrollable area
     Fl_JustifiedLayout_Content* content_widget_;
 
@@ -297,7 +297,7 @@ private:
     mutable std::mutex batch_mutex_;
     ImageInfoBatch current_batch_;
     std::atomic<bool> batch_flush_scheduled_;
-    
+
     // Enhanced debug logging state
     mutable std::mutex debug_log_mutex_;
     size_t debug_batch_counter_ = 0;
@@ -319,11 +319,20 @@ private:
  * This is managed by the parent Fl_JustifiedLayout (Fl_Scroll) widget.
  */
 class Fl_JustifiedLayout_Content : public Fl_Widget {
-public:
-    Fl_JustifiedLayout_Content(int X, int Y, int W, int H, Fl_JustifiedLayout* parent);
-    void draw() override;
-    int handle(int event) override;
+    public:
+	Fl_JustifiedLayout_Content(int X, int Y, int W, int H, Fl_JustifiedLayout* parent);
+	void draw() override;
+	int handle(int event) override;
 
-private:
-    Fl_JustifiedLayout* parent_;
+    private:
+	Fl_JustifiedLayout* parent_;
 };
+
+// Local Variables:
+// tab-width: 8
+// mode: C++
+// c-basic-offset: 4
+// indent-tabs-mode: t
+// c-file-style: "stroustrup"
+// End:
+// ex: shiftwidth=4 tabstop=8 cino=N-s

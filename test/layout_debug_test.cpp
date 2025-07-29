@@ -6,8 +6,8 @@
 #include <filesystem>
 #include <FL/Fl.H>
 #include <FL/Fl_Window.H>
-#include "Fl_JustifiedLayout.h"
-#include "database.h"
+#include "Fl_JustifiedLayout.hpp"
+#include "database.hpp"
 
 namespace fs = std::filesystem;
 
