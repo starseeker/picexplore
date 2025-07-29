@@ -44,6 +44,7 @@
 #include "pdf.hpp"
 #include "utils.hpp"
 #include "Fl_JustifiedLayout.hpp"
+#include "thread_manager.hpp"
 
 namespace fs = std::filesystem;
 
@@ -57,12 +58,20 @@ namespace fs = std::filesystem;
 // Forward declaration of GUI window class
 class PicExploreWindow {
     public:
-	PicExploreWindow() : window_(nullptr), layout_widget_(nullptr) {
+	PicExploreWindow() : window_(nullptr), layout_widget_(nullptr), thread_manager_(nullptr) {
+	    // Initialize the new thread manager
+	    thread_manager_ = std::make_unique<ThreadManager>();
+
 	    create_window();
 	    setup_callbacks();
+	    setup_thread_callbacks();
 	}
 
 	~PicExploreWindow() {
+	    // Shutdown threads before destroying GUI
+	    if (thread_manager_) {
+		thread_manager_->shutdown_all();
+	    }
 	    delete window_;
 	}
 
@@ -91,6 +100,9 @@ class PicExploreWindow {
 	}
 
 	void set_database_path(const std::string& path) {
+	    // With new architecture, LMDB is always used for all directories
+	    // This method is kept for compatibility but will load from database path
+	    std::cout << "[INFO] Loading existing database: " << path << std::endl;
 	    if (layout_widget_) {
 		if (!layout_widget_->set_database_path(path)) {
 		    fl_alert("Failed to load database: %s", path.c_str());
@@ -99,10 +111,16 @@ class PicExploreWindow {
 	}
 
 	void set_directory_path(const std::string& path) {
-	    if (layout_widget_) {
-		if (!layout_widget_->set_directory_path(path)) {
-		    fl_alert("Failed to set directory: %s", path.c_str());
+	    // New architecture: Start directory scan using ThreadManager
+	    std::cout << "[INFO] Starting directory scan: " << path << std::endl;
+
+	    if (thread_manager_) {
+		bool success = thread_manager_->start_directory_scan(path);
+		if (!success) {
+		    fl_alert("Failed to start directory scan: %s", path.c_str());
 		}
+	    } else {
+		fl_alert("Thread manager not initialized");
 	    }
 	}
 
@@ -130,7 +148,7 @@ class PicExploreWindow {
 
 	    // Create menu bar
 	    menu_bar_ = new Fl_Menu_Bar(0, 0, 1200, 25);
-	    menu_bar_->add("&File/Open &Database...", FL_CTRL + 'd', menu_open_database_cb, this);
+	    // Remove explicit database selection - LMDB is used automatically for all directories
 	    menu_bar_->add("&File/Scan D&irectory...", FL_CTRL + 'i', menu_open_directory_cb, this);
 	    menu_bar_->add("&File/Cancel &Scan", FL_CTRL + 'c', menu_cancel_scan_cb, this);
 	    menu_bar_->add("&File/Generate &PDF...", FL_CTRL + 'p', menu_generate_pdf_cb, this);
@@ -159,15 +177,37 @@ class PicExploreWindow {
 		    });
 	}
 
-	// Menu callbacks
-	static void menu_open_database_cb(Fl_Widget*, void* data) {
-	    PicExploreWindow* window = static_cast<PicExploreWindow*>(data);
-	    const char* path = fl_file_chooser("Select Database", "*.db", ".");
-	    if (path) {
-		window->set_database_path(path);
-	    }
+	void setup_thread_callbacks() {
+	    if (!thread_manager_) return;
+
+	    // Set up progress callback for the new thread manager
+	    thread_manager_->set_progress_callback([this](int current, int total, const std::string& status) {
+		// Progress updates from scan thread - forward to layout widget
+		if (layout_widget_) {
+		    // Use Fl::awake to ensure this runs in the main UI thread
+		    Fl::awake([](void* data) {
+			auto* window = static_cast<PicExploreWindow*>(data);
+			// Update progress display, status bars, etc.
+		    }, this);
+		}
+	    });
+
+	    // Set up metadata callback for incremental image loading
+	    thread_manager_->set_metadata_callback([this](const ImageInfo& info) {
+		// New image metadata ready - add to layout incrementally
+		if (layout_widget_) {
+		    // Use Fl::awake to ensure this runs in the main UI thread
+		    Fl::awake([](void* data) {
+			auto* args = static_cast<std::pair<PicExploreWindow*, ImageInfo>*>(data);
+			// Add image to layout widget incrementally
+			// args->first->layout_widget_->add_image_incremental(args->second);
+			delete args;
+		    }, new std::pair<PicExploreWindow*, ImageInfo>(this, info));
+		}
+	    });
 	}
 
+	// Menu callbacks
 	static void menu_open_directory_cb(Fl_Widget*, void* data) {
 	    PicExploreWindow* window = static_cast<PicExploreWindow*>(data);
 	    const char* path = fl_dir_chooser("Select Directory", ".");
@@ -178,8 +218,9 @@ class PicExploreWindow {
 
 	static void menu_cancel_scan_cb(Fl_Widget*, void* data) {
 	    PicExploreWindow* window = static_cast<PicExploreWindow*>(data);
-	    if (window->layout_widget_) {
-		window->layout_widget_->cancel_directory_scan();
+	    // Use new ThreadManager for cancellation
+	    if (window->thread_manager_) {
+		window->thread_manager_->cancel_scan();
 	    }
 	}
 
@@ -214,6 +255,7 @@ class PicExploreWindow {
 	Fl_Window* window_;
 	Fl_Menu_Bar* menu_bar_;
 	Fl_JustifiedLayout* layout_widget_;
+	std::unique_ptr<ThreadManager> thread_manager_;
 };
 
 // Function to run scan-only mode (like original picscan)
@@ -264,6 +306,13 @@ int run_scan_only_mode(int argc, char* argv[]) {
 	int margin = result["margin"].as<int>();
 	bool verbose = result.count("verbose") > 0;
 
+	// Default to current working directory if none specified and we need to scan
+	if (directory.empty() && pdf_path.empty()) {
+	    directory = std::filesystem::current_path().string();
+	    std::cout << "[INFO] No directory specified, using current working directory for scan: "
+		      << directory << std::endl;
+	}
+
 	// Parse layout padding options
 	int layout_pad_default = result["layout-pad"].as<int>();
 	int pad_top = result.count("layout-pad-top") ? result["layout-pad-top"].as<int>() : layout_pad_default;
@@ -271,9 +320,9 @@ int run_scan_only_mode(int argc, char* argv[]) {
 	int pad_left = result.count("layout-pad-left") ? result["layout-pad-left"].as<int>() : layout_pad_default;
 	int pad_right = result.count("layout-pad-right") ? result["layout-pad-right"].as<int>() : layout_pad_default;
 
-	// Validate arguments
+	// Validate arguments - now that we default to CWD, we always have something to work with
 	if (directory.empty() && pdf_path.empty()) {
-	    std::cerr << "Error: Must specify either --directory or --pdf (or both) in scan-only mode" << std::endl;
+	    std::cerr << "Error: No directory or PDF operation specified" << std::endl;
 	    return 1;
 	}
 
@@ -448,10 +497,9 @@ int run_scan_only_mode(int argc, char* argv[]) {
 // Function to run GUI mode
 int run_gui_mode(int argc, char* argv[]) {
     // Parse any initial arguments for GUI mode
-    std::string initial_database;
     std::string initial_directory;
 
-    // Simple parsing for GUI mode - only look for -d/--database and -i/--directory
+    // Simple parsing for GUI mode - only look for -i/--directory now
     std::string debug_output_dir;
     std::string debug_output_format = "svg";
 
@@ -463,21 +511,20 @@ int run_gui_mode(int argc, char* argv[]) {
 	    std::cout << "\nUsage: picexplore [OPTIONS]\n";
 	    std::cout << "\nOptions:\n";
 	    std::cout << "  -h, --help               Show this help message\n";
-	    std::cout << "  -d, --database PATH      Open LMDB database at PATH\n";
 	    std::cout << "  -i, --directory PATH     Open directory PATH (will scan/build database)\n";
 	    std::cout << "  --debug-output DIR       Enable debug output to DIR (creates SVG files)\n";
 	    std::cout << "  --debug-format FORMAT    Debug output format: svg or png (default: svg)\n";
 	    std::cout << "  --scan-only              Run in scan-only mode (no GUI) - see --help for scan options\n";
+	    std::cout << "\nNew Architecture:\n";
+	    std::cout << "  * LMDB database is automatically used for all directories\n";
+	    std::cout << "  * Defaults to current working directory if no directory specified\n";
+	    std::cout << "  * Unified threading architecture with separate scan/worker/writer threads\n";
 	    std::cout << "\nExamples:\n";
-	    std::cout << "  picexplore                           # Launch GUI\n";
-	    std::cout << "  picexplore --database " << get_cache_db_path(true) << "    # Launch GUI with specific database\n";
-	    std::cout << "  picexplore --directory ~/Pictures    # Launch GUI and scan directory\n";
+	    std::cout << "  picexplore                           # Launch GUI with current directory\n";
+	    std::cout << "  picexplore --directory ~/Pictures    # Launch GUI and scan specific directory\n";
 	    std::cout << "  picexplore --directory ~/Pictures --debug-output /tmp/debug  # With debug output\n";
 	    std::cout << "  picexplore --scan-only --help        # Show scan-only mode options\n";
 	    return 0;
-	}
-	else if ((arg == "-d" || arg == "--database") && i + 1 < argc) {
-	    initial_database = argv[++i];
 	}
 	else if ((arg == "-i" || arg == "--directory") && i + 1 < argc) {
 	    initial_directory = argv[++i];
@@ -495,6 +542,13 @@ int run_gui_mode(int argc, char* argv[]) {
 	}
     }
 
+    // Default to current working directory if none specified
+    if (initial_directory.empty()) {
+	initial_directory = std::filesystem::current_path().string();
+	std::cout << "[INFO] No directory specified, using current working directory: "
+		  << initial_directory << std::endl;
+    }
+
     // Create and show main window
     PicExploreWindow app;
 
@@ -503,16 +557,15 @@ int run_gui_mode(int argc, char* argv[]) {
 	app.enable_debug_output(debug_output_dir, debug_output_format);
     }
 
-    // Load initial content if specified
-    if (!initial_database.empty()) {
-	app.set_database_path(initial_database);
-    } else if (!initial_directory.empty()) {
+    // Start scanning the directory (LMDB will be used automatically)
+    if (!initial_directory.empty()) {
 	app.set_directory_path(initial_directory);
     }
 
     app.show();
 
-    std::cout << "PicExplore GUI started. Use File menu to load images." << std::endl;
+    std::cout << "PicExplore GUI started with new unified threading architecture." << std::endl;
+    std::cout << "LMDB database automatically used for: " << initial_directory << std::endl;
     std::cout << "Click thumbnails to select, use mouse wheel to scroll." << std::endl;
 
     app.run();

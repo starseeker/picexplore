@@ -139,7 +139,7 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     void cancel_directory_scan();
     bool is_scanning() const { return scanning_.load(); }
 
-    // Two-stage population support  
+    // Two-stage population support
     using ThumbnailNotificationCallback = std::function<void(const ThumbnailNotification&)>;
     void set_thumbnail_notification_callback(ThumbnailNotificationCallback callback) {
 	thumbnail_notification_callback_ = callback;

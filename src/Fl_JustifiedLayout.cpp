@@ -234,7 +234,7 @@ void Fl_JustifiedLayout::thumbnail_worker_thread() {
 	    completed_tasks_.fetch_add(1);
 	}
 	else {
-	    // No tasks available, sleep briefly  
+	    // No tasks available, sleep briefly
 	    std::this_thread::sleep_for(std::chrono::milliseconds(10));
 	}
     }
@@ -283,7 +283,7 @@ void Fl_JustifiedLayout::process_thumbnail_results() {
 	}
     }
 
-    log_batch_debug("Processed " + std::to_string(results_processed) + " thumbnail results, any_processed: " + 
+    log_batch_debug("Processed " + std::to_string(results_processed) + " thumbnail results, any_processed: " +
 	    (any_processed ? "true" : "false"));
 
     // Trigger redraw if any thumbnails were processed
@@ -343,8 +343,8 @@ int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, T
     }
 
     if (num_queued > 0) {
-	log_ui_debug("Queued " + std::to_string(num_queued) + " " + 
-		(priority == ThumbnailPriority::HIGH ? "HIGH" : "LOW") + 
+	log_ui_debug("Queued " + std::to_string(num_queued) + " " +
+		(priority == ThumbnailPriority::HIGH ? "HIGH" : "LOW") +
 		" priority thumbnail tasks, total tasks now: " + std::to_string(total_tasks_.load()));
     }
 
@@ -1279,13 +1279,13 @@ void Fl_JustifiedLayout::queue_image_info_batch(const ImageInfo& info) {
     current_batch_.total_images_added++;
 
     size_t pending_count = current_batch_.pending_images.size();
-    log_batch_debug("Added image to batch, pending count: " + std::to_string(pending_count) + 
+    log_batch_debug("Added image to batch, pending count: " + std::to_string(pending_count) +
 	    ", total added: " + std::to_string(current_batch_.total_images_added));
 
     // Check if we should process immediately (small batch) or schedule for later
     if (pending_count <= batch_config_.small_batch_threshold) {
-	log_batch_debug("Small batch detected (" + std::to_string(pending_count) + 
-		" <= " + std::to_string(batch_config_.small_batch_threshold) + 
+	log_batch_debug("Small batch detected (" + std::to_string(pending_count) +
+		" <= " + std::to_string(batch_config_.small_batch_threshold) +
 		"), processing immediately for snappy UI feedback");
 
 	// Process immediately for small batches to maintain snappy UI
@@ -1299,8 +1299,8 @@ void Fl_JustifiedLayout::queue_image_info_batch(const ImageInfo& info) {
     } else {
 	// For larger batches, schedule a flush if not already scheduled
 	if (!batch_flush_scheduled_.load()) {
-	    log_batch_debug("Large batch detected (" + std::to_string(pending_count) + 
-		    " > " + std::to_string(batch_config_.small_batch_threshold) + 
+	    log_batch_debug("Large batch detected (" + std::to_string(pending_count) +
+		    " > " + std::to_string(batch_config_.small_batch_threshold) +
 		    "), scheduling batch flush");
 
 	    batch_flush_scheduled_.store(true);
@@ -1323,8 +1323,8 @@ void Fl_JustifiedLayout::flush_pending_image_batch(bool force) {
     size_t pending_count = current_batch_.pending_images.size();
 
     if (force || pending_count >= batch_config_.large_batch_size || elapsed_ms >= batch_config_.batch_timeout_ms) {
-	log_batch_debug("Flushing batch: force=" + std::string(force ? "true" : "false") + 
-		", pending=" + std::to_string(pending_count) + 
+	log_batch_debug("Flushing batch: force=" + std::string(force ? "true" : "false") +
+		", pending=" + std::to_string(pending_count) +
 		", elapsed=" + std::to_string(elapsed_ms) + "ms");
 
 	std::vector<ImageInfo> batch_to_process = std::move(current_batch_.pending_images);
@@ -1336,7 +1336,7 @@ void Fl_JustifiedLayout::flush_pending_image_batch(bool force) {
 	lock.~lock_guard();
 	process_image_info_batch(batch_to_process);
     } else {
-	log_batch_debug("Flush conditions not met: pending=" + std::to_string(pending_count) + 
+	log_batch_debug("Flush conditions not met: pending=" + std::to_string(pending_count) +
 		", elapsed=" + std::to_string(elapsed_ms) + "ms, will wait");
     }
 }
@@ -1358,14 +1358,14 @@ void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& 
 	    images_.push_back(info);
 	    hash_to_index_map_[info.hash] = images_.size() - 1;
 
-	    log_batch_debug("Added image to main list: " + info.path + 
-		    " (index: " + std::to_string(images_.size() - 1) + 
+	    log_batch_debug("Added image to main list: " + info.path +
+		    " (index: " + std::to_string(images_.size() - 1) +
 		    ", has_thumbnails: " + (info.has_thumbnails ? "true" : "false") + ")");
 	}
     }
 
-    log_batch_debug("Batch processed: added " + std::to_string(batch.size()) + 
-	    " images, total count increased from " + std::to_string(old_size) + 
+    log_batch_debug("Batch processed: added " + std::to_string(batch.size()) +
+	    " images, total count increased from " + std::to_string(old_size) +
 	    " to " + std::to_string(images_.size()));
 
     // Recalculate layout for the batch
@@ -1399,8 +1399,8 @@ void Fl_JustifiedLayout::batch_flush_callback(void* data) {
 
 // Two-stage population support methods
 void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
-    log_ui_debug("handle_image_info_ready called for: " + info.path + 
-	    " (hash: " + info.hash + ", has_thumbnails: " + 
+    log_ui_debug("handle_image_info_ready called for: " + info.path +
+	    " (hash: " + info.hash + ", has_thumbnails: " +
 	    (info.has_thumbnails ? "true" : "false") + ")");
 
     // Instead of processing immediately, queue for batch processing
