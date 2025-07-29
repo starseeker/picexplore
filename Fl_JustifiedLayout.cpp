@@ -13,8 +13,10 @@
 #include <cstring>
 #include <chrono>
 #include <thread>
+#include <filesystem>
 #include "stb_image.h"
 #include "../utils.h"
+#include "../simple_svg_1.0.0.hpp"
 
 Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* label)
     : Fl_Scroll(X, Y, W, H, label)
@@ -597,6 +599,11 @@ void Fl_JustifiedLayout::calculate_layout() {
     // Trigger prefetching when visible region is calculated
     if (generating_.load()) {
         prefetch_visible_region();
+    }
+
+    // Write debug output if enabled
+    if (debug_output_enabled_) {
+        write_debug_output();
     }
 }
 
@@ -1382,6 +1389,73 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
         int queued = queue_thumbnail_tasks(low_priority_indices, ThumbnailPriority::LOW);
         std::cout << "Queued " << queued << " low-priority thumbnail tasks" << std::endl;
     }
+}
+
+void Fl_JustifiedLayout::write_debug_output() {
+    if (!debug_output_enabled_ || layout_items_.empty()) {
+        return;
+    }
+
+    // Ensure output directory exists
+    std::filesystem::create_directories(debug_output_dir_);
+
+    // Generate filename with counter
+    std::string filename = debug_output_dir_ + "/layout_update_" + 
+                          std::to_string(debug_update_counter_++) + "." + debug_output_format_;
+
+    if (debug_output_format_ == "svg") {
+        write_debug_svg(filename);
+    } else if (debug_output_format_ == "png") {
+        write_debug_png(filename);
+    }
+
+    std::cout << "Debug layout output written to: " << filename << " (images: " << images_.size() << ")" << std::endl;
+}
+
+void Fl_JustifiedLayout::write_debug_svg(const std::string& filename) {
+    // Use the simple-svg library that's already included
+    svg::Document doc(filename, svg::Layout(svg::Dimensions(layout_config_.w, total_height_), svg::Layout::BottomLeft));
+
+    // Draw background
+    doc << svg::Rectangle(svg::Point(0, 0), layout_config_.w, total_height_, svg::Fill(svg::Color(255, 255, 255)));
+
+    // Draw each item
+    for (size_t i = 0; i < layout_items_.size() && i < images_.size(); ++i) {
+        const auto& item = layout_items_[i];
+        const auto& info = images_[i];
+
+        // Choose color based on thumbnail availability
+        svg::Color fill_color = info.has_thumbnails ? svg::Color(0, 255, 0) : svg::Color(255, 255, 0);  // Green : Yellow
+        svg::Color stroke_color = svg::Color(0, 0, 0);  // Black
+
+        // Draw rectangle for this image
+        doc << svg::Rectangle(svg::Point(item.l, item.t), item.w, item.h, 
+                             svg::Fill(fill_color), svg::Stroke(1, stroke_color));
+
+        // Add text with image info
+        if (item.w > 100 && item.h > 30) {  // Only add text if rectangle is large enough
+            std::string text = std::to_string(static_cast<int>(item.w)) + "x" + 
+                              std::to_string(static_cast<int>(item.h));
+            doc << svg::Text(svg::Point(item.l + 10, item.t + 20), text, 
+                           svg::Fill(svg::Color(0, 0, 0)), svg::Font(12, "Arial"));
+        }
+    }
+
+    doc.save();
+}
+
+void Fl_JustifiedLayout::write_debug_png(const std::string& filename) {
+    // For PNG output, we'll create a simple image using FLTK's image surface
+    // This is a placeholder implementation - for now we'll just create a simple colored rectangle
+    std::cout << "PNG debug output not yet fully implemented, using SVG fallback" << std::endl;
+    
+    // Fall back to SVG for now
+    std::string svg_filename = filename;
+    size_t dot_pos = svg_filename.find_last_of('.');
+    if (dot_pos != std::string::npos) {
+        svg_filename = svg_filename.substr(0, dot_pos) + ".svg";
+    }
+    write_debug_svg(svg_filename);
 }
 
 void Fl_JustifiedLayout::draw() {
