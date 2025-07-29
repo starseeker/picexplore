@@ -495,20 +495,23 @@ void Fl_JustifiedLayout::relayout() {
 void Fl_JustifiedLayout::calculate_layout() {
     if (images_.empty()) return;
 
-    if (layout_items_.empty()) {
-        // Convert images to layout input format
-        std::vector<Item> input_items;
-        for (const auto& img : images_) {
-            Item item;
-            item.ar = img.aspect_ratio;
-            input_items.push_back(item);
-        }
+    // Always recalculate layout when called - this ensures correctness
+    // for incremental updates. For better performance, we could optimize
+    // this later to only recalculate changed portions.
+    layout_items_.clear();
 
-        // Calculate justified layout
-        JustifiedLayout layout(input_items, layout_config_);
-        layout_items_ = layout.boxes();
-        total_height_ = layout.height();
+    // Convert images to layout input format
+    std::vector<Item> input_items;
+    for (const auto& img : images_) {
+        Item item;
+        item.ar = img.aspect_ratio;
+        input_items.push_back(item);
     }
+
+    // Calculate justified layout
+    JustifiedLayout layout(input_items, layout_config_);
+    layout_items_ = layout.boxes();
+    total_height_ = layout.height();
 
     // Calculate visible range based on Fl_Scroll's current position
     visible_start_idx_ = 0;
@@ -686,16 +689,20 @@ void Fl_JustifiedLayout::draw_thumbnail_placeholder(int x, int y, int w, int h, 
     // Check if this thumbnail is being generated
     bool is_loading = generating_.load();
 
-    // Draw border with different color if loading
-    fl_color(is_loading ? FL_BLUE : FL_GRAY);
+    // Draw outer border with different color based on state
+    if (is_loading) {
+        fl_color(FL_BLUE);  // Blue border when thumbnails are being generated
+    } else {
+        fl_color(FL_DARK2); // Darker border for newly discovered images
+    }
     fl_rect(x, y, w, h);
 
-    // Fill interior
-    fl_color(FL_WHITE);
+    // Fill interior with light gray background
+    fl_color(FL_LIGHT2);
     fl_rectf(x + THUMBNAIL_BORDER_WIDTH, y + THUMBNAIL_BORDER_WIDTH,
             w - 2 * THUMBNAIL_BORDER_WIDTH, h - 2 * THUMBNAIL_BORDER_WIDTH);
 
-    // Draw placeholder content
+    // Draw placeholder content with dark text
     fl_color(FL_DARK3);
     fl_font(FL_HELVETICA, 10);
 
@@ -713,25 +720,47 @@ void Fl_JustifiedLayout::draw_thumbnail_placeholder(int x, int y, int w, int h, 
 
     int text_w = 0, text_h = 0;
     fl_measure(filename.c_str(), text_w, text_h);
-    int text_y = y + h / 2;
+    int text_y = y + h / 2 - 15;
 
     // Show loading indicator if generating
     if (is_loading) {
         fl_color(FL_BLUE);
-        fl_draw("[ Loading... ]", x + (w - text_w) / 2, text_y - 10);
+        int loading_w = 0, loading_h = 0;
+        const char* loading_text = "[ Loading... ]";
+        fl_measure(loading_text, loading_w, loading_h);
+        fl_draw(loading_text, x + (w - loading_w) / 2, text_y);
         fl_color(FL_DARK3);
-        text_y += 10;
+        text_y += 15;
+    } else {
+        // Show "New Image" indicator for newly discovered images
+        fl_color(FL_DARK_GREEN);
+        int new_w = 0, new_h = 0;
+        const char* new_text = "[ New Image ]";
+        fl_measure(new_text, new_w, new_h);
+        fl_draw(new_text, x + (w - new_w) / 2, text_y);
+        fl_color(FL_DARK3);
+        text_y += 15;
     }
 
+    // Draw filename
     fl_draw(filename.c_str(), x + (w - text_w) / 2, text_y);
 
-    // Draw size info
-    char size_str[64];
-    snprintf(size_str, sizeof(size_str), "%dx%d",
-             static_cast<int>(w * info.aspect_ratio), static_cast<int>(h));
+    // Draw aspect ratio and dimensions info
     fl_font(FL_HELVETICA, 8);
-    fl_measure(size_str, text_w, text_h);
-    fl_draw(size_str, x + (w - text_w) / 2, text_y + 15);
+    char info_str[64];
+    snprintf(info_str, sizeof(info_str), "%.2f:1 ratio", info.aspect_ratio);
+    int info_w = 0, info_h = 0;
+    fl_measure(info_str, info_w, info_h);
+    fl_draw(info_str, x + (w - info_w) / 2, text_y + 15);
+    
+    // Draw approximate dimensions based on current box size
+    char size_str[64];
+    int est_width = static_cast<int>(h * info.aspect_ratio);
+    int est_height = h;
+    snprintf(size_str, sizeof(size_str), "~%dx%d px", est_width, est_height);
+    int size_w = 0, size_h = 0;
+    fl_measure(size_str, size_w, size_h);
+    fl_draw(size_str, x + (w - size_w) / 2, text_y + 27);
 }
 
 void Fl_JustifiedLayout::draw_selection_highlight(int x, int y, int w, int h) {
@@ -944,16 +973,37 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
 
         // Track explicit user cancellation
         std::atomic<bool> user_cancelled(false);
+        std::atomic<size_t> last_image_count(0);
 
-        // Start a cancellation monitor thread
-        std::thread cancellation_monitor([this, scan_database = scan_database.get(), &user_cancelled]() {
+        // Start a cancellation monitor thread that also provides incremental updates
+        std::thread update_monitor([this, scan_database = scan_database.get(), &user_cancelled, &last_image_count]() {
             while (scanning_.load()) {
                 if (should_cancel_scan_.load()) {
                     user_cancelled.store(true);
                     scan_database->cancel_scan();
                     break;
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+                // Check for new images and provide incremental updates
+                try {
+                    std::vector<ImageInfo> new_images = scan_database->get_images_since_count(last_image_count.load());
+                    if (!new_images.empty()) {
+                        last_image_count.store(last_image_count.load() + new_images.size());
+                        
+                        // Create a copy for the lambda to capture
+                        auto new_images_copy = std::make_shared<std::vector<ImageInfo>>(std::move(new_images));
+                        
+                        Fl::awake([](void* data) {
+                            auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>*>(data);
+                            params->first->add_images_incremental(*(params->second));
+                            delete params;
+                        }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>(this, new_images_copy));
+                    }
+                } catch (const std::exception& e) {
+                    std::cerr << "Error during incremental update: " << e.what() << std::endl;
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(250)); // Check 4 times per second
             }
         });
 
@@ -963,8 +1013,8 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
 	// Done with scanning
 	scanning_.store(false);
 
-	// Wait for cancellation monitor
-	cancellation_monitor.join();
+	// Wait for update monitor
+	update_monitor.join();
 
 	// We can stop reporting now
         reporter.stop();
@@ -984,15 +1034,30 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
                 }
             }, this);
         } else if (processed >= 0) {
-            // Scan completed successfully - update database and reload
+            // Scan completed successfully - get any remaining images and finish
+            std::vector<ImageInfo> remaining_images = scan_database->get_images_since_count(last_image_count.load());
+            if (!remaining_images.empty()) {
+                auto remaining_images_copy = std::make_shared<std::vector<ImageInfo>>(std::move(remaining_images));
+                Fl::awake([](void* data) {
+                    auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>*>(data);
+                    params->first->add_images_incremental(*(params->second));
+                    delete params;
+                }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>(this, remaining_images_copy));
+            }
+
+            // Update database and complete
             current_db_path_ = db_path;
             database_ = std::move(scan_database);
 
 	    std::cout << "[DEBUG] About to call Fl::awake for scan complete, thread id: " << std::this_thread::get_id() << std::endl;
             Fl::awake([](void* data) {
                 std::cout << "[DEBUG] Fl::awake (scan complete) lambda running" << std::endl;
-		std::cout << "[DEBUG] lambda thread id: " << std::this_thread::get_id() << std::endl;
-		static_cast<Fl_JustifiedLayout*>(data)->complete_directory_scan();
+                Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
+                if (widget->progress_callback_) {
+                    widget->progress_callback_(0, 0, "Scan complete - " + std::to_string(widget->images_.size()) + " images loaded");
+                }
+                // Start background thumbnail generation
+                widget->start_background_generation();
             }, this);
         } else {
 	    std::cout << "[DEBUG] About to call Fl::awake for scan failed, thread id: " << std::this_thread::get_id() << std::endl;
@@ -1068,5 +1133,30 @@ bool Fl_JustifiedLayout::load_image_list() {
     relayout();
 
     return true;
+}
+
+void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& new_images) {
+    if (new_images.empty()) return;
+
+    // Add new images to our list
+    size_t old_size = images_.size();
+    images_.insert(images_.end(), new_images.begin(), new_images.end());
+
+    // For incremental layout, we need to recalculate layout with all images
+    // This is more efficient than a full clear since we preserve existing layout cache
+    // when possible, but for now we do a simple approach
+    calculate_layout();
+
+    // Resize content widget to match the new total layout height
+    if (content_widget_) {
+        int content_height = std::max(static_cast<int>(total_height_), h());
+        content_widget_->resize(x(), y(), w(), content_height);
+    }
+
+    // Trigger redraw to show new placeholders
+    redraw();
+
+    std::cout << "Added " << new_images.size() << " images incrementally (total: " 
+              << images_.size() << ")" << std::endl;
 }
 
