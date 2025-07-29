@@ -28,7 +28,7 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
-#include "../database.h"
+#include "../src/database.hpp"
 
 // Forward declarations for mlpack (using simple approach to avoid complex templates)
 class mlpack_search_index;
