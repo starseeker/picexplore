@@ -28,6 +28,9 @@
 #include <iostream>
 #include <chrono>
 #include <algorithm>
+#include <cstring>
+#include "stb_image.h"
+#include "stb_image_resize2.h"
 
 // Global flags initialization
 std::atomic<bool> GlobalFlags::should_shutdown{false};
@@ -267,12 +270,20 @@ void WorkerPool::worker_thread_main() {
 	    processed_count_.fetch_add(1);
 
 	    // Process the thumbnail generation task
-	    // Generate thumbnails and queue write task
-	    WriteTask write_task(WriteTask::STORE_THUMBNAIL, task.hash, std::vector<uint8_t>());
-	    // ... thumbnail generation logic would go here ...
-
-	    // Queue for writer thread
-	    write_queue_.enqueue(std::move(write_task));
+	    // Generate thumbnails using the database manager
+	    if (scan_thread_ && scan_thread_->database_) {
+		bool success = scan_thread_->database_->generate_thumbnails_for_hash(task.hash, task.file_path);
+		
+		if (success) {
+		    // Create a write task to indicate completion (no actual data to write since
+		    // generate_thumbnails_for_hash handles the database writes)
+		    WriteTask write_task(WriteTask::STORE_THUMBNAIL, task.hash, std::vector<uint8_t>());
+		    write_queue_.enqueue(std::move(write_task));
+		} else {
+		    std::cerr << "[WARNING] WorkerPool: Failed to generate thumbnails for " 
+			      << task.file_path << " (hash: " << task.hash << ")" << std::endl;
+		}
+	    }
 	}
 
 	if (!found_task) {
@@ -442,9 +453,8 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 		std::to_string(task.target_width) + "x" +
 		std::to_string(task.target_height);
 
-	    // TODO: Implement thumbnail generation from database
-	    // For now, create a placeholder
-	    // thumbnail = generate_ui_thumbnail(task);
+	    // Generate UI thumbnail from database
+	    thumbnail = generate_ui_thumbnail(task);
 
 	    // Queue result for UI
 	    if (thumbnail) {
@@ -470,6 +480,135 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 
     std::cout << "[INFO] ThumbnailWorkers: Thumbnail worker thread exiting, processed "
 	      << tasks_processed << " tasks" << std::endl;
+}
+
+std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UIThumbnailTask& task) {
+    if (!database_) {
+	return create_placeholder_thumbnail(task.target_width, task.target_height, "No DB");
+    }
+
+    // Find the best thumbnail size from the database
+    std::vector<int> available_sizes = {32, 64, 128, 256, 512, 1024};
+    int best_size = 0;
+    
+    // Find the smallest thumbnail that's >= our target size
+    for (int size : available_sizes) {
+	if (size >= std::max(task.target_width, task.target_height)) {
+	    best_size = size;
+	    break;
+	}
+    }
+    
+    // If no size is large enough, use the largest available
+    if (best_size == 0) {
+	best_size = 1024;
+    }
+
+    // Try to load thumbnail from database
+    MDB_txn* read_txn = nullptr;
+    if (!database_->begin_read_transaction(read_txn)) {
+	return create_placeholder_thumbnail(task.target_width, task.target_height, "DB Error");
+    }
+
+    std::string thumb_key = task.hash + ":thumb_" + std::to_string(best_size);
+    std::vector<uint8_t> thumb_data;
+    
+    bool success = database_->get_key_data(read_txn, thumb_key, thumb_data);
+    
+    database_->commit_transaction(read_txn);
+
+    if (!success || thumb_data.empty()) {
+	return create_placeholder_thumbnail(task.target_width, task.target_height, "Not Found");
+    }
+
+    // Decode JPEG thumbnail data using stb_image
+    int thumb_width, thumb_height, thumb_channels;
+    unsigned char* rgb_data = stbi_load_from_memory(
+	thumb_data.data(), thumb_data.size(),
+	&thumb_width, &thumb_height, &thumb_channels, 3  // Force RGB
+    );
+
+    if (!rgb_data) {
+	return create_placeholder_thumbnail(task.target_width, task.target_height, "Decode Error");
+    }
+
+    // Create FLTK RGB image
+    // Note: Fl_RGB_Image takes ownership of the data, so we need to copy it
+    int final_width = thumb_width;
+    int final_height = thumb_height;
+    
+    // If the thumbnail needs resizing to match target size, do it now
+    unsigned char* final_data = rgb_data;
+    if (thumb_width != task.target_width || thumb_height != task.target_height) {
+	// Calculate aspect-preserving dimensions
+	double aspect = (double)thumb_width / thumb_height;
+	double target_aspect = (double)task.target_width / task.target_height;
+	
+	if (aspect > target_aspect) {
+	    // Image is wider than target
+	    final_width = task.target_width;
+	    final_height = (int)(task.target_width / aspect);
+	} else {
+	    // Image is taller than target
+	    final_height = task.target_height;
+	    final_width = (int)(task.target_height * aspect);
+	}
+	
+	// Allocate memory for resized image
+	final_data = (unsigned char*)malloc(final_width * final_height * 3);
+	if (!final_data) {
+	    stbi_image_free(rgb_data);
+	    return create_placeholder_thumbnail(task.target_width, task.target_height, "Memory Error");
+	}
+	
+	// Resize using stb_image_resize
+	if (!stbir_resize_uint8_linear(
+	    rgb_data, thumb_width, thumb_height, 0,
+	    final_data, final_width, final_height, 0,
+	    STBIR_RGB)) {
+	    free(final_data);
+	    stbi_image_free(rgb_data);
+	    return create_placeholder_thumbnail(task.target_width, task.target_height, "Resize Error");
+	}
+	
+	stbi_image_free(rgb_data);
+    }
+
+    // Create Fl_RGB_Image - it will take ownership of the data
+    auto thumbnail = std::make_unique<Fl_RGB_Image>(final_data, final_width, final_height, 3);
+    
+    return thumbnail;
+}
+
+std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::create_placeholder_thumbnail(int width, int height, const std::string& message) {
+    // Create a simple placeholder image - grey background with text
+    int data_size = width * height * 3;
+    unsigned char* placeholder_data = (unsigned char*)malloc(data_size);
+    
+    if (!placeholder_data) {
+	return nullptr;
+    }
+    
+    // Fill with medium grey
+    for (int i = 0; i < data_size; i += 3) {
+	placeholder_data[i] = 128;     // R
+	placeholder_data[i + 1] = 128; // G 
+	placeholder_data[i + 2] = 128; // B
+    }
+    
+    // Add a darker border
+    for (int y = 0; y < height; y++) {
+	for (int x = 0; x < width; x++) {
+	    if (x < 2 || x >= width - 2 || y < 2 || y >= height - 2) {
+		int offset = (y * width + x) * 3;
+		placeholder_data[offset] = 64;     // R
+		placeholder_data[offset + 1] = 64; // G
+		placeholder_data[offset + 2] = 64; // B
+	    }
+	}
+    }
+    
+    return std::make_unique<Fl_RGB_Image>(placeholder_data, width, height, 3);
 }
 
 //==============================================================================

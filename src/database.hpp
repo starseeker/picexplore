@@ -115,6 +115,7 @@ class DatabaseManager {
 	bool commit_transaction(MDB_txn* txn);
 	void abort_transaction(MDB_txn* txn);
 	bool load_image_info(MDB_txn* txn, const std::string& hash, ImageInfo& info);
+	bool get_key_data(MDB_txn* txn, const std::string& key, std::vector<uint8_t>& data);
 
     private:
 	MDB_env* env_;
@@ -151,7 +152,6 @@ class DatabaseManager {
 	bool store_key_value(MDB_txn* txn, const std::string& key, const std::string& value);
 	bool store_key_data(MDB_txn* txn, const std::string& key, const std::vector<uint8_t>& data);
 	bool get_key_value(MDB_txn* txn, const std::string& key, std::string& value);
-	bool get_key_data(MDB_txn* txn, const std::string& key, std::vector<uint8_t>& data);
 	std::string extract_hash_from_key(const char* key, size_t key_size);
 
 	// Image processing helper

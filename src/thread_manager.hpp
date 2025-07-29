@@ -269,6 +269,8 @@ public:
 
 private:
     void thumbnail_worker_thread_main();
+    std::unique_ptr<Fl_RGB_Image> generate_ui_thumbnail(const UIThumbnailTask& task);
+    std::unique_ptr<Fl_RGB_Image> create_placeholder_thumbnail(int width, int height, const std::string& message = "Error");
 
     std::vector<std::thread> worker_threads_;
     std::atomic<bool> should_stop_;

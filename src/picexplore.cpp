@@ -228,8 +228,47 @@ class PicExploreWindow {
 	    PicExploreWindow* window = static_cast<PicExploreWindow*>(data);
 	    const char* path = fl_file_chooser("Save PDF As", "*.pdf", "gallery.pdf");
 	    if (path) {
-		// TODO: Implement PDF generation from GUI
-		fl_message("PDF generation from GUI not yet implemented.\nUse command line: picexplore --scan-only --pdf %s", path);
+		// Generate PDF from current database
+		try {
+		    // Open database connection
+		    DatabaseManager db;
+		    std::string db_path = get_cache_db_path();
+		    
+		    if (!db.open(db_path)) {
+			fl_alert("Error: Failed to open database at %s", db_path.c_str());
+			return;
+		    }
+		    
+		    // Get all images from database
+		    std::vector<ImageInfo> images = db.get_all_images();
+		    
+		    if (images.empty()) {
+			fl_alert("No images found in database. Please scan a directory first.");
+			return;
+		    }
+		    
+		    // Create PDF with default options
+		    PDFOptions pdf_options;
+		    PDFGenerator pdf_gen;
+		    Timer timer;
+		    StatusReporter reporter(1); // Report every second for GUI
+		    
+		    reporter.start();
+		    reporter.update_status("Generating PDF...");
+		    
+		    bool success = pdf_gen.generate_pdf(images, path, timer, reporter, pdf_options);
+		    
+		    reporter.stop();
+		    
+		    if (success) {
+			fl_message("PDF generated successfully: %s", path);
+		    } else {
+			fl_alert("Error: Failed to generate PDF");
+		    }
+		    
+		} catch (const std::exception& e) {
+		    fl_alert("Error generating PDF: %s", e.what());
+		}
 	    }
 	}
 
