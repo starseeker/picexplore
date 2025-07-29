@@ -360,8 +360,6 @@ void Fl_JustifiedLayout::start_background_generation() {
 }
 
 void Fl_JustifiedLayout::stop_background_generation() {
-    if (!generating_.load()) return;
-
     should_stop_.store(true);
 
     // Wait for all worker threads to complete
@@ -906,9 +904,6 @@ void Fl_JustifiedLayout::start_directory_scan(const std::string& dir_path, const
 }
 
 void Fl_JustifiedLayout::cancel_directory_scan() {
-    // Only set cancellation if a scan is running
-    if (!scanning_.load()) return;
-
     should_cancel_scan_.store(true);
 
     if (scan_thread_.joinable()) {
