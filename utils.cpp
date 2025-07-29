@@ -27,6 +27,7 @@
 #include <mutex>
 #include <algorithm>
 #include <filesystem>
+#include <cstdlib>
 
 #include "stb_image_write.h"
 
@@ -155,4 +156,63 @@ bool is_image_file(const std::string& filepath) {
     auto ext = std::filesystem::path(filepath).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     return (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" || ext == ".tga");
+}
+
+std::string get_cache_db_path(bool silent) {
+    std::filesystem::path cache_dir;
+
+#ifdef _WIN32
+    // Windows: %LOCALAPPDATA%\picexplore\picexplore.db
+    const char* localappdata = std::getenv("LOCALAPPDATA");
+    if (localappdata) {
+        cache_dir = std::filesystem::path(localappdata) / "picexplore";
+    } else {
+        // Fallback to %USERPROFILE%\AppData\Local\picexplore
+        const char* userprofile = std::getenv("USERPROFILE");
+        if (userprofile) {
+            cache_dir = std::filesystem::path(userprofile) / "AppData" / "Local" / "picexplore";
+        } else {
+            // Final fallback to current directory
+            cache_dir = std::filesystem::current_path() / "picexplore_cache";
+        }
+    }
+#elif defined(__APPLE__)
+    // macOS: $HOME/Library/Caches/picexplore/picexplore.db
+    const char* home = std::getenv("HOME");
+    if (home) {
+        cache_dir = std::filesystem::path(home) / "Library" / "Caches" / "picexplore";
+    } else {
+        // Fallback to current directory
+        cache_dir = std::filesystem::current_path() / "picexplore_cache";
+    }
+#else
+    // Linux and other Unix-like systems: ~/.cache/picexplore/picexplore.db
+    const char* home = std::getenv("HOME");
+    if (home) {
+        cache_dir = std::filesystem::path(home) / ".cache" / "picexplore";
+    } else {
+        // Fallback to current directory
+        cache_dir = std::filesystem::current_path() / "picexplore_cache";
+    }
+#endif
+
+    // Ensure the cache directory exists
+    std::error_code ec;
+    std::filesystem::create_directories(cache_dir, ec);
+    if (ec) {
+        if (!silent) {
+            std::cerr << "[DEBUG] Failed to create cache directory: " << cache_dir
+                      << " - Error: " << ec.message() << std::endl;
+        }
+        // Use current directory as fallback
+        cache_dir = std::filesystem::current_path();
+    }
+
+    std::filesystem::path db_path = cache_dir / "picexplore.db";
+    
+    if (!silent) {
+        std::cout << "[DEBUG] Resolved cache DB path: " << db_path << std::endl;
+    }
+
+    return db_path.string();
 }

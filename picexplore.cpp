@@ -187,7 +187,7 @@ int run_scan_only_mode(int argc, char* argv[]) {
             ("h,help", "Print usage")
             ("scan-only", "Run in scan-only mode (no GUI)")
             ("d,directory", "Directory to scan for images", cxxopts::value<std::string>())
-            ("db,database", "LMDB database path", cxxopts::value<std::string>()->default_value("./images.db"))
+            ("db,database", "LMDB database path", cxxopts::value<std::string>()->default_value(get_cache_db_path()))
             ("pdf,output", "PDF output file path", cxxopts::value<std::string>())
             ("row-height", "Target row height in pixels for PDF layout", cxxopts::value<int>()->default_value("150"))
             ("margin", "Spacing between images in pixels for PDF", cxxopts::value<int>()->default_value("10"))
@@ -353,7 +353,7 @@ int run_gui_mode(int argc, char* argv[]) {
             std::cout << "  --scan-only              Run in scan-only mode (no GUI) - see --help for scan options\n";
             std::cout << "\nExamples:\n";
             std::cout << "  picexplore                           # Launch GUI\n";
-            std::cout << "  picexplore --database ./images.db    # Launch GUI with database\n";
+            std::cout << "  picexplore --database " << get_cache_db_path(true) << "    # Launch GUI with specific database\n";
             std::cout << "  picexplore --directory ~/Pictures    # Launch GUI and scan directory\n";
             std::cout << "  picexplore --scan-only --help        # Show scan-only mode options\n";
             return 0;

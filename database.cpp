@@ -48,63 +48,82 @@ DatabaseManager::~DatabaseManager() {
 }
 
 bool DatabaseManager::open(const std::string& db_path) {
+    std::cout << "[DEBUG] DatabaseManager::open called with path: " << db_path << std::endl;
+
     if (is_open_) {
+        std::cout << "[DEBUG] DatabaseManager: Closing existing database before opening new one" << std::endl;
         close();
     }
 
     int rc = mdb_env_create(&env_);
     if (rc != 0) {
+        std::cerr << "[ERROR] DatabaseManager: Failed to create LMDB environment: " << mdb_strerror(rc) << std::endl;
         return false;
     }
+    std::cout << "[DEBUG] DatabaseManager: LMDB environment created successfully" << std::endl;
 
     // Set map size to handle large databases (1GB)
     rc = mdb_env_set_mapsize(env_, MAX_DB_SIZE);
     if (rc != 0) {
+        std::cerr << "[ERROR] DatabaseManager: Failed to set LMDB map size: " << mdb_strerror(rc) << std::endl;
         mdb_env_close(env_);
         env_ = nullptr;
         return false;
     }
+    std::cout << "[DEBUG] DatabaseManager: LMDB map size set to " << MAX_DB_SIZE << " bytes" << std::endl;
 
     // Check if this is a new database for bulk insert optimization
     bool is_new_db = !std::filesystem::exists(db_path);
+    std::cout << "[DEBUG] DatabaseManager: Database file " << (is_new_db ? "does not exist (new)" : "exists") << std::endl;
 
     unsigned int flags = MDB_NOSUBDIR;
     if (is_new_db) {
         flags |= MDB_NOSYNC; // Use MDB_NOSYNC for faster bulk insert on new DB
+        std::cout << "[DEBUG] DatabaseManager: Using MDB_NOSYNC flag for new database" << std::endl;
     }
 
     rc = mdb_env_open(env_, db_path.c_str(), flags, 0664);
     if (rc != 0) {
+        std::cerr << "[ERROR] DatabaseManager: Failed to open LMDB database at " << db_path
+                  << ": " << mdb_strerror(rc) << std::endl;
         mdb_env_close(env_);
         env_ = nullptr;
         return false;
     }
+    std::cout << "[DEBUG] DatabaseManager: LMDB database opened successfully at " << db_path << std::endl;
 
     // Open the DBI handle once for all transactions
     MDB_txn* setup_txn;
     rc = mdb_txn_begin(env_, nullptr, 0, &setup_txn);
     if (rc != 0) {
+        std::cerr << "[ERROR] DatabaseManager: Failed to begin setup transaction: " << mdb_strerror(rc) << std::endl;
         mdb_env_close(env_);
         env_ = nullptr;
         return false;
     }
+    std::cout << "[DEBUG] DatabaseManager: Setup transaction begun" << std::endl;
 
     rc = mdb_dbi_open(setup_txn, nullptr, MDB_CREATE, &dbi_);
     if (rc != 0) {
+        std::cerr << "[ERROR] DatabaseManager: Failed to open DBI: " << mdb_strerror(rc) << std::endl;
         mdb_txn_abort(setup_txn);
         mdb_env_close(env_);
         env_ = nullptr;
         return false;
     }
+    std::cout << "[DEBUG] DatabaseManager: DBI opened successfully" << std::endl;
 
     rc = mdb_txn_commit(setup_txn);
     if (rc != 0) {
+        std::cerr << "[ERROR] DatabaseManager: Failed to commit setup transaction: " << mdb_strerror(rc) << std::endl;
         mdb_env_close(env_);
         env_ = nullptr;
         return false;
     }
+    std::cout << "[DEBUG] DatabaseManager: Setup transaction committed" << std::endl;
 
     is_open_ = true;
+    std::cout << "[DEBUG] DatabaseManager: Database opened and ready for operations" << std::endl;
     return true;
 }
 
@@ -728,6 +747,8 @@ void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_
                                    moodycamel::ConcurrentQueue<WriteTask>& write_queue,
                                    Timer& timer, StatusReporter& reporter,
                                    std::atomic<int>& processed_count, std::atomic<int>& skipped_count) {
+    std::cout << "[DEBUG] Worker thread started: processing files " << start_idx << " to " << (end_idx - 1)
+              << " (total: " << (end_idx - start_idx) << " files)" << std::endl;
 
     for (size_t i = start_idx; i < end_idx && !stop_processing_.load(); i++) {
         const std::string& filepath = files[i];
@@ -754,12 +775,16 @@ void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_
             reporter.set_current_count(processed_count.load() + skipped_count.load());
         }
     }
+
+    std::cout << "[DEBUG] Worker thread completed: processed " << (end_idx - start_idx)
+              << " files from index " << start_idx << " to " << (end_idx - 1) << std::endl;
 }
 
 void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& write_queue,
                                    std::atomic<bool>& workers_done,
                                    Timer& timer, StatusReporter& reporter,
                                    std::atomic<int>& write_count) {
+    std::cout << "[DEBUG] Writer thread started" << std::endl;
 
     constexpr int BATCH_SIZE = 100;
     std::vector<WriteTask> batch;
@@ -813,16 +838,24 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
             }
         }
     }
+
+    std::cout << "[DEBUG] Writer thread completed" << std::endl;
 }
 
 int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer& timer,
                                             StatusReporter& reporter, int num_threads) {
-    if (!is_open_) return -1;
+    std::cout << "[DEBUG] Starting parallel directory scan of: " << directory << std::endl;
+
+    if (!is_open_) {
+        std::cerr << "[ERROR] Database not open for directory scan" << std::endl;
+        return -1;
+    }
 
     if (num_threads <= 0) {
         num_threads = std::thread::hardware_concurrency();
         if (num_threads == 0) num_threads = 4; // fallback
     }
+    std::cout << "[DEBUG] Using " << num_threads << " worker threads for scanning" << std::endl;
 
     timer.start("Directory Scanning");
     reporter.update_status("Scanning directory for images...");
@@ -895,6 +928,10 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
     timer.stop("Parallel Image Processing");
 
     reporter.update_status("Scanning complete");
+
+    std::cout << "[DEBUG] Parallel directory scan completed. Processed " << processed_count.load()
+              << " files from directory: " << directory << std::endl;
+
     return processed_count.load();
 }
 

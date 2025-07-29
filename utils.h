@@ -72,3 +72,6 @@ private:
 // Utility functions
 std::vector<uint8_t> encode_jpeg(const unsigned char* rgb_data, int width, int height, int quality = 90);
 bool is_image_file(const std::string& filepath);
+
+// Cross-platform cache path management
+std::string get_cache_db_path(bool silent = false);

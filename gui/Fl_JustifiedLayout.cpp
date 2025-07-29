@@ -14,6 +14,7 @@
 #include <chrono>
 #include <thread>
 #include "stb_image.h"
+#include "../utils.h"
 
 Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* label)
     : Fl_Scroll(X, Y, W, H, label)
@@ -198,8 +199,8 @@ bool Fl_JustifiedLayout::set_directory_path(const std::string& dir_path) {
     cancel_directory_scan();
     stop_background_generation();
 
-    // Generate database path from directory
-    std::string db_path = dir_path + "/images.db";
+    // Use common cache database path instead of directory-specific path
+    std::string db_path = get_cache_db_path();
 
     // Start asynchronous directory scan
     start_directory_scan(dir_path, db_path);
