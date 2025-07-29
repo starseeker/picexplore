@@ -121,6 +121,11 @@ void Fl_JustifiedLayout::progress_update_callback(void* data) {
 }
 
 void Fl_JustifiedLayout::process_thumbnail_results() {
+	static std::atomic_flag processing = ATOMIC_FLAG_INIT;
+	if (processing.test_and_set()) {
+        std::cerr << "WARNING: process_thumbnail_results re-entered!" << std::endl;
+        return;
+    }
     ThumbnailResult result;
     bool any_processed = false;
 
@@ -128,9 +133,14 @@ void Fl_JustifiedLayout::process_thumbnail_results() {
     while (result_queue_.try_dequeue(result)) {
         if (result.thumbnail) {
             std::lock_guard<std::mutex> lock(image_cache_mutex_);
+	    if (image_cache_.find(result.cache_key) != image_cache_.end()) {
+	       continue; // Already in cache, skip duplicate job
+	    }
             image_cache_[result.cache_key] = std::move(result.thumbnail);
             any_processed = true;
-        }
+        } else {
+		std::cerr << "WARNING: Dequeued null thumbnail for key=" << result.cache_key << std::endl;
+	}
     }
 
     // Trigger redraw if any thumbnails were processed
@@ -146,6 +156,8 @@ void Fl_JustifiedLayout::process_thumbnail_results() {
             progress_callback_(completed, total, "Generating thumbnails...");
         }
     }
+
+    processing.clear();
 }
 
 void Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority) {
