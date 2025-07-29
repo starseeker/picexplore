@@ -50,21 +50,23 @@ class StatusReporter {
 public:
     StatusReporter(int interval_seconds = 10);
     ~StatusReporter();
-    
+
     void update_status(const std::string& message);
     void set_total_count(int total);
     void set_current_count(int current);
     void start();
     void stop();
+    void mark_complete();  // Stop reporting and mark as completed
 
 private:
     void report_thread();
-    
+
     int interval_seconds_;
     std::string current_status_;
     int total_count_;
     int current_count_;
     bool running_;
+    bool completed_;  // Track completion state
     std::thread* reporter_thread_;
     std::mutex status_mutex_;
 };
