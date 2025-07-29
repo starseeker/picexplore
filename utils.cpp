@@ -51,32 +51,32 @@ void Timer::print_summary() const {
         std::cout << "No timing data recorded." << std::endl;
         return;
     }
-    
+
     std::cout << "\n=== Timing Summary ===" << std::endl;
     std::cout << std::left << std::setw(25) << "Phase" << "Time (seconds)" << std::endl;
     std::cout << std::string(40, '-') << std::endl;
-    
+
     auto total_time = std::chrono::milliseconds(0);
     for (const auto& entry : phase_times_) {
         total_time += entry.second;
     }
-    
+
     for (const auto& entry : phase_times_) {
         double seconds = entry.second.count() / 1000.0;
         double percentage = (total_time.count() > 0) ? (entry.second.count() * 100.0 / total_time.count()) : 0.0;
-        std::cout << std::left << std::setw(25) << entry.first 
-                  << std::fixed << std::setprecision(3) << seconds 
+        std::cout << std::left << std::setw(25) << entry.first
+                  << std::fixed << std::setprecision(3) << seconds
                   << " (" << std::setprecision(1) << percentage << "%)" << std::endl;
     }
-    
+
     std::cout << std::string(40, '-') << std::endl;
-    std::cout << std::left << std::setw(25) << "TOTAL" 
+    std::cout << std::left << std::setw(25) << "TOTAL"
               << std::fixed << std::setprecision(3) << (total_time.count() / 1000.0) << std::endl;
 }
 
 // StatusReporter implementation
-StatusReporter::StatusReporter(int interval_seconds) 
-    : interval_seconds_(interval_seconds), current_status_("Initializing..."), 
+StatusReporter::StatusReporter(int interval_seconds)
+    : interval_seconds_(interval_seconds), current_status_("Initializing..."),
       total_count_(0), current_count_(0), running_(false), completed_(false), reporter_thread_(nullptr) {
 }
 
@@ -101,14 +101,14 @@ void StatusReporter::set_current_count(int current) {
 
 void StatusReporter::start() {
     if (running_) return;
-    
+
     running_ = true;
     reporter_thread_ = new std::thread(&StatusReporter::report_thread, this);
 }
 
 void StatusReporter::stop() {
     if (!running_) return;
-    
+
     running_ = false;
     if (reporter_thread_) {
         reporter_thread_->join();
@@ -128,18 +128,18 @@ void StatusReporter::mark_complete() {
 void StatusReporter::report_thread() {
     while (running_) {
         std::this_thread::sleep_for(std::chrono::seconds(interval_seconds_));
-        
+
         if (!running_) break;
-        
+
         std::lock_guard<std::mutex> lock(status_mutex_);
-        
+
         // Don't print if we're completed
         if (completed_) break;
-        
+
         std::cout << "[STATUS] " << current_status_;
         if (total_count_ > 0) {
-            std::cout << " (" << current_count_ << "/" << total_count_ << " - " 
-                      << std::fixed << std::setprecision(1) 
+            std::cout << " (" << current_count_ << "/" << total_count_ << " - "
+                      << std::fixed << std::setprecision(1)
                       << (current_count_ * 100.0 / total_count_) << "%)";
         }
         std::cout << std::endl;
@@ -149,18 +149,18 @@ void StatusReporter::report_thread() {
 // Utility functions
 std::vector<uint8_t> encode_jpeg(const unsigned char* rgb_data, int width, int height, int quality) {
     std::vector<uint8_t> jpeg_data;
-    
+
     // STB write callback to capture data
     auto write_func = [](void* context, void* data, int size) {
         auto* vec = static_cast<std::vector<uint8_t>*>(context);
         const uint8_t* bytes = static_cast<const uint8_t*>(data);
         vec->insert(vec->end(), bytes, bytes + size);
     };
-    
+
     if (stbi_write_jpg_to_func(write_func, &jpeg_data, width, height, 3, rgb_data, quality)) {
         return jpeg_data;
     }
-    
+
     return {}; // Empty vector on failure
 }
 
@@ -221,7 +221,7 @@ std::string get_cache_db_path(bool silent) {
     }
 
     std::filesystem::path db_path = cache_dir / "picexplore.db";
-    
+
     if (!silent) {
         std::cout << "[DEBUG] Resolved cache DB path: " << db_path << std::endl;
     }

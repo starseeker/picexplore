@@ -1243,7 +1243,7 @@ void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
 
     // Trigger immediate layout recalculation to populate with placeholders
     calculate_layout();
-    
+
     // Resize content widget to match the new total layout height
     if (content_widget_) {
         int content_height = std::max(static_cast<int>(total_height_), h());
