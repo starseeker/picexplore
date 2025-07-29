@@ -47,17 +47,9 @@
 
 namespace fs = std::filesystem;
 
-// Helper function to wrap Fl::awake with debug logging
+// Helper function to wrap Fl::awake call
 inline void debug_awake(void (*callback)(void*), void* data, const std::string& description = "") {
-    std::cout << "[DEBUG] FLTK: Triggering Fl::awake() from thread " << std::this_thread::get_id();
-    if (!description.empty()) {
-        std::cout << " - " << description;
-    }
-    std::cout << std::endl;
-    
     Fl::awake(callback, data);
-    
-    std::cout << "[DEBUG] FLTK: Fl::awake() call completed" << std::endl;
 }
 
 namespace fs = std::filesystem;
@@ -79,36 +71,28 @@ public:
     }
 
     void run() {
-        std::cout << "[DEBUG] FLTK event loop: Entering Fl::run() on thread " << std::this_thread::get_id() << std::endl;
         
         // Install debug handlers for various FLTK events
         setup_fltk_debug_handlers();
         
         // Run the main event loop with periodic debug status
         while (Fl::first_window()) {
-            std::cout << "[DEBUG] FLTK event loop: About to wait for events" << std::endl;
             
             // Wait for and process events with timeout for debug logging
             double wait_result = Fl::wait(1.0); // Wait up to 1 second for events
             
             if (wait_result > 0) {
-                std::cout << "[DEBUG] FLTK event loop: Processed events (wait returned " << wait_result << ")" << std::endl;
             } else if (wait_result == 0) {
-                std::cout << "[DEBUG] FLTK event loop: Timeout - no events processed" << std::endl;
             } else {
-                std::cout << "[DEBUG] FLTK event loop: Error or interrupted (wait returned " << wait_result << ")" << std::endl;
                 break;
             }
         }
         
-        std::cout << "[DEBUG] FLTK event loop: Exiting Fl::run() - no more windows" << std::endl;
     }
 
     void set_database_path(const std::string& path) {
         if (layout_widget_) {
-            if (layout_widget_->set_database_path(path)) {
-                std::cout << "Successfully loaded database: " << path << std::endl;
-            } else {
+            if (!layout_widget_->set_database_path(path)) {
                 fl_alert("Failed to load database: %s", path.c_str());
             }
         }
@@ -116,9 +100,7 @@ public:
 
     void set_directory_path(const std::string& path) {
         if (layout_widget_) {
-            if (layout_widget_->set_directory_path(path)) {
-                std::cout << "Successfully set directory: " << path << std::endl;
-            } else {
+            if (!layout_widget_->set_directory_path(path)) {
                 fl_alert("Failed to set directory: %s", path.c_str());
             }
         }
@@ -127,21 +109,17 @@ public:
     void enable_debug_output(const std::string& dir, const std::string& format = "svg") {
         if (layout_widget_) {
             layout_widget_->enable_debug_output(dir, format);
-            std::cout << "Debug output enabled: " << dir << " (format: " << format << ")" << std::endl;
         }
     }
 
 private:
     void setup_fltk_debug_handlers() {
-        std::cout << "[DEBUG] FLTK: Setting up debug event handlers" << std::endl;
         
         // Add timeout for periodic status logging
         Fl::add_timeout(5.0, fltk_periodic_status_callback, this);
     }
     
     static void fltk_periodic_status_callback(void* data) {
-        std::cout << "[DEBUG] FLTK: Periodic status - UI thread " << std::this_thread::get_id() 
-                  << " is active and responsive" << std::endl;
         
         // Schedule next status update
         Fl::repeat_timeout(5.0, fltk_periodic_status_callback, data);
@@ -172,13 +150,11 @@ private:
 
         // Set up progress callback
         layout_widget_->set_progress_callback([this](int current, int total, const std::string& status) {
-            std::cout << "Progress: " << current << "/" << total << " - " << status << std::endl;
             // In full implementation, this would update a progress bar
         });
 
         // Set up selection callback
         layout_widget_->set_selection_callback([this](const std::string& path, const ImageInfo& info) {
-            std::cout << "Selected: " << path << " (aspect: " << info.aspect_ratio << ")" << std::endl;
             // In full implementation, this might show image details or full-size view
         });
     }
@@ -551,7 +527,6 @@ int main(int argc, char* argv[]) {
     // Determine mode based on command line arguments
     bool scan_only_mode = false;
 
-    std::cout << "[DEBUG] main thread id: " << std::this_thread::get_id() << std::endl;
 
     // Check for --scan-only option
     for (int i = 1; i < argc; ++i) {

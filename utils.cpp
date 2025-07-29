@@ -212,19 +212,11 @@ std::string get_cache_db_path(bool silent) {
     std::error_code ec;
     std::filesystem::create_directories(cache_dir, ec);
     if (ec) {
-        if (!silent) {
-            std::cerr << "[DEBUG] Failed to create cache directory: " << cache_dir
-                      << " - Error: " << ec.message() << std::endl;
-        }
         // Use current directory as fallback
         cache_dir = std::filesystem::current_path();
     }
 
     std::filesystem::path db_path = cache_dir / "picexplore.db";
-
-    if (!silent) {
-        std::cout << "[DEBUG] Resolved cache DB path: " << db_path << std::endl;
-    }
 
     return db_path.string();
 }
