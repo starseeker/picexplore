@@ -47,6 +47,21 @@
 
 namespace fs = std::filesystem;
 
+// Helper function to wrap Fl::awake with debug logging
+inline void debug_awake(void (*callback)(void*), void* data, const std::string& description = "") {
+    std::cout << "[DEBUG] FLTK: Triggering Fl::awake() from thread " << std::this_thread::get_id();
+    if (!description.empty()) {
+        std::cout << " - " << description;
+    }
+    std::cout << std::endl;
+    
+    Fl::awake(callback, data);
+    
+    std::cout << "[DEBUG] FLTK: Fl::awake() call completed" << std::endl;
+}
+
+namespace fs = std::filesystem;
+
 // Forward declaration of GUI window class
 class PicExploreWindow {
 public:
@@ -64,7 +79,29 @@ public:
     }
 
     void run() {
-        Fl::run();
+        std::cout << "[DEBUG] FLTK event loop: Entering Fl::run() on thread " << std::this_thread::get_id() << std::endl;
+        
+        // Install debug handlers for various FLTK events
+        setup_fltk_debug_handlers();
+        
+        // Run the main event loop with periodic debug status
+        while (Fl::first_window()) {
+            std::cout << "[DEBUG] FLTK event loop: About to wait for events" << std::endl;
+            
+            // Wait for and process events with timeout for debug logging
+            double wait_result = Fl::wait(1.0); // Wait up to 1 second for events
+            
+            if (wait_result > 0) {
+                std::cout << "[DEBUG] FLTK event loop: Processed events (wait returned " << wait_result << ")" << std::endl;
+            } else if (wait_result == 0) {
+                std::cout << "[DEBUG] FLTK event loop: Timeout - no events processed" << std::endl;
+            } else {
+                std::cout << "[DEBUG] FLTK event loop: Error or interrupted (wait returned " << wait_result << ")" << std::endl;
+                break;
+            }
+        }
+        
+        std::cout << "[DEBUG] FLTK event loop: Exiting Fl::run() - no more windows" << std::endl;
     }
 
     void set_database_path(const std::string& path) {
@@ -95,6 +132,21 @@ public:
     }
 
 private:
+    void setup_fltk_debug_handlers() {
+        std::cout << "[DEBUG] FLTK: Setting up debug event handlers" << std::endl;
+        
+        // Add timeout for periodic status logging
+        Fl::add_timeout(5.0, fltk_periodic_status_callback, this);
+    }
+    
+    static void fltk_periodic_status_callback(void* data) {
+        std::cout << "[DEBUG] FLTK: Periodic status - UI thread " << std::this_thread::get_id() 
+                  << " is active and responsive" << std::endl;
+        
+        // Schedule next status update
+        Fl::repeat_timeout(5.0, fltk_periodic_status_callback, data);
+    }
+
     void create_window() {
         window_ = new Fl_Window(1200, 800, "PicExplore - Image Gallery and Scanner");
 

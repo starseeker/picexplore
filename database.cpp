@@ -49,10 +49,7 @@ DatabaseManager::~DatabaseManager() {
 }
 
 bool DatabaseManager::open(const std::string& db_path) {
-    std::cout << "[DEBUG] DatabaseManager::open called with path: " << db_path << std::endl;
-
     if (is_open_) {
-        std::cout << "[DEBUG] DatabaseManager: Closing existing database before opening new one" << std::endl;
         close();
     }
 
@@ -61,7 +58,6 @@ bool DatabaseManager::open(const std::string& db_path) {
         std::cerr << "[ERROR] DatabaseManager: Failed to create LMDB environment: " << mdb_strerror(rc) << std::endl;
         return false;
     }
-    std::cout << "[DEBUG] DatabaseManager: LMDB environment created successfully" << std::endl;
 
     // Set map size to handle large databases (1GB)
     rc = mdb_env_set_mapsize(env_, MAX_DB_SIZE);
@@ -71,16 +67,13 @@ bool DatabaseManager::open(const std::string& db_path) {
         env_ = nullptr;
         return false;
     }
-    std::cout << "[DEBUG] DatabaseManager: LMDB map size set to " << MAX_DB_SIZE << " bytes" << std::endl;
 
     // Check if this is a new database for bulk insert optimization
     bool is_new_db = !std::filesystem::exists(db_path);
-    std::cout << "[DEBUG] DatabaseManager: Database file " << (is_new_db ? "does not exist (new)" : "exists") << std::endl;
 
     unsigned int flags = MDB_NOSUBDIR;
     if (is_new_db) {
         flags |= MDB_NOSYNC; // Use MDB_NOSYNC for faster bulk insert on new DB
-        std::cout << "[DEBUG] DatabaseManager: Using MDB_NOSYNC flag for new database" << std::endl;
     }
 
     rc = mdb_env_open(env_, db_path.c_str(), flags, 0664);
@@ -91,7 +84,7 @@ bool DatabaseManager::open(const std::string& db_path) {
         env_ = nullptr;
         return false;
     }
-    std::cout << "[DEBUG] DatabaseManager: LMDB database opened successfully at " << db_path << std::endl;
+    std::cout << "[INFO] DatabaseManager: Opened database at " << db_path << (is_new_db ? " (new)" : " (existing)") << std::endl;
 
     // Open the DBI handle once for all transactions
     MDB_txn* setup_txn;
@@ -138,64 +131,50 @@ void DatabaseManager::close() {
 
 bool DatabaseManager::begin_write_transaction(MDB_txn*& txn) {
     if (!is_open_) {
-        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " failed to begin write transaction: database not open" << std::endl;
         return false;
     }
 
-    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " beginning write transaction" << std::endl;
     int rc = mdb_txn_begin(env_, nullptr, 0, &txn);
     if (rc != 0) {
         txn = nullptr;
-        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " failed to begin write transaction, error code: " << rc << std::endl;
+        std::cerr << "[ERROR] Failed to begin write transaction: " << mdb_strerror(rc) << std::endl;
         return false;
     }
 
-    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " write transaction began successfully" << std::endl;
     return true;
 }
 
 bool DatabaseManager::begin_read_transaction(MDB_txn*& txn) {
     if (!is_open_) {
-        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " failed to begin read transaction: database not open" << std::endl;
         return false;
     }
 
-    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " beginning read transaction" << std::endl;
     int rc = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
     if (rc != 0) {
         txn = nullptr;
-        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " failed to begin read transaction, error code: " << rc << std::endl;
+        std::cerr << "[ERROR] Failed to begin read transaction: " << mdb_strerror(rc) << std::endl;
         return false;
     }
 
-    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " read transaction began successfully" << std::endl;
     return true;
 }
 
 bool DatabaseManager::commit_transaction(MDB_txn* txn) {
     if (!txn) {
-        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " cannot commit null transaction" << std::endl;
         return false;
     }
 
-    std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " committing transaction" << std::endl;
     int rc = mdb_txn_commit(txn);
     bool success = (rc == 0);
-    if (success) {
-        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " transaction committed successfully" << std::endl;
-    } else {
-        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " transaction commit failed, error code: " << rc << std::endl;
+    if (!success) {
+        std::cerr << "[ERROR] Transaction commit failed: " << mdb_strerror(rc) << std::endl;
     }
     return success;
 }
 
 void DatabaseManager::abort_transaction(MDB_txn* txn) {
     if (txn) {
-        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " aborting transaction" << std::endl;
         mdb_txn_abort(txn);
-        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " transaction aborted" << std::endl;
-    } else {
-        std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " cannot abort null transaction" << std::endl;
     }
 }
 
@@ -566,14 +545,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
     if (extract_image_metadata(filepath, quick_info)) {
         // Emit ImageInfo immediately for stage 1 UI population
         if (image_info_callback_) {
-            std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " emitting image info callback for: "
-                      << quick_info.path << " (hash: " << quick_info.hash << ", aspect: " << quick_info.aspect_ratio << ")" << std::endl;
             image_info_callback_(quick_info);
-            std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " image info callback completed for: "
-                      << quick_info.path << std::endl;
-        } else {
-            std::cout << "[DEBUG] Thread " << std::this_thread::get_id() << " no image info callback set for: "
-                      << quick_info.path << std::endl;
         }
 
         // Store metadata in database for future loading
