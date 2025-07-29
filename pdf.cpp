@@ -154,7 +154,6 @@ std::vector<uint8_t> PDFGenerator::resize_image_to_fit(const std::vector<uint8_t
     stbi_uc* pixels = stbi_load_from_memory(image_data.data(), image_data.size(),
                                             &width, &height, &channels, 3);
     if (!pixels) {
-        fprintf(stderr, "Error: Failed to load thumbnail from memory for PDF generation: %s\n", stbi_failure_reason());
         return {};
     }
 
@@ -170,7 +169,6 @@ std::vector<uint8_t> PDFGenerator::resize_image_to_fit(const std::vector<uint8_t
     std::vector<uint8_t> resized(new_width * new_height * 3);
     if (!stbir_resize_uint8_linear(pixels, width, height, 0,
                                    resized.data(), new_width, new_height, 0, STBIR_RGB)) {
-        fprintf(stderr, "Error: Failed to resize thumbnail for PDF generation\n");
         stbi_image_free(pixels);
         return {};
     }

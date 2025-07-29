@@ -1053,12 +1053,17 @@ void Fl_JustifiedLayout::cancel_directory_scan() {
 }
 
 void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, const std::string& db_path) {
+    std::cout << "[DEBUG] Directory scan thread " << std::this_thread::get_id() << " started for: " << dir_path
+              << " using database: " << db_path << std::endl;
 
     try {
         // Create/open database
+        std::cout << "[DEBUG] Directory scan thread " << std::this_thread::get_id() << " opening database" << std::endl;
         auto scan_database = std::make_unique<DatabaseManager>();
         if (!scan_database->open(db_path)) {
+            std::cout << "[DEBUG] Directory scan thread " << std::this_thread::get_id() << " failed to open database" << std::endl;
             debug_awake([](void* data) {
+                std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " directory scan database open failure callback" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
                 if (widget->progress_callback_) {
                     widget->progress_callback_(0, 0, "Failed to open database");
@@ -1067,12 +1072,17 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             scanning_.store(false);
             return;
         }
+        std::cout << "[DEBUG] Directory scan thread " << std::this_thread::get_id() << " database opened successfully" << std::endl;
 
         // Set up callback for immediate layout population as metadata becomes available
+        std::cout << "[DEBUG] Directory scan thread " << std::this_thread::get_id() << " setting up image info callback" << std::endl;
         scan_database->set_image_info_callback([this](const ImageInfo& info) {
             // This callback is called from worker threads, so we need to use Fl::awake
+            std::cout << "[DEBUG] Worker thread " << std::this_thread::get_id() << " image info callback triggered for: "
+                      << info.path << " (hash: " << info.hash << ")" << std::endl;
             auto info_copy = std::make_shared<ImageInfo>(info);
             debug_awake([](void* data) {
+                std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " handling image info ready callback" << std::endl;
                 auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>*>(data);
                 params->first->handle_image_info_ready(*(params->second));
                 delete params;
@@ -1080,12 +1090,15 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
         });
 
         // Create timer and reporter for the scan
+        std::cout << "[DEBUG] Directory scan thread " << std::this_thread::get_id() << " creating timer and reporter" << std::endl;
         Timer timer;
         StatusReporter reporter(1); // Report every second
         reporter.start();
 
         // Forward initial progress
+        std::cout << "[DEBUG] Directory scan thread " << std::this_thread::get_id() << " sending initial progress update" << std::endl;
         debug_awake([](void* data) {
+            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " initial scan progress callback" << std::endl;
             Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
             if (widget->progress_callback_) {
                 widget->progress_callback_(0, 0, "Starting directory scan...");
@@ -1097,11 +1110,14 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
         std::atomic<size_t> last_image_count(0);
 
         // Start a cancellation monitor thread that also provides incremental updates
+        std::cout << "[DEBUG] Directory scan thread " << std::this_thread::get_id() << " starting update monitor thread" << std::endl;
         std::thread update_monitor([this, scan_database = scan_database.get(), &user_cancelled, &last_image_count]() {
+            std::cout << "[DEBUG] Update monitor thread " << std::this_thread::get_id() << " started" << std::endl;
             int update_count = 0;
             while (scanning_.load()) {
                 update_count++;
                 if (should_cancel_scan_.load()) {
+                    std::cout << "[DEBUG] Update monitor thread " << std::this_thread::get_id() << " user cancellation requested" << std::endl;
                     user_cancelled.store(true);
                     scan_database->cancel_scan();
                     break;
@@ -1111,12 +1127,15 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
                 try {
                     std::vector<ImageInfo> new_images = scan_database->get_images_since_count(last_image_count.load());
                     if (!new_images.empty()) {
+                        std::cout << "[DEBUG] Update monitor thread " << std::this_thread::get_id() << " found "
+                                  << new_images.size() << " new images (update #" << update_count << ")" << std::endl;
                         last_image_count.store(last_image_count.load() + new_images.size());
 
                         // Create a copy for the lambda to capture
                         auto new_images_copy = std::make_shared<std::vector<ImageInfo>>(std::move(new_images));
 
                         debug_awake([](void* data) {
+                            std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " adding images incrementally" << std::endl;
                             auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<std::vector<ImageInfo>>>*>(data);
                             params->first->add_images_incremental(*(params->second));
                             delete params;
@@ -1142,10 +1161,15 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
 	// We can stop reporting now
         reporter.stop();
 
+        std::cout << "[DEBUG] should_cancel_scan_: " << should_cancel_scan_.load()
+                  << ", user_cancelled: " << user_cancelled.load()
+                  << ", processed: " << processed << std::endl;
 
         if (user_cancelled.load()) {
             scan_database->cancel_scan(); // Ensure cancellation is signaled
+	    std::cout << "[DEBUG] About to call Fl::awake for scan cancelled, thread id: " << std::this_thread::get_id() << std::endl;
             debug_awake([](void* data) {
+                std::cout << "[DEBUG] Fl::awake (cancelled) lambda running" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
                 if (widget->progress_callback_) {
                     widget->progress_callback_(0, 0, "Scan cancelled");
@@ -1167,7 +1191,9 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             current_db_path_ = db_path;
             database_ = std::move(scan_database);
 
+	    std::cout << "[DEBUG] About to call Fl::awake for scan complete, thread id: " << std::this_thread::get_id() << std::endl;
             debug_awake([](void* data) {
+                std::cout << "[DEBUG] Fl::awake (scan complete) lambda running" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
                 if (widget->progress_callback_) {
                     widget->progress_callback_(0, 0, "Scan complete - " + std::to_string(widget->images_.size()) + " images loaded");
@@ -1176,7 +1202,9 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
                 widget->start_background_generation();
             }, this, "scan complete");
         } else {
+	    std::cout << "[DEBUG] About to call Fl::awake for scan failed, thread id: " << std::this_thread::get_id() << std::endl;
             debug_awake([](void* data) {
+                std::cout << "[DEBUG] Fl::awake (scan failed) lambda running" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
                 if (widget->progress_callback_) {
                     widget->progress_callback_(0, 0, "Scan failed");
@@ -1184,9 +1212,12 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             }, this, "scan failed");
         }
 
+        std::cout << "[DEBUG] directory_scan_thread (end of try) scanning_ = " << scanning_.load() << std::endl;
     } catch (const std::exception& e) {
+        std::cout << "[DEBUG] Exception caught in directory_scan_thread: " << e.what() << std::endl;
         debug_awake([](void* data) {
             auto* params = static_cast<std::pair<Fl_JustifiedLayout*, std::string>*>(data);
+            std::cout << "[DEBUG] Fl::awake (exception) lambda running" << std::endl;
             if (params->first->progress_callback_) {
                 params->first->progress_callback_(0, 0, "Scan error: " + params->second);
             }
@@ -1197,6 +1228,7 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
 }
 
 void Fl_JustifiedLayout::complete_directory_scan() {
+    std::cout << "[DEBUG] complete_directory_scan() called in GUI thread" << std::endl;
     if (progress_callback_) {
         progress_callback_(0, 0, "Loading images from database...");
     }
@@ -1209,6 +1241,8 @@ void Fl_JustifiedLayout::complete_directory_scan() {
 
         // Start background thumbnail generation
         start_background_generation();
+
+        std::cout << "Directory scan completed successfully - loaded " << images_.size() << " images" << std::endl;
     } else {
         if (progress_callback_) {
             progress_callback_(0, 0, "Failed to load images from database");
@@ -1217,15 +1251,20 @@ void Fl_JustifiedLayout::complete_directory_scan() {
 }
 
 bool Fl_JustifiedLayout::load_image_list() {
+    std::cout << "[DEBUG] load_image_list() called" << std::endl;
     images_.clear();
     clear_image_cache();  // Clear cached images when loading new list
 
     if (!database_) {
+        std::cout << "No database available, creating mock data for testing" << std::endl;
+
         // ... [mock image code unchanged] ...
+        std::cout << "Loaded " << images_.size() << " mock images" << std::endl;
     } else {
         // Load real images from database
         try {
             images_ = database_->get_all_images();
+            std::cout << "Loaded " << images_.size() << " images from database" << std::endl;
         } catch (const std::exception& e) {
             std::cerr << "Error loading images from database: " << e.what() << std::endl;
             return false;
@@ -1239,8 +1278,11 @@ bool Fl_JustifiedLayout::load_image_list() {
 }
 
 void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& new_images) {
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " add_images_incremental called with "
+              << new_images.size() << " new images" << std::endl;
 
     if (new_images.empty()) {
+        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " no new images to add, returning" << std::endl;
         return;
     }
 
@@ -1248,31 +1290,46 @@ void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& ne
     size_t old_size = images_.size();
     images_.insert(images_.end(), new_images.begin(), new_images.end());
 
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " added " << new_images.size()
+              << " images, total count increased from " << old_size << " to " << images_.size() << std::endl;
 
     // For incremental layout, we need to recalculate layout with all images
     // This is more efficient than a full clear since we preserve existing layout cache
     // when possible, but for now we do a simple approach
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " recalculating layout for incremental add" << std::endl;
     calculate_layout();
 
     // Resize content widget to match the new total layout height
     if (content_widget_) {
         int content_height = std::max(static_cast<int>(total_height_), h());
+        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " resizing content widget for incremental add, new height: "
+                  << content_height << std::endl;
         content_widget_->resize(x(), y(), w(), content_height);
     } else {
+        std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " no content widget to resize for incremental add" << std::endl;
     }
 
     // Trigger redraw to show new placeholders
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " triggering redraw for incremental add" << std::endl;
     redraw();
 
+    std::cout << "[DEBUG] UI thread " << std::this_thread::get_id() << " Added " << new_images.size()
+              << " images incrementally (total: " << images_.size() << ")" << std::endl;
 }
 
 // Batch processing and debug logging methods
 void Fl_JustifiedLayout::log_batch_debug(const std::string& message) const {
-    // Debug logging disabled in production
+    if (!batch_config_.enable_debug_logging) return;
+    
+    std::lock_guard<std::mutex> lock(debug_log_mutex_);
+    std::cout << "[BATCH] UI thread " << std::this_thread::get_id() << " " << message << std::endl;
 }
 
 void Fl_JustifiedLayout::log_ui_debug(const std::string& message) const {
-    // Debug logging disabled in production
+    if (!batch_config_.enable_debug_logging) return;
+    
+    std::lock_guard<std::mutex> lock(debug_log_mutex_);
+    std::cout << "[UI] Thread " << std::this_thread::get_id() << " " << message << std::endl;
 }
 
 void Fl_JustifiedLayout::queue_image_info_batch(const ImageInfo& info) {
@@ -1413,11 +1470,13 @@ void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
 }
 
 void Fl_JustifiedLayout::handle_thumbnail_ready(const std::string& hash) {
+    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id() << " handle_thumbnail_ready called for hash: " << hash << std::endl;
 
     // This is called when a thumbnail becomes available (stage 2)
     ThumbnailNotification notification(hash, true);
     thumbnail_notifications_.enqueue(notification);
 
+    std::cout << "[DEBUG] Thumbnail worker thread " << std::this_thread::get_id() << " enqueued thumbnail notification and scheduling UI awake for hash: " << hash << std::endl;
 
     // Schedule UI update
     debug_awake(thumbnail_notification_callback, this, "thumbnail ready notification");
@@ -1534,11 +1593,13 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
     // Queue high priority thumbnails first
     if (!high_priority_indices.empty()) {
         int queued = queue_thumbnail_tasks(high_priority_indices, ThumbnailPriority::HIGH);
+        std::cout << "Queued " << queued << " high-priority thumbnail tasks" << std::endl;
     }
 
     // Queue lower priority thumbnails
     if (!low_priority_indices.empty()) {
         int queued = queue_thumbnail_tasks(low_priority_indices, ThumbnailPriority::LOW);
+        std::cout << "Queued " << queued << " low-priority thumbnail tasks" << std::endl;
     }
 }
 
@@ -1559,6 +1620,8 @@ void Fl_JustifiedLayout::write_debug_output() {
     } else if (debug_output_format_ == "png") {
         write_debug_png(filename);
     }
+
+    std::cout << "Debug layout output written to: " << filename << " (images: " << images_.size() << ")" << std::endl;
 }
 
 void Fl_JustifiedLayout::write_debug_svg(const std::string& filename) {
@@ -1596,6 +1659,7 @@ void Fl_JustifiedLayout::write_debug_svg(const std::string& filename) {
 void Fl_JustifiedLayout::write_debug_png(const std::string& filename) {
     // For PNG output, we'll create a simple image using FLTK's image surface
     // This is a placeholder implementation - for now we'll just create a simple colored rectangle
+    std::cout << "PNG debug output not yet fully implemented, using SVG fallback" << std::endl;
 
     // Fall back to SVG for now
     std::string svg_filename = filename;
@@ -1607,10 +1671,13 @@ void Fl_JustifiedLayout::write_debug_png(const std::string& filename) {
 }
 
 void Fl_JustifiedLayout::draw() {
+    std::cout << "[DEBUG] FLTK UI: Fl_JustifiedLayout::draw() called on thread " << std::this_thread::get_id() 
+              << " (images: " << images_.size() << ", visible: " << visible_start_idx_ << "-" << visible_end_idx_ << ")" << std::endl;
     
     // Fl_Scroll handles its own drawing and scrollbar management
     // The content widget (Fl_JustifiedLayout_Content) handles the actual thumbnail drawing
     Fl_Scroll::draw();
     
+    std::cout << "[DEBUG] FLTK UI: Fl_JustifiedLayout::draw() completed" << std::endl;
 }
 

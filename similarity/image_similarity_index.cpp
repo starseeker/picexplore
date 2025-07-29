@@ -161,9 +161,6 @@ bool ImageSimilarityIndex::load_database(const std::string& picscan_db_path) {
         }
         
         processed_count++;
-        if (processed_count % 1000 == 0) {
-            std::cout << "Processed " << processed_count << " database entries..." << std::endl;
-        }
     }
     
     mdb_cursor_close(cursor);
@@ -178,9 +175,6 @@ bool ImageSimilarityIndex::load_database(const std::string& picscan_db_path) {
         if (hash_to_path_.find(hash) != hash_to_path_.end()) {
             if (process_thumbnail(hash, thumb_data)) {
                 feature_count++;
-                if (feature_count % 100 == 0) {
-                    std::cout << "Extracted features from " << feature_count << " images..." << std::endl;
-                }
             }
         }
     }
