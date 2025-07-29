@@ -946,6 +946,7 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
     timer.stop("Parallel Image Processing");
 
     reporter.update_status("Scanning complete");
+    reporter.mark_complete();  // Stop periodic reporting
 
     std::cout << "[DEBUG] Parallel directory scan completed. Processed " << write_count.load()
               << " new images (out of " << processed_count.load() << " files processed) from directory: " << directory << std::endl;
@@ -1072,6 +1073,7 @@ int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, 
     }
 
     reporter.update_status("Scanning complete");
+    reporter.mark_complete();  // Stop periodic reporting
     return processed_count;
 }
 

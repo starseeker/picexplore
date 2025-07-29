@@ -77,7 +77,7 @@ void Timer::print_summary() const {
 // StatusReporter implementation
 StatusReporter::StatusReporter(int interval_seconds) 
     : interval_seconds_(interval_seconds), current_status_("Initializing..."), 
-      total_count_(0), current_count_(0), running_(false), reporter_thread_(nullptr) {
+      total_count_(0), current_count_(0), running_(false), completed_(false), reporter_thread_(nullptr) {
 }
 
 StatusReporter::~StatusReporter() {
@@ -117,6 +117,14 @@ void StatusReporter::stop() {
     }
 }
 
+void StatusReporter::mark_complete() {
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        completed_ = true;
+    }
+    stop();  // Stop the reporting thread
+}
+
 void StatusReporter::report_thread() {
     while (running_) {
         std::this_thread::sleep_for(std::chrono::seconds(interval_seconds_));
@@ -124,6 +132,10 @@ void StatusReporter::report_thread() {
         if (!running_) break;
         
         std::lock_guard<std::mutex> lock(status_mutex_);
+        
+        // Don't print if we're completed
+        if (completed_) break;
+        
         std::cout << "[STATUS] " << current_status_;
         if (total_count_ > 0) {
             std::cout << " (" << current_count_ << "/" << total_count_ << " - " 

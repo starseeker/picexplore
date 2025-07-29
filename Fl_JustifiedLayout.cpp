@@ -1019,6 +1019,17 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             return;
         }
 
+        // Set up callback for immediate layout population as metadata becomes available
+        scan_database->set_image_info_callback([this](const ImageInfo& info) {
+            // This callback is called from worker threads, so we need to use Fl::awake
+            auto info_copy = std::make_shared<ImageInfo>(info);
+            Fl::awake([](void* data) {
+                auto params = static_cast<std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>*>(data);
+                params->first->handle_image_info_ready(*(params->second));
+                delete params;
+            }, new std::pair<Fl_JustifiedLayout*, std::shared_ptr<ImageInfo>>(this, info_copy));
+        });
+
         // Create timer and reporter for the scan
         Timer timer;
         StatusReporter reporter(1); // Report every second
@@ -1230,8 +1241,17 @@ void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
     images_.push_back(info);
     hash_to_index_map_[info.hash] = images_.size() - 1;
 
-    // Schedule a layout recalculation and redraw
-    Fl::awake(thumbnail_notification_callback, this);
+    // Trigger immediate layout recalculation to populate with placeholders
+    calculate_layout();
+    
+    // Resize content widget to match the new total layout height
+    if (content_widget_) {
+        int content_height = std::max(static_cast<int>(total_height_), h());
+        content_widget_->resize(x(), y(), w(), content_height);
+    }
+
+    // Schedule a redraw
+    redraw();
 }
 
 void Fl_JustifiedLayout::handle_thumbnail_ready(const std::string& hash) {
