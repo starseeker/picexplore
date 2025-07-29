@@ -4,48 +4,56 @@ Program for exploring what images are present in a filesystem.
 
 Fast identification and display of JPEG, PNG, BMP, and TGA images with thumbnail generation and PDF gallery creation.
 
-## GUI Features (gui_test)
+## GUI Features 
 
 The FLTK-based GUI application provides an interactive way to browse image thumbnails:
 
 ### Current Features
 - **Justified Layout Display**: Thumbnails arranged using optimized justified layout algorithm
-- **Database Integration**: Open existing picscan LMDB databases or scan new directories  
+- **Database Integration**: Open existing LMDB databases or scan new directories  
 - **Interactive Selection**: Click thumbnails to select images
 - **Scrollable View**: Mouse wheel scrolling through large image collections
-- **Menu Interface**: File menu for opening databases/directories
-- **Placeholder Rendering**: Shows image filename and dimensions in placeholder boxes
-
-### Stubbed Features (Ready for Implementation)
-- **Async Thumbnail Generation**: Background loading with priority queues
-- **Progress Indication**: Visual feedback during thumbnail generation
-- **Prefetch Support**: Preload next/previous regions during scrolling
-- **Actual Thumbnail Display**: Replace placeholders with real image thumbnails
+- **Menu Interface**: File menu for opening databases/directories and generating PDFs
+- **Progressive Loading**: Shows placeholders sized to correct aspect ratios immediately
+- **Background Threading**: Async thumbnail generation with priority queues
+- **Progress Indication**: Visual feedback during scanning and thumbnail generation
+- **Prefetch Support**: Preload visible regions and next/previous areas during scrolling
 
 ### Controls
 - **Mouse wheel**: Scroll through thumbnails
 - **Left click**: Select thumbnail
 - **Ctrl+D**: Open database
-- **Ctrl+I**: Open directory
-- **Ctrl+G**: Start background generation (stub)
-- **Ctrl+S**: Stop background generation (stub)
+- **Ctrl+I**: Open directory (scans in background)
+- **Ctrl+C**: Cancel directory scan
+- **Ctrl+P**: Generate PDF
+- **Ctrl+G**: Start background thumbnail generation
+- **Ctrl+S**: Stop background thumbnail generation
 - **Ctrl+Q**: Quit application
 
 ## Complete Workflow
 
-The complete image exploration workflow is now handled by a single unified tool called `picscan`:
+The complete image exploration workflow is now handled by a single unified tool called `picexplore`:
 
 ### Basic Usage
 
 ```bash
-# Scan directory and build/update database:
-picscan --directory /path/to/photos
+# Launch GUI (default behavior):
+picexplore
 
-# Generate PDF from existing database:
-picscan --pdf gallery.pdf
+# Launch GUI with specific database:
+picexplore --database /path/to/images.db
 
-# Scan directory and generate PDF in one step:
-picscan --directory /path/to/photos --pdf gallery.pdf
+# Launch GUI and scan directory:
+picexplore --directory /path/to/photos
+
+# Scan directory and build/update database (no GUI):
+picexplore --scan-only --directory /path/to/photos
+
+# Generate PDF from existing database (no GUI):
+picexplore --scan-only --pdf gallery.pdf
+
+# Scan directory and generate PDF in one step (no GUI):
+picexplore --scan-only --directory /path/to/photos --pdf gallery.pdf
 ```
 
 This will:
@@ -61,36 +69,42 @@ This will:
 
 ## Tools
 
-### picscan
-Unified image scanner and PDF gallery generator that combines the functionality of the previous separate tools.
+### picexplore (UNIFIED)
 
-### gui_test (NEW)
-FLTK-based GUI application for visualizing image thumbnails from picscan databases in justified layout. Features include:
-- Interactive thumbnail display with justified layout
-- Support for opening LMDB databases or directories
-- Scrollable view with selection support
-- Placeholder for async thumbnail generation and progress indication
-- Menu-driven interface with keyboard shortcuts
+Unified image scanner, database manager, and gallery viewer that combines scanning/PDF generation with interactive GUI browsing.
+
+**Features:**
+- Unified interface: GUI by default, scan-only mode available
+- Justified layout thumbnail display with progressive loading
+- Background threading for scanning and thumbnail generation
+- Database integration with LMDB storage
+- PDF gallery generation with customizable layout
+- Interactive menu-driven interface with keyboard shortcuts
 
 **Usage:**
 ```bash
-gui_test [OPTIONS]
+picexplore [OPTIONS]
 ```
 
-**Options:**
+**Options (GUI Mode):**
 - `-h, --help`: Show help message
 - `-d, --database PATH`: Open LMDB database at PATH
 - `-i, --directory PATH`: Open directory PATH (will scan/build database)
 
+**Options (Scan-Only Mode):**
+- `--scan-only`: Run in scan-only mode (no GUI)
+- All options from the command-line scanning program (directory, database, PDF options, etc.)
+
 **Examples:**
 ```bash
-gui_test --database ./images.db
-gui_test --directory ~/Pictures
-gui_test  # Open empty window, use File menu to load content
+picexplore                           # Launch GUI
+picexplore --database ./images.db    # Launch GUI with database
+picexplore --directory ~/Pictures    # Launch GUI and scan directory  
+picexplore --scan-only --help        # Show scan-only mode options
 ```
 
 ### simfind (NEW)
-Content-based image similarity search tool that works with picscan databases.
+Content-based image similarity search tool that works with picexplore databases.
 
 **Usage:**
 ```bash
@@ -99,7 +113,7 @@ simfind [OPTIONS]
 
 **Options:**
 - `-q, --query PATH`: Path to query image (JPEG file)
-- `-d, --database PATH`: Path to picscan LMDB database
+- `-d, --database PATH`: Path to picexplore LMDB database
 - `-t, --threshold N`: Similarity score threshold (0.0-1.0, default: 0.7)
 - `-n, --max-results N`: Maximum number of results (0 = unlimited, default: 100)
 - `-m, --model PATH`: Path to ONNX model file (optional)
@@ -130,65 +144,32 @@ simfind --query photo.jpg --database images.db --verbose
 - **Efficient indexing**: Uses mlpack for fast nearest neighbor search
 - **Robust output**: One file path per line, sorted by similarity (most similar first)
 
-### picscan
-Unified image scanner and PDF gallery generator that combines the functionality of the previous separate tools.
-
-**Usage:**
-```bash
-picscan [OPTIONS]
-```
-
-**Options:**
-- `-h, --help`: Show help message
-- `-d, --directory PATH`: Directory to scan for images
-- `--db PATH`: LMDB database path (default: `./images.db`)
-- `--pdf PATH`: PDF output file path
-- `--row-height N`: Target row height in pixels for PDF layout (default: 150)
-- `--margin N`: Spacing between images in pixels for PDF layout (default: 10)
-- `--layout-pad N`: Layout padding for all sides in pixels (default: 0)
-- `--layout-pad-top N`: Layout padding top in pixels
-- `--layout-pad-bottom N`: Layout padding bottom in pixels  
-- `--layout-pad-left N`: Layout padding left in pixels
-- `--layout-pad-right N`: Layout padding right in pixels
-- `-v, --verbose`: Enable verbose output with detailed information
-
-**PDF Layout Controls:**
-- **Page margins**: Fixed 0.5" margins from page edge (controls distance from paper edge)
-- **Layout padding**: Internal padding around the grid of images (`--layout-pad-*` options)
-- **Image spacing**: Space between individual images within the grid (`--margin` option)
-
-**Features:**
-- **Multi-format support**: JPEG, PNG, BMP, TGA
-- **Efficient JPEG thumbnailing**: Uses DCT-domain downscaling during decode for optimal performance and memory usage
-- **EXIF orientation support**: Automatically reads and applies EXIF orientation data for correct thumbnail display using TinyEXIF
-- **Content-based deduplication**: Prevents duplicate processing using xxHash
-- **Multiple thumbnail sizes**: 32, 64, 128, 256, 512, 1024 px maximum dimension
-- **Robust error handling**: Gracefully skips corrupt or unreadable images
-- **LMDB database**: Lightning-fast storage and retrieval
-- **Flexible operation**: Can scan only, generate PDF only, or both in one command
-- **Status reporting**: Periodic updates every 10 seconds during processing
-- **Performance instrumentation**: Detailed timing information for all major phases
-- **Justified layout**: Uses optimized layout algorithm for space-efficient PDF pages
-
 ## Complete Examples
 
 ```bash
-# Scan your photo directory and create thumbnail database
-picscan --directory ~/Pictures --verbose
+# Launch GUI for interactive browsing
+picexplore
 
-# Generate PDF gallery from existing thumbnails  
-picscan --pdf my_photo_gallery.pdf --row-height 200
+# Launch GUI with a specific database
+picexplore --database ~/Pictures/images.db
+
+# Launch GUI and scan a directory in the background
+picexplore --directory ~/Pictures
+
+# Scan directory and create thumbnail database (no GUI)
+picexplore --scan-only --directory ~/Pictures --verbose
+
+# Generate PDF gallery from existing thumbnails (no GUI)
+picexplore --scan-only --pdf my_photo_gallery.pdf --row-height 200
 
 # Generate PDF with custom layout padding (20px on all sides)
-picscan --pdf gallery.pdf --layout-pad 20
+picexplore --scan-only --pdf gallery.pdf --layout-pad 20
 
 # Generate PDF with asymmetric padding (larger top/bottom padding)
-picscan --pdf gallery.pdf --layout-pad-top 30 --layout-pad-bottom 30 --layout-pad-left 10 --layout-pad-right 10
+picexplore --scan-only --pdf gallery.pdf --layout-pad-top 30 --layout-pad-bottom 30 --layout-pad-left 10 --layout-pad-right 10
 
-# Do both operations in one command
-picscan --directory ~/Pictures --pdf my_photo_gallery.pdf --verbose
-
-# The PDF gallery is now ready to view!
+# Do both operations in one command (no GUI)
+picexplore --scan-only --directory ~/Pictures --pdf my_photo_gallery.pdf --verbose
 
 # NEW: Find similar images using content-based similarity
 simfind --query ~/Pictures/vacation_photo.jpg --database images.db --threshold 0.8
@@ -210,7 +191,7 @@ You need the following system packages installed:
 - libjpeg-turbo development headers (`libjpeg-turbo8-dev` on Ubuntu/Debian)
 - pkg-config
 
-**For GUI application (gui_test):**
+**For GUI application (picexplore):**
 - FLTK dependencies:
   - X11 development headers (`libx11-dev libxext-dev libxft-dev libxinerama-dev` on Ubuntu/Debian)
   - FontConfig development headers (`libfontconfig1-dev` on Ubuntu/Debian) 
@@ -260,8 +241,7 @@ make
 ```
 
 This will build the executable(s):
-- `picscan` (unified image scanner and PDF gallery generator)
-- `gui_test` (FLTK-based GUI for interactive thumbnail viewing)
+- `picexplore` (unified image scanner, database manager, and gallery viewer)
 - `simfind` (image similarity search tool - only if mlpack is available)
 
 ## Supported Image Formats
