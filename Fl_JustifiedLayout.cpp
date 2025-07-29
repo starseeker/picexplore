@@ -852,7 +852,13 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
         // Perform the actual directory scan
         int processed = scan_database->scan_directory_parallel(dir_path, timer, reporter);
 
-        cancellation_monitor.join();
+	// Done with scanning
+	scanning_.store(false);
+
+	// Wait for cancellation monitor
+	cancellation_monitor.join();
+
+	// We can stop reporting now
         reporter.stop();
 
         std::cout << "[DEBUG] should_cancel_scan_: " << should_cancel_scan_.load()
@@ -861,7 +867,7 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
 
         if (user_cancelled.load()) {
             scan_database->cancel_scan(); // Ensure cancellation is signaled
-            std::cout << "[DEBUG] About to call Fl::awake for scan cancelled" << std::endl;
+	    std::cout << "[DEBUG] About to call Fl::awake for scan cancelled, thread id: " << std::this_thread::get_id() << std::endl;
             Fl::awake([](void* data) {
                 std::cout << "[DEBUG] Fl::awake (cancelled) lambda running" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
@@ -874,13 +880,14 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
             current_db_path_ = db_path;
             database_ = std::move(scan_database);
 
-            std::cout << "[DEBUG] About to call Fl::awake for scan complete" << std::endl;
+	    std::cout << "[DEBUG] About to call Fl::awake for scan complete, thread id: " << std::this_thread::get_id() << std::endl;
             Fl::awake([](void* data) {
                 std::cout << "[DEBUG] Fl::awake (scan complete) lambda running" << std::endl;
-                static_cast<Fl_JustifiedLayout*>(data)->complete_directory_scan();
+		std::cout << "[DEBUG] lambda thread id: " << std::this_thread::get_id() << std::endl;
+		static_cast<Fl_JustifiedLayout*>(data)->complete_directory_scan();
             }, this);
         } else {
-            std::cout << "[DEBUG] About to call Fl::awake for scan failed" << std::endl;
+	    std::cout << "[DEBUG] About to call Fl::awake for scan failed, thread id: " << std::this_thread::get_id() << std::endl;
             Fl::awake([](void* data) {
                 std::cout << "[DEBUG] Fl::awake (scan failed) lambda running" << std::endl;
                 Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
@@ -903,8 +910,6 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
         }, new std::pair<Fl_JustifiedLayout*, std::string>(this, e.what()));
     }
 
-    scanning_.store(false);
-    std::cout << "[DEBUG] directory_scan_thread ending, scanning_ = " << scanning_.load() << std::endl;
 }
 
 void Fl_JustifiedLayout::complete_directory_scan() {

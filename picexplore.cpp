@@ -392,9 +392,14 @@ int run_gui_mode(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
+
+    Fl::lock();
+
     // Determine mode based on command line arguments
     bool scan_only_mode = false;
-    
+
+    std::cout << "[DEBUG] main thread id: " << std::this_thread::get_id() << std::endl;
+
     // Check for --scan-only option
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--scan-only") {
