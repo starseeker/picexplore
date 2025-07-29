@@ -61,7 +61,7 @@ class PicExploreWindow {
 	PicExploreWindow() : window_(nullptr), layout_widget_(nullptr), thread_manager_(nullptr) {
 	    // Initialize the new thread manager
 	    thread_manager_ = std::make_unique<ThreadManager>();
-	    
+
 	    create_window();
 	    setup_callbacks();
 	    setup_thread_callbacks();
@@ -113,7 +113,7 @@ class PicExploreWindow {
 	void set_directory_path(const std::string& path) {
 	    // New architecture: Start directory scan using ThreadManager
 	    std::cout << "[INFO] Starting directory scan: " << path << std::endl;
-	    
+
 	    if (thread_manager_) {
 		bool success = thread_manager_->start_directory_scan(path);
 		if (!success) {
@@ -146,7 +146,7 @@ class PicExploreWindow {
 	void create_window() {
 	    window_ = new Fl_Window(1200, 800, "PicExplore - Image Gallery and Scanner");
 
-	    // Create menu bar  
+	    // Create menu bar
 	    menu_bar_ = new Fl_Menu_Bar(0, 0, 1200, 25);
 	    // Remove explicit database selection - LMDB is used automatically for all directories
 	    menu_bar_->add("&File/Scan D&irectory...", FL_CTRL + 'i', menu_open_directory_cb, this);
@@ -179,7 +179,7 @@ class PicExploreWindow {
 
 	void setup_thread_callbacks() {
 	    if (!thread_manager_) return;
-	    
+
 	    // Set up progress callback for the new thread manager
 	    thread_manager_->set_progress_callback([this](int current, int total, const std::string& status) {
 		// Progress updates from scan thread - forward to layout widget
@@ -191,8 +191,8 @@ class PicExploreWindow {
 		    }, this);
 		}
 	    });
-	    
-	    // Set up metadata callback for incremental image loading  
+
+	    // Set up metadata callback for incremental image loading
 	    thread_manager_->set_metadata_callback([this](const ImageInfo& info) {
 		// New image metadata ready - add to layout incrementally
 		if (layout_widget_) {
@@ -306,6 +306,13 @@ int run_scan_only_mode(int argc, char* argv[]) {
 	int margin = result["margin"].as<int>();
 	bool verbose = result.count("verbose") > 0;
 
+	// Default to current working directory if none specified and we need to scan
+	if (directory.empty() && pdf_path.empty()) {
+	    directory = std::filesystem::current_path().string();
+	    std::cout << "[INFO] No directory specified, using current working directory for scan: "
+		      << directory << std::endl;
+	}
+
 	// Parse layout padding options
 	int layout_pad_default = result["layout-pad"].as<int>();
 	int pad_top = result.count("layout-pad-top") ? result["layout-pad-top"].as<int>() : layout_pad_default;
@@ -313,9 +320,9 @@ int run_scan_only_mode(int argc, char* argv[]) {
 	int pad_left = result.count("layout-pad-left") ? result["layout-pad-left"].as<int>() : layout_pad_default;
 	int pad_right = result.count("layout-pad-right") ? result["layout-pad-right"].as<int>() : layout_pad_default;
 
-	// Validate arguments
+	// Validate arguments - now that we default to CWD, we always have something to work with
 	if (directory.empty() && pdf_path.empty()) {
-	    std::cerr << "Error: Must specify either --directory or --pdf (or both) in scan-only mode" << std::endl;
+	    std::cerr << "Error: No directory or PDF operation specified" << std::endl;
 	    return 1;
 	}
 
@@ -487,11 +494,11 @@ int run_scan_only_mode(int argc, char* argv[]) {
     }
 }
 
-// Function to run GUI mode  
+// Function to run GUI mode
 int run_gui_mode(int argc, char* argv[]) {
     // Parse any initial arguments for GUI mode
     std::string initial_directory;
-    
+
     // Simple parsing for GUI mode - only look for -i/--directory now
     std::string debug_output_dir;
     std::string debug_output_format = "svg";
@@ -538,7 +545,7 @@ int run_gui_mode(int argc, char* argv[]) {
     // Default to current working directory if none specified
     if (initial_directory.empty()) {
 	initial_directory = std::filesystem::current_path().string();
-	std::cout << "[INFO] No directory specified, using current working directory: " 
+	std::cout << "[INFO] No directory specified, using current working directory: "
 		  << initial_directory << std::endl;
     }
 

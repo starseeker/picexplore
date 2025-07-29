@@ -67,7 +67,7 @@ std::vector<std::vector<size_t>> PDFGenerator::calculate_pagination(const std::v
 
     size_t image_idx = 0;
     while (image_idx < items.size()) {
-	std::vector<Item> page_boxes; 
+	std::vector<Item> page_boxes;
 	std::vector<size_t> page_indices;
 	double current_y = 0;
 
@@ -206,7 +206,7 @@ void PDFGenerator::composite_image(std::vector<uint8_t>& page_buffer, int page_w
 }
 
 bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std::string& output_path,
-	Timer& timer, StatusReporter& reporter, 
+	Timer& timer, StatusReporter& reporter,
 	const PDFOptions& options) {
     if (images.empty()) {
 	return false;

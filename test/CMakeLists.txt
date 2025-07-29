@@ -62,6 +62,25 @@ if(JPEG_FOUND)
     target_compile_options(test_incremental_scan PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
 endif()
 
+# Build the thread manager test
+if(JPEG_FOUND)
+    add_executable(test_thread_manager test_thread_manager.cpp ../src/thread_manager.cpp ../src/database.cpp ../src/utils.cpp ../src/stb_impl.cpp ../third_party/TinyEXIF.cpp)
+    target_include_directories(test_thread_manager PRIVATE
+	${XXHASH_DIR}
+	${STB_DIR}
+	${LMDB_DIR}
+	${STRUETYPE_DIR}
+	${STRUETYPE_DIR}/examples
+	${CONCURRENTQUEUE_DIR}
+	${CMAKE_SOURCE_DIR}/third_party
+	${JPEG_INCLUDE_DIRS}
+	${FLTK_DIR}
+	../src
+    )
+    target_link_libraries(test_thread_manager xxhash lmdb fltk ${JPEG_LIBRARIES})
+    target_compile_options(test_thread_manager PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
+endif()
+
 # Local Variables:
 # tab-width: 8
 # mode: cmake
