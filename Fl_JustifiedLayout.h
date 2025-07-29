@@ -169,7 +169,7 @@ protected:
     // Worker thread methods
     void thumbnail_worker_thread();
     void result_processor_thread();
-    void queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority);
+    int queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority);
     void process_thumbnail_results();
     static void result_processor_callback(void* data);
     static void progress_update_callback(void* data);

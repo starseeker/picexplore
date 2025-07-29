@@ -246,12 +246,23 @@ void Fl_JustifiedLayout::process_thumbnail_results() {
     processing.clear();
 }
 
-void Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority) {
+int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority) {
+	int num_queued = 0;
     for (int idx : indices) {
         if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
             const auto& item = layout_items_[idx];
             int target_w = static_cast<int>(item.w) - 2 * THUMBNAIL_BORDER_WIDTH;
             int target_h = static_cast<int>(item.h) - 2 * THUMBNAIL_BORDER_WIDTH;
+
+	    // --- Add this cache check ---
+            std::string cache_key = images_[idx].hash + "_" +
+                std::to_string(target_w) + "x" + std::to_string(target_h);
+            {
+                std::lock_guard<std::mutex> lock(image_cache_mutex_);
+                if (image_cache_.find(cache_key) != image_cache_.end()) {
+                    continue; // Already cached, do not queue
+                }
+            }
 
             ThumbnailTask task(idx, priority, target_w, target_h);
 
@@ -262,8 +273,10 @@ void Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, 
             }
 
             total_tasks_.fetch_add(1);
+	    num_queued++;
         }
     }
+    return num_queued;
 }
 
 Fl_JustifiedLayout::~Fl_JustifiedLayout() {
@@ -385,8 +398,10 @@ void Fl_JustifiedLayout::prefetch_visible_region() {
     }
 
     if (!visible_indices.empty()) {
-        queue_thumbnail_tasks(visible_indices, ThumbnailPriority::HIGH);
-        std::cout << "Queued visible region for high priority: " << visible_start_idx_ << " to " << visible_end_idx_ << std::endl;
+	int num_queued = queue_thumbnail_tasks(visible_indices, ThumbnailPriority::HIGH);
+        if (num_queued > 0) {
+            std::cout << "Queued visible region for high priority: " << visible_start_idx_ << " to " << visible_end_idx_ << std::endl;
+        }
     }
 }
 
