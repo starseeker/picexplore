@@ -494,9 +494,9 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	    // Generate UI thumbnail from database
 	    thumbnail = generate_ui_thumbnail(task);
 
-	    // Queue result for UI
+	    // Only queue real thumbnails for UI - placeholders are generated dynamically in draw code
 	    if (thumbnail) {
-		std::cout << "[DEBUG] ThumbnailWorkers: Generated thumbnail successfully, enqueuing to result_queue - image_index: " << task.image_index << ", cache_key: " << cache_key << std::endl;
+		std::cout << "[DEBUG] ThumbnailWorkers: Generated real thumbnail successfully, enqueuing to result_queue - image_index: " << task.image_index << ", cache_key: " << cache_key << std::endl;
 		UIDrawTask result(task.image_index, std::move(thumbnail), cache_key);
 		result_queue_.enqueue(std::move(result));
 
@@ -510,7 +510,7 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 		std::cout.flush();
 		Fl::awake(thumbnail_ready_callback, nullptr);
 	    } else {
-		std::cout << "[DEBUG] ThumbnailWorkers: Failed to generate thumbnail for task - image_index: " << task.image_index << ", hash: " << task.hash << std::endl;
+		std::cout << "[DEBUG] ThumbnailWorkers: No real thumbnail available for task - image_index: " << task.image_index << ", hash: " << task.hash << " (placeholder will be generated in UI)" << std::endl;
 	    }
 
 	    active_tasks_.fetch_sub(1);
@@ -529,13 +529,14 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UIThumbnailTask& task) {
     // Generate a UI-ready thumbnail from database-stored thumbnail data
     // This function handles the complete pipeline from LMDB lookup to FLTK image creation
+    // Returns nullptr if no real thumbnail is available - placeholders are handled in UI
 
     std::cout << "[DEBUG] ThumbnailWorkers: Starting thumbnail generation from LMDB - hash: " << task.hash << ", target size: " << task.target_width << "x" << task.target_height << std::endl;
 
     if (!database_) {
-	std::cout << "[DEBUG] ThumbnailWorkers: Database not available, creating placeholder - hash: " << task.hash << std::endl;
+	std::cout << "[DEBUG] ThumbnailWorkers: Database not available, no thumbnail to generate - hash: " << task.hash << std::endl;
 	std::cerr << "[WARNING] ThumbnailWorkers: No database available for hash " << task.hash << std::endl;
-	return create_placeholder_thumbnail(task.target_width, task.target_height, "No DB");
+	return nullptr;
     }
 
     // Find the best thumbnail size from the database
@@ -561,9 +562,9 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     // Try to load thumbnail from database using LMDB transaction
     MDB_txn* read_txn = nullptr;
     if (!database_->begin_read_transaction(read_txn)) {
-	std::cout << "[DEBUG] ThumbnailWorkers: Failed to begin LMDB transaction, creating error placeholder - hash: " << task.hash << std::endl;
+	std::cout << "[DEBUG] ThumbnailWorkers: Failed to begin LMDB transaction, no thumbnail available - hash: " << task.hash << std::endl;
 	std::cerr << "[ERROR] ThumbnailWorkers: Failed to begin read transaction for hash " << task.hash << std::endl;
-	return create_placeholder_thumbnail(task.target_width, task.target_height, "DB Error");
+	return nullptr;
     }
 
     // Construct database key: "hash:size" format (consistent format)
@@ -599,9 +600,9 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	}
 
 	if (!success || thumb_data.empty()) {
-	    std::cout << "[DEBUG] ThumbnailWorkers: No thumbnail found in LMDB, creating 'Not Found' placeholder - hash: " << task.hash << std::endl;
+	    std::cout << "[DEBUG] ThumbnailWorkers: No thumbnail found in LMDB, no real thumbnail available - hash: " << task.hash << std::endl;
 	    std::cerr << "[WARNING] ThumbnailWorkers: No thumbnail found for hash " << task.hash << std::endl;
-	    return create_placeholder_thumbnail(task.target_width, task.target_height, "Not Found");
+	    return nullptr;
 	}
     }
 
@@ -617,10 +618,10 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     );
 
     if (!rgb_data) {
-	std::cout << "[DEBUG] ThumbnailWorkers: Failed to decode JPEG, creating decode error placeholder - hash: " << task.hash << ", reason: " << stbi_failure_reason() << std::endl;
+	std::cout << "[DEBUG] ThumbnailWorkers: Failed to decode JPEG, no thumbnail available - hash: " << task.hash << ", reason: " << stbi_failure_reason() << std::endl;
 	std::cerr << "[ERROR] ThumbnailWorkers: Failed to decode thumbnail for hash " << task.hash
 		  << ": " << stbi_failure_reason() << std::endl;
-	return create_placeholder_thumbnail(task.target_width, task.target_height, "Decode Error");
+	return nullptr;
     }
 
     std::cout << "[DEBUG] ThumbnailWorkers: Successfully decoded thumbnail - hash: " << task.hash << ", decoded size: " << thumb_width << "x" << thumb_height << std::endl;
@@ -651,7 +652,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	if (!final_data) {
 	    stbi_image_free(rgb_data);
 	    std::cerr << "[ERROR] ThumbnailWorkers: Failed to allocate memory for resizing hash " << task.hash << std::endl;
-	    return create_placeholder_thumbnail(task.target_width, task.target_height, "Memory Error");
+	    return nullptr;
 	}
 
 	// Resize using stb_image_resize with linear interpolation for good quality
@@ -662,7 +663,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	    free(final_data);
 	    stbi_image_free(rgb_data);
 	    std::cerr << "[ERROR] ThumbnailWorkers: Failed to resize thumbnail for hash " << task.hash << std::endl;
-	    return create_placeholder_thumbnail(task.target_width, task.target_height, "Resize Error");
+	    return nullptr;
 	}
 
 	stbi_image_free(rgb_data);
