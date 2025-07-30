@@ -170,14 +170,32 @@ bool is_image_file(const std::string& filepath) {
     return (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" || ext == ".tga");
 }
 
+// Thumbnail size utilities
+int pick_thumbnail_size(int requested_width, int requested_height) {
+    // Canonical thumbnail sizes supported by the database
+    static const std::vector<int> canonical_sizes = {32, 64, 128, 256, 512, 1024};
+    
+    int requested_size = std::max(requested_width, requested_height);
+    
+    // Find the smallest canonical size that is >= requested size for best quality
+    for (int size : canonical_sizes) {
+	if (size >= requested_size) {
+	    return size;
+	}
+    }
+    
+    // If no size is large enough, use the largest available (1024px)
+    return 1024;
+}
+
 // Thumbnail key utilities
 std::string make_thumbnail_key(const std::string& hash, int size) {
     return hash + ":" + std::to_string(size);
 }
 
 std::string make_thumbnail_key(const std::string& hash, int width, int height) {
-    int size = std::max(width, height);
-    return hash + ":" + std::to_string(size);
+    int canonical_size = pick_thumbnail_size(width, height);
+    return hash + ":" + std::to_string(canonical_size);
 }
 
 std::string get_cache_db_path(bool silent) {

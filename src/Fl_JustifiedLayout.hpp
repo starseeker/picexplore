@@ -194,6 +194,7 @@ class Fl_JustifiedLayout : public Fl_Scroll {
 
     // Image decoding and caching
     Fl_RGB_Image* load_thumbnail_image(const ImageInfo& info, int target_width, int target_height);
+    std::unique_ptr<Fl_RGB_Image> downsample_image(Fl_RGB_Image* source, int target_width, int target_height);
     void clear_image_cache();
 
     // Database operations

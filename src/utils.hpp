@@ -75,6 +75,9 @@ class StatusReporter {
 std::vector<uint8_t> encode_jpeg(const unsigned char* rgb_data, int width, int height, int quality = 90);
 bool is_image_file(const std::string& filepath);
 
+// Thumbnail size utilities
+int pick_thumbnail_size(int requested_width, int requested_height);
+
 // Thumbnail key utilities
 std::string make_thumbnail_key(const std::string& hash, int size);
 std::string make_thumbnail_key(const std::string& hash, int width, int height);
