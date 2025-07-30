@@ -529,9 +529,9 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UIThumbnailTask& task) {
     // Generate a UI-ready thumbnail from database-stored thumbnail data
     // This function handles the complete pipeline from LMDB lookup to FLTK image creation
-    
+
     std::cout << "[DEBUG] ThumbnailWorkers: Starting thumbnail generation from LMDB - hash: " << task.hash << ", target size: " << task.target_width << "x" << task.target_height << std::endl;
-    
+
     if (!database_) {
 	std::cout << "[DEBUG] ThumbnailWorkers: Database not available, creating placeholder - hash: " << task.hash << std::endl;
 	std::cerr << "[WARNING] ThumbnailWorkers: No database available for hash " << task.hash << std::endl;
@@ -542,7 +542,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     // We have pre-generated thumbnails at: 32, 64, 128, 256, 512, 1024 pixels
     std::vector<int> available_sizes = {32, 64, 128, 256, 512, 1024};
     int best_size = 0;
-    
+
     // Choose the smallest thumbnail that's >= our target size for best quality
     for (int size : available_sizes) {
 	if (size >= std::max(task.target_width, task.target_height)) {
@@ -550,12 +550,12 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	    break;
 	}
     }
-    
+
     // If no size is large enough, use the largest available (1024px)
     if (best_size == 0) {
 	best_size = 1024;
     }
-    
+
     std::cout << "[DEBUG] ThumbnailWorkers: Selected best thumbnail size " << best_size << "px for hash: " << task.hash << std::endl;
 
     // Try to load thumbnail from database using LMDB transaction
@@ -569,10 +569,10 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     // Construct database key: "hash:thumb_size" format
     std::string thumb_key = task.hash + ":thumb_" + std::to_string(best_size);
     std::vector<uint8_t> thumb_data;
-    
+
     std::cout << "[DEBUG] ThumbnailWorkers: Looking up thumbnail in LMDB - key: " << thumb_key << std::endl;
     bool success = database_->get_key_data(read_txn, thumb_key, thumb_data);
-    
+
     database_->commit_transaction(read_txn);
 
     if (!success || thumb_data.empty()) {
@@ -581,30 +581,30 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	// This handles cases where thumbnail generation was incomplete
 	for (int fallback_size : available_sizes) {
 	    if (fallback_size == best_size) continue; // Already tried this one
-	    
+
 	    std::cout << "[DEBUG] ThumbnailWorkers: Trying fallback size " << fallback_size << "px - hash: " << task.hash << std::endl;
 	    if (!database_->begin_read_transaction(read_txn)) {
 		break;
 	    }
-	    
+
 	    std::string fallback_key = task.hash + ":thumb_" + std::to_string(fallback_size);
 	    success = database_->get_key_data(read_txn, fallback_key, thumb_data);
 	    database_->commit_transaction(read_txn);
-	    
+
 	    if (success && !thumb_data.empty()) {
 		std::cout << "[DEBUG] ThumbnailWorkers: Found thumbnail at fallback size " << fallback_size << "px - hash: " << task.hash << std::endl;
 		best_size = fallback_size; // Update for correct decoding
 		break;
 	    }
 	}
-	
+
 	if (!success || thumb_data.empty()) {
 	    std::cout << "[DEBUG] ThumbnailWorkers: No thumbnail found in LMDB, creating 'Not Found' placeholder - hash: " << task.hash << std::endl;
 	    std::cerr << "[WARNING] ThumbnailWorkers: No thumbnail found for hash " << task.hash << std::endl;
 	    return create_placeholder_thumbnail(task.target_width, task.target_height, "Not Found");
 	}
     }
-    
+
     std::cout << "[DEBUG] ThumbnailWorkers: Found thumbnail data in LMDB - hash: " << task.hash << ", size: " << thumb_data.size() << " bytes" << std::endl;
 
     // Decode JPEG thumbnail data using stb_image
@@ -806,6 +806,10 @@ bool ThreadManager::start_directory_scan(const std::string& directory_path, cons
 
     // Start the scan
     bool result = scan_thread_->start_scan(directory_path, db_path);
+
+    if (result && scan_thread_->get_database()) {
+	thumbnail_workers_->set_database(scan_thread_->get_database());
+    }
 
     if (result) {
 	std::cout << "[INFO] ThreadManager: Started directory scan for " << directory_path << std::endl;

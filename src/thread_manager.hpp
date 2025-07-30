@@ -142,6 +142,8 @@ public:
 	progress_reporter_ = reporter;
     }
 
+    DatabaseManager *get_database() const { return database_.get(); }
+
     // Callback for when image metadata is ready (stage 1)
     using ImageMetadataCallback = std::function<void(const ImageInfo&)>;
     void set_metadata_callback(ImageMetadataCallback callback) {
@@ -266,7 +268,7 @@ public:
     void enqueue_low_priority(const UIThumbnailTask& task);
     bool try_dequeue_result(UIDrawTask& result);
 
-    void set_database(std::shared_ptr<DatabaseManager> database) { database_ = database; }
+    void set_database(DatabaseManager *database) { database_ = database; }
 
 private:
     void thumbnail_worker_thread_main();
@@ -281,7 +283,7 @@ private:
     moodycamel::ConcurrentQueue<UIThumbnailTask> low_priority_queue_;
     moodycamel::ConcurrentQueue<UIDrawTask> result_queue_;
 
-    std::shared_ptr<DatabaseManager> database_;
+    DatabaseManager *database_ = nullptr;
     std::atomic<int> active_tasks_;
     std::atomic<int> completed_tasks_;
 };
