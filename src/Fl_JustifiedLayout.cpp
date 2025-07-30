@@ -519,9 +519,11 @@ void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const 
 	int img_y = y + THUMBNAIL_BORDER_WIDTH + (h - 2 * THUMBNAIL_BORDER_WIDTH - img_h) / 2;
 
 	// Draw the image
+	std::cout << "[DEBUG] drawing loaded thumbnail\n";
 	thumb_image->draw(img_x, img_y);
     } else {
 	// Fallback to placeholder rendering
+	std::cout << "[DEBUG] drawing placeholder\n";
 	draw_thumbnail_placeholder(x, y, w, h, info);
     }
 }
