@@ -180,7 +180,8 @@ void UpdateMonitorThread::join() {
 }
 
 void UpdateMonitorThread::monitor_thread_main() {
-    std::cout << "[INFO] UpdateMonitorThread: Starting monitoring" << std::endl;
+    std::cout << "[DEBUG] UpdateMonitorThread: Starting monitoring thread" << std::endl;
+    std::cout.flush();
 
     while (!should_stop_.load() && !GlobalFlags::is_shutdown_requested()) {
 	// Monitor scan progress and handle UI updates
@@ -192,11 +193,14 @@ void UpdateMonitorThread::monitor_thread_main() {
 		// Update progress bars, refresh layouts, etc.
 	    };
 
+	    std::cout << "[DEBUG] UpdateMonitorThread: Notifying UI via Fl::awake() for scan progress update" << std::endl;
+	    std::cout.flush();
 	    Fl::awake(ui_update_callback, nullptr);
 	}
 
 	// Check for cancellation requests
 	if (GlobalFlags::is_cancel_requested()) {
+	    std::cout << "[DEBUG] UpdateMonitorThread: Cancel request detected, stopping scan thread" << std::endl;
 	    if (scan_thread_) {
 		scan_thread_->stop_scan();
 	    }
@@ -207,7 +211,8 @@ void UpdateMonitorThread::monitor_thread_main() {
 	std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    std::cout << "[INFO] UpdateMonitorThread: Thread exiting" << std::endl;
+    std::cout << "[DEBUG] UpdateMonitorThread: Thread exiting" << std::endl;
+    std::cout.flush();
 }
 
 //==============================================================================
@@ -257,7 +262,8 @@ void WorkerPool::join_all() {
 void WorkerPool::worker_thread_main() {
     active_workers_.fetch_add(1);
 
-    std::cout << "[INFO] WorkerPool: Worker thread started" << std::endl;
+    std::cout << "[DEBUG] WorkerPool: Worker thread started" << std::endl;
+    std::cout.flush();
 
     ThumbnailGenerationTask task{"", "", ImageInfo{}};
 
@@ -266,12 +272,14 @@ void WorkerPool::worker_thread_main() {
 
 	// Try to get work from scan thread
 	if (scan_thread_ && scan_thread_->thumbnail_gen_queue_.try_dequeue(task)) {
+	    std::cout << "[DEBUG] WorkerPool: Dequeued thumbnail generation task from rectLayoutQueue - file: " << task.file_path << ", hash: " << task.hash << std::endl;
 	    found_task = true;
 	    processed_count_.fetch_add(1);
 
 	    // Process the thumbnail generation task from directory scan
 	    // This connects to the existing DatabaseManager thumbnail generation pipeline
 	    if (scan_thread_ && scan_thread_->database_) {
+		std::cout << "[DEBUG] WorkerPool: Generating thumbnails for file: " << task.file_path << std::endl;
 		// Use the existing optimized thumbnail generation method that handles:
 		// - JPEG DCT-domain downscaling for efficiency
 		// - Multiple thumbnail sizes (32, 64, 128, 256, 512, 1024px)
@@ -280,12 +288,14 @@ void WorkerPool::worker_thread_main() {
 		bool success = scan_thread_->database_->generate_thumbnails_for_hash(task.hash, task.file_path);
 		
 		if (success) {
+		    std::cout << "[DEBUG] WorkerPool: Successfully generated thumbnails, enqueuing write task to writeQueue - hash: " << task.hash << std::endl;
 		    // Create a completion task for the writer thread
 		    // Note: generate_thumbnails_for_hash handles its own database writes,
 		    // so this is mainly for progress tracking
 		    WriteTask write_task(WriteTask::STORE_THUMBNAIL, task.hash, std::vector<uint8_t>());
 		    write_queue_.enqueue(std::move(write_task));
 		} else {
+		    std::cout << "[DEBUG] WorkerPool: Failed to generate thumbnails for file: " << task.file_path << " (hash: " << task.hash << ")" << std::endl;
 		    std::cerr << "[WARNING] WorkerPool: Failed to generate thumbnails for " 
 			      << task.file_path << " (hash: " << task.hash << ")" << std::endl;
 		}
@@ -299,7 +309,8 @@ void WorkerPool::worker_thread_main() {
     }
 
     active_workers_.fetch_sub(1);
-    std::cout << "[INFO] WorkerPool: Worker thread exiting" << std::endl;
+    std::cout << "[DEBUG] WorkerPool: Worker thread exiting" << std::endl;
+    std::cout.flush();
 }
 
 //==============================================================================
@@ -335,7 +346,8 @@ void WriterThread::join() {
 }
 
 void WriterThread::writer_thread_main() {
-    std::cout << "[INFO] WriterThread: Starting writer thread" << std::endl;
+    std::cout << "[DEBUG] WriterThread: Starting writer thread" << std::endl;
+    std::cout.flush();
 
     WriteTask task;
     std::vector<WriteTask> batch;
@@ -346,12 +358,14 @@ void WriterThread::writer_thread_main() {
 
 	// Try to get work from worker pool
 	if (worker_pool_ && worker_pool_->get_write_queue().try_dequeue(task)) {
+	    std::cout << "[DEBUG] WriterThread: Dequeued write task from writeQueue - type: " << task.type << ", key: " << task.key << std::endl;
 	    found_task = true;
 	    batch.push_back(std::move(task));
 	}
 
 	// Process batch if it's full or if we're stopping
 	if (batch.size() >= BATCH_SIZE || (should_stop_.load() && !batch.empty())) {
+	    std::cout << "[DEBUG] WriterThread: Processing batch of " << batch.size() << " write tasks" << std::endl;
 	    // Process the batch of write tasks
 	    write_count_.fetch_add(batch.size());
 
@@ -369,11 +383,13 @@ void WriterThread::writer_thread_main() {
 
     // Process any remaining batch items
     if (!batch.empty()) {
+	std::cout << "[DEBUG] WriterThread: Processing final batch of " << batch.size() << " write tasks before exit" << std::endl;
 	write_count_.fetch_add(batch.size());
 	// ... process final batch ...
     }
 
-    std::cout << "[INFO] WriterThread: Thread exiting, processed " << write_count_.load() << " writes" << std::endl;
+    std::cout << "[DEBUG] WriterThread: Thread exiting, processed " << write_count_.load() << " writes" << std::endl;
+    std::cout.flush();
 }
 
 //==============================================================================
@@ -422,19 +438,29 @@ void ThumbnailWorkers::join_all() {
 }
 
 void ThumbnailWorkers::enqueue_high_priority(const UIThumbnailTask& task) {
+    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing high priority task to highPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << ", size: " << task.target_width << "x" << task.target_height << std::endl;
+    std::cout.flush();
     high_priority_queue_.enqueue(task);
 }
 
 void ThumbnailWorkers::enqueue_low_priority(const UIThumbnailTask& task) {
+    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing low priority task to lowPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << ", size: " << task.target_width << "x" << task.target_height << std::endl;
+    std::cout.flush();
     low_priority_queue_.enqueue(task);
 }
 
 bool ThumbnailWorkers::try_dequeue_result(UIDrawTask& result) {
-    return result_queue_.try_dequeue(result);
+    bool success = result_queue_.try_dequeue(result);
+    if (success) {
+	std::cout << "[DEBUG] ThumbnailWorkers: Dequeued draw result from result_queue - image_index: " << result.image_index << ", cache_key: " << result.cache_key << std::endl;
+	std::cout.flush();
+    }
+    return success;
 }
 
 void ThumbnailWorkers::thumbnail_worker_thread_main() {
-    std::cout << "[INFO] ThumbnailWorkers: Thumbnail worker thread started" << std::endl;
+    std::cout << "[DEBUG] ThumbnailWorkers: Thumbnail worker thread started" << std::endl;
+    std::cout.flush();
 
     UIThumbnailTask task;
     int tasks_processed = 0;
@@ -444,14 +470,17 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 
 	// Try high priority queue first
 	if (high_priority_queue_.try_dequeue(task)) {
+	    std::cout << "[DEBUG] ThumbnailWorkers: Dequeued task from highPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << std::endl;
 	    found_task = true;
 	} else if (low_priority_queue_.try_dequeue(task)) {
+	    std::cout << "[DEBUG] ThumbnailWorkers: Dequeued task from lowPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << std::endl;
 	    found_task = true;
 	}
 
 	if (found_task) {
 	    active_tasks_.fetch_add(1);
 	    tasks_processed++;
+	    std::cout << "[DEBUG] ThumbnailWorkers: Processing thumbnail task - image_index: " << task.image_index << ", target size: " << task.target_width << "x" << task.target_height << std::endl;
 
 	    // Generate UI thumbnail
 	    std::unique_ptr<Fl_RGB_Image> thumbnail;
@@ -464,6 +493,7 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 
 	    // Queue result for UI
 	    if (thumbnail) {
+		std::cout << "[DEBUG] ThumbnailWorkers: Generated thumbnail successfully, enqueuing to result_queue - image_index: " << task.image_index << ", cache_key: " << cache_key << std::endl;
 		UIDrawTask result(task.image_index, std::move(thumbnail), cache_key);
 		result_queue_.enqueue(std::move(result));
 
@@ -473,7 +503,11 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 		    // Trigger layout refresh, redraw, etc.
 		};
 
+		std::cout << "[DEBUG] ThumbnailWorkers: Notifying UI via Fl::awake() for completed thumbnail - image_index: " << task.image_index << std::endl;
+		std::cout.flush();
 		Fl::awake(thumbnail_ready_callback, nullptr);
+	    } else {
+		std::cout << "[DEBUG] ThumbnailWorkers: Failed to generate thumbnail for task - image_index: " << task.image_index << ", hash: " << task.hash << std::endl;
 	    }
 
 	    active_tasks_.fetch_sub(1);
@@ -484,15 +518,19 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	}
     }
 
-    std::cout << "[INFO] ThumbnailWorkers: Thumbnail worker thread exiting, processed "
+    std::cout << "[DEBUG] ThumbnailWorkers: Thumbnail worker thread exiting, processed "
 	      << tasks_processed << " tasks" << std::endl;
+    std::cout.flush();
 }
 
 std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UIThumbnailTask& task) {
     // Generate a UI-ready thumbnail from database-stored thumbnail data
     // This function handles the complete pipeline from LMDB lookup to FLTK image creation
     
+    std::cout << "[DEBUG] ThumbnailWorkers: Starting thumbnail generation from LMDB - hash: " << task.hash << ", target size: " << task.target_width << "x" << task.target_height << std::endl;
+    
     if (!database_) {
+	std::cout << "[DEBUG] ThumbnailWorkers: Database not available, creating placeholder - hash: " << task.hash << std::endl;
 	std::cerr << "[WARNING] ThumbnailWorkers: No database available for hash " << task.hash << std::endl;
 	return create_placeholder_thumbnail(task.target_width, task.target_height, "No DB");
     }
@@ -514,10 +552,13 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     if (best_size == 0) {
 	best_size = 1024;
     }
+    
+    std::cout << "[DEBUG] ThumbnailWorkers: Selected best thumbnail size " << best_size << "px for hash: " << task.hash << std::endl;
 
     // Try to load thumbnail from database using LMDB transaction
     MDB_txn* read_txn = nullptr;
     if (!database_->begin_read_transaction(read_txn)) {
+	std::cout << "[DEBUG] ThumbnailWorkers: Failed to begin LMDB transaction, creating error placeholder - hash: " << task.hash << std::endl;
 	std::cerr << "[ERROR] ThumbnailWorkers: Failed to begin read transaction for hash " << task.hash << std::endl;
 	return create_placeholder_thumbnail(task.target_width, task.target_height, "DB Error");
     }
@@ -526,16 +567,19 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     std::string thumb_key = task.hash + ":thumb_" + std::to_string(best_size);
     std::vector<uint8_t> thumb_data;
     
+    std::cout << "[DEBUG] ThumbnailWorkers: Looking up thumbnail in LMDB - key: " << thumb_key << std::endl;
     bool success = database_->get_key_data(read_txn, thumb_key, thumb_data);
     
     database_->commit_transaction(read_txn);
 
     if (!success || thumb_data.empty()) {
+	std::cout << "[DEBUG] ThumbnailWorkers: Primary thumbnail size not found, trying fallback sizes - hash: " << task.hash << std::endl;
 	// Try fallback sizes if the preferred size isn't available
 	// This handles cases where thumbnail generation was incomplete
 	for (int fallback_size : available_sizes) {
 	    if (fallback_size == best_size) continue; // Already tried this one
 	    
+	    std::cout << "[DEBUG] ThumbnailWorkers: Trying fallback size " << fallback_size << "px - hash: " << task.hash << std::endl;
 	    if (!database_->begin_read_transaction(read_txn)) {
 		break;
 	    }
@@ -545,30 +589,38 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	    database_->commit_transaction(read_txn);
 	    
 	    if (success && !thumb_data.empty()) {
+		std::cout << "[DEBUG] ThumbnailWorkers: Found thumbnail at fallback size " << fallback_size << "px - hash: " << task.hash << std::endl;
 		best_size = fallback_size; // Update for correct decoding
 		break;
 	    }
 	}
 	
 	if (!success || thumb_data.empty()) {
+	    std::cout << "[DEBUG] ThumbnailWorkers: No thumbnail found in LMDB, creating 'Not Found' placeholder - hash: " << task.hash << std::endl;
 	    std::cerr << "[WARNING] ThumbnailWorkers: No thumbnail found for hash " << task.hash << std::endl;
 	    return create_placeholder_thumbnail(task.target_width, task.target_height, "Not Found");
 	}
     }
+    
+    std::cout << "[DEBUG] ThumbnailWorkers: Found thumbnail data in LMDB - hash: " << task.hash << ", size: " << thumb_data.size() << " bytes" << std::endl;
 
     // Decode JPEG thumbnail data using stb_image
     // All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
     int thumb_width, thumb_height, thumb_channels;
+    std::cout << "[DEBUG] ThumbnailWorkers: Decoding JPEG thumbnail data - hash: " << task.hash << std::endl;
     unsigned char* rgb_data = stbi_load_from_memory(
 	thumb_data.data(), thumb_data.size(),
 	&thumb_width, &thumb_height, &thumb_channels, 3  // Force RGB output
     );
 
     if (!rgb_data) {
+	std::cout << "[DEBUG] ThumbnailWorkers: Failed to decode JPEG, creating decode error placeholder - hash: " << task.hash << ", reason: " << stbi_failure_reason() << std::endl;
 	std::cerr << "[ERROR] ThumbnailWorkers: Failed to decode thumbnail for hash " << task.hash 
 		  << ": " << stbi_failure_reason() << std::endl;
 	return create_placeholder_thumbnail(task.target_width, task.target_height, "Decode Error");
     }
+
+    std::cout << "[DEBUG] ThumbnailWorkers: Successfully decoded thumbnail - hash: " << task.hash << ", decoded size: " << thumb_width << "x" << thumb_height << std::endl;
 
     // Resize thumbnail to match UI requirements while preserving aspect ratio
     int final_width = thumb_width;
@@ -576,6 +628,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     
     unsigned char* final_data = rgb_data;
     if (thumb_width != task.target_width || thumb_height != task.target_height) {
+	std::cout << "[DEBUG] ThumbnailWorkers: Resizing thumbnail to target size - hash: " << task.hash << ", from: " << thumb_width << "x" << thumb_height << " to target: " << task.target_width << "x" << task.target_height << std::endl;
 	// Calculate aspect-preserving dimensions
 	double aspect = (double)thumb_width / thumb_height;
 	double target_aspect = (double)task.target_width / task.target_height;
@@ -625,10 +678,14 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::create_placeholder_thumbnail(int
     // - "Not Found": Blue tinted center (missing thumbnail data)
     // - Others: Grey with dark border (general errors)
     
+    std::cout << "[DEBUG] ThumbnailWorkers: Creating placeholder thumbnail - size: " << width << "x" << height << ", message: " << message << std::endl;
+    std::cout.flush();
+    
     int data_size = width * height * 3;
     unsigned char* placeholder_data = (unsigned char*)malloc(data_size);
     
     if (!placeholder_data) {
+	std::cout << "[DEBUG] ThumbnailWorkers: Failed to allocate memory for placeholder" << std::endl;
 	return nullptr;
     }
     

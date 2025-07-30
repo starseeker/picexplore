@@ -766,11 +766,15 @@ void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_
 	Timer& timer, StatusReporter& reporter,
 	std::atomic<int>& processed_count, std::atomic<int>& skipped_count) {
 
+    std::cout << "[DEBUG] DatabaseManager: Worker thread started, processing files " << start_idx << " to " << (end_idx - 1) << " (total: " << (end_idx - start_idx) << " files)" << std::endl;
+    std::cout.flush();
+
     size_t local_processed = 0;
     size_t local_skipped = 0;
 
     for (size_t i = start_idx; i < end_idx && !stop_processing_.load(); i++) {
 	const std::string& filepath = files[i];
+	std::cout << "[DEBUG] DatabaseManager: Worker processing file: " << filepath << std::endl;
 
 	std::vector<WriteTask> write_tasks;
 	bool should_skip = false;
@@ -778,16 +782,20 @@ void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_
 	bool success = process_image_file(filepath, write_tasks, timer, should_skip);
 
 	if (should_skip) {
+	    std::cout << "[DEBUG] DatabaseManager: Skipping file (already processed or error): " << filepath << std::endl;
 	    local_skipped++;
 	    skipped_count.fetch_add(1);
 	} else if (success) {
 	    // Enqueue all write tasks for this image
+	    std::cout << "[DEBUG] DatabaseManager: Enqueuing " << write_tasks.size() << " write tasks for file: " << filepath << std::endl;
 	    for (const auto& task : write_tasks) {
 		write_queue.enqueue(task);
+		std::cout << "[DEBUG] DatabaseManager: Enqueued write task to writeQueue - type: " << task.type << ", key: " << task.key << std::endl;
 	    }
 	    local_processed++;
 	    processed_count.fetch_add(1);
 	} else {
+	    std::cout << "[DEBUG] DatabaseManager: Failed to process file: " << filepath << std::endl;
 	    local_skipped++;
 	    skipped_count.fetch_add(1);
 	}
@@ -798,12 +806,17 @@ void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_
 	}
     }
 
+    std::cout << "[DEBUG] DatabaseManager: Worker thread exiting - processed: " << local_processed << ", skipped: " << local_skipped << std::endl;
+    std::cout.flush();
 }
 
 void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& write_queue,
 	std::atomic<bool>& workers_done,
 	Timer& timer, StatusReporter& reporter,
 	std::atomic<int>& write_count) {
+
+    std::cout << "[DEBUG] DatabaseManager: Writer thread started for batched database writes" << std::endl;
+    std::cout.flush();
 
     constexpr int BATCH_SIZE = 100;
     std::vector<WriteTask> batch;
@@ -817,8 +830,11 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
 
 	// Dequeue a batch of writes
 	WriteTask task;
+	int dequeued_count = 0;
 	for (int i = 0; i < BATCH_SIZE && write_queue.try_dequeue(task); i++) {
+	    std::cout << "[DEBUG] DatabaseManager: Dequeued write task from writeQueue - type: " << task.type << ", key: " << task.key << std::endl;
 	    batch.push_back(std::move(task));
+	    dequeued_count++;
 	}
 
 	if (batch.empty()) {
@@ -826,6 +842,7 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
 	    continue;
 	}
 
+	std::cout << "[DEBUG] DatabaseManager: Processing batch " << batch_counter << " with " << dequeued_count << " write tasks" << std::endl;
 	batch_counter++;
 
 	// Process batch in a single transaction
@@ -893,6 +910,8 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
 	}
     }
 
+    std::cout << "[DEBUG] DatabaseManager: Writer thread exiting - processed " << total_writes << " writes in " << batch_counter << " batches" << std::endl;
+    std::cout.flush();
 }
 
 int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer& timer,
@@ -913,23 +932,32 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
 
     // Count total image files first
     std::vector<std::string> image_files;
+    std::cout << "[DEBUG] DatabaseManager: Starting file discovery in directory: " << directory << std::endl;
+    std::cout.flush();
     try {
 	for (const auto& entry : fs::recursive_directory_iterator(directory)) {
 	    if (entry.is_regular_file() && is_image_file(entry.path().string())) {
+		std::cout << "[DEBUG] DatabaseManager: Discovered image file: " << entry.path().string() << std::endl;
 		image_files.push_back(entry.path().string());
 	    }
 	}
     } catch (const fs::filesystem_error& ex) {
+	std::cout << "[DEBUG] DatabaseManager: Directory scan failed with error: " << ex.what() << std::endl;
+	std::cout.flush();
 	return -1;
     }
 
     timer.stop("Directory Scanning");
 
     if (image_files.empty()) {
+	std::cout << "[DEBUG] DatabaseManager: No image files found in directory scan" << std::endl;
+	std::cout.flush();
 	reporter.update_status("No image files found");
 	return 0;
     }
 
+    std::cout << "[DEBUG] DatabaseManager: File discovery complete. Found " << image_files.size() << " image files for processing" << std::endl;
+    std::cout.flush();
     reporter.set_total_count(image_files.size());
     reporter.update_status("Processing images in parallel...");
 
@@ -945,6 +973,8 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
     timer.start("Parallel Image Processing");
 
     // Start writer thread
+    std::cout << "[DEBUG] DatabaseManager: Starting writer thread for database writes" << std::endl;
+    std::cout.flush();
     std::thread writer_thread_handle(&DatabaseManager::writer_thread, this,
 	    std::ref(write_queue), std::ref(workers_done),
 	    std::ref(timer), std::ref(reporter), std::ref(write_count));
@@ -952,12 +982,15 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
     // Start worker threads
     std::vector<std::thread> worker_threads;
     size_t files_per_thread = (image_files.size() + num_threads - 1) / num_threads;
+    std::cout << "[DEBUG] DatabaseManager: Starting " << num_threads << " worker threads, " << files_per_thread << " files per thread" << std::endl;
+    std::cout.flush();
 
     for (int t = 0; t < num_threads; t++) {
 	size_t start_idx = t * files_per_thread;
 	size_t end_idx = std::min(start_idx + files_per_thread, image_files.size());
 
 	if (start_idx < end_idx) {
+	    std::cout << "[DEBUG] DatabaseManager: Starting worker thread " << t << " for files " << start_idx << " to " << (end_idx - 1) << std::endl;
 	    worker_threads.emplace_back(&DatabaseManager::worker_thread, this,
 		    std::ref(image_files), start_idx, end_idx,
 		    std::ref(write_queue), std::ref(timer), std::ref(reporter),
