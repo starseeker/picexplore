@@ -220,6 +220,10 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     static void thumbnail_notification_callback(void* data);  // FLTK callback for notifications
     static void batch_flush_callback(void* data);  // FLTK callback for batch processing
 
+    // Scroll position preservation helpers
+    void save_scroll_position();
+    void restore_scroll_position();
+
     private:
     // Content widget for scrollable area
     Fl_JustifiedLayout_Content* content_widget_;
@@ -238,6 +242,10 @@ class Fl_JustifiedLayout : public Fl_Scroll {
 
     // Selection state
     int selected_index_;
+
+    // Scroll position preservation
+    int saved_scroll_y_;
+    double saved_content_height_;
 
     // Directory scanning state
     std::atomic<bool> scanning_;

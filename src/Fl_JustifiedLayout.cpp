@@ -33,6 +33,8 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     , visible_start_idx_(0)
     , visible_end_idx_(0)
     , selected_index_(-1)
+    , saved_scroll_y_(0)
+    , saved_content_height_(0.0)
     , scanning_(false)
     , should_cancel_scan_(false)
     , thread_manager_(nullptr)
@@ -241,6 +243,9 @@ void Fl_JustifiedLayout::relayout() {
 	return;
     }
 
+    // Save current scroll position before layout changes
+    save_scroll_position();
+
     clear_layout();
     clear_image_cache();  // Clear cache when layout changes
     calculate_layout();
@@ -251,7 +256,40 @@ void Fl_JustifiedLayout::relayout() {
 	content_widget_->resize(x(), y(), w(), content_height);
     }
 
+    // Restore scroll position after layout changes
+    restore_scroll_position();
+
     redraw();
+}
+
+void Fl_JustifiedLayout::save_scroll_position() {
+    // Store current scroll position and content height for restoration
+    saved_scroll_y_ = yposition();
+    saved_content_height_ = total_height_;
+}
+
+void Fl_JustifiedLayout::restore_scroll_position() {
+    // Restore scroll position, adjusting for changes in total content height
+    if (saved_content_height_ > 0.0 && total_height_ > 0.0) {
+	// Calculate proportional position if content height changed
+	double position_ratio = static_cast<double>(saved_scroll_y_) / saved_content_height_;
+	int new_scroll_y = static_cast<int>(position_ratio * total_height_);
+	
+	// Ensure new position is within valid bounds
+	int max_scroll_y = std::max(0, static_cast<int>(total_height_) - h());
+	new_scroll_y = std::max(0, std::min(new_scroll_y, max_scroll_y));
+	
+	// Apply the scroll position
+	scroll_to(xposition(), new_scroll_y);
+    } else if (saved_content_height_ <= 0.0) {
+	// If original content was empty/zero, start from top
+	scroll_to(xposition(), 0);
+    } else {
+	// Simple restoration for cases where new content height is zero/invalid
+	int max_scroll_y = std::max(0, static_cast<int>(total_height_) - h());
+	int bounded_scroll_y = std::max(0, std::min(saved_scroll_y_, max_scroll_y));
+	scroll_to(xposition(), bounded_scroll_y);
+    }
 }
 
 void Fl_JustifiedLayout::calculate_layout() {
@@ -913,6 +951,9 @@ void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& ne
 	return;
     }
 
+    // Save current scroll position before adding new images
+    save_scroll_position();
+
     // Add new images to our list
     size_t old_size = images_.size();
     images_.insert(images_.end(), new_images.begin(), new_images.end());
@@ -929,6 +970,9 @@ void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& ne
 	content_widget_->resize(x(), y(), w(), content_height);
     } else {
     }
+
+    // Restore scroll position after layout changes
+    restore_scroll_position();
 
     // Trigger redraw to show new placeholders
     redraw();
@@ -1023,6 +1067,9 @@ void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& 
 
     log_batch_debug("Processing batch of " + std::to_string(batch.size()) + " images");
 
+    // Save current scroll position before batch processing
+    save_scroll_position();
+
     // Add images to our list in batch
     size_t old_size = images_.size();
     {
@@ -1052,6 +1099,9 @@ void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& 
 	log_ui_debug("Resizing content widget for batch, new height: " + std::to_string(content_height));
 	content_widget_->resize(x(), y(), w(), content_height);
     }
+
+    // Restore scroll position after layout changes
+    restore_scroll_position();
 
     // Trigger redraw to show new placeholders
     log_ui_debug("Triggering redraw for batch of " + std::to_string(batch.size()) + " images");
