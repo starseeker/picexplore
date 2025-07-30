@@ -75,6 +75,10 @@ class StatusReporter {
 std::vector<uint8_t> encode_jpeg(const unsigned char* rgb_data, int width, int height, int quality = 90);
 bool is_image_file(const std::string& filepath);
 
+// Thumbnail key utilities
+std::string make_thumbnail_key(const std::string& hash, int size);
+std::string make_thumbnail_key(const std::string& hash, int width, int height);
+
 // Cross-platform cache path management
 std::string get_cache_db_path(bool silent = false);
 // Local Variables:
