@@ -153,8 +153,6 @@ class PicExploreWindow {
 	    menu_bar_->add("&File/Cancel &Scan", FL_CTRL + 'c', menu_cancel_scan_cb, this);
 	    menu_bar_->add("&File/Generate &PDF...", FL_CTRL + 'p', menu_generate_pdf_cb, this);
 	    menu_bar_->add("&File/&Quit", FL_CTRL + 'q', menu_quit_cb, this);
-	    menu_bar_->add("&View/Start &Background Generation", FL_CTRL + 'g', menu_start_generation_cb, this);
-	    menu_bar_->add("&View/&Stop Background Generation", FL_CTRL + 's', menu_stop_generation_cb, this);
 
 	    // Create main layout widget
 	    layout_widget_ = new Fl_JustifiedLayout(10, 35, 1180, 750);
@@ -280,20 +278,6 @@ class PicExploreWindow {
 	static void menu_quit_cb(Fl_Widget*, void* data) {
 	    PicExploreWindow* window = static_cast<PicExploreWindow*>(data);
 	    window->window_->hide();
-	}
-
-	static void menu_start_generation_cb(Fl_Widget*, void* data) {
-	    PicExploreWindow* window = static_cast<PicExploreWindow*>(data);
-	    if (window->layout_widget_) {
-		window->layout_widget_->start_background_generation();
-	    }
-	}
-
-	static void menu_stop_generation_cb(Fl_Widget*, void* data) {
-	    PicExploreWindow* window = static_cast<PicExploreWindow*>(data);
-	    if (window->layout_widget_) {
-		window->layout_widget_->stop_background_generation();
-	    }
 	}
 
 	Fl_Window* window_;

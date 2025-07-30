@@ -32,16 +32,11 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     , visible_start_idx_(0)
     , visible_end_idx_(0)
     , selected_index_(-1)
-    , generating_(false)
-    , should_stop_(false)
     , scanning_(false)
     , should_cancel_scan_(false)
-    , active_tasks_(0)
-    , completed_tasks_(0)
-    , total_tasks_(0)
-    , thumbnail_notification_callback_(nullptr)
-      , batch_flush_scheduled_(false)
     , thread_manager_(nullptr)
+    , thumbnail_notification_callback_(nullptr)
+    , batch_flush_scheduled_(false)
 {
     // Initialize layout configuration with reasonable defaults
     layout_config_.w = W - 20; // Leave some margin for scrollbar
@@ -143,167 +138,21 @@ static std::unique_ptr<Fl_RGB_Image> worker_decode_fl_rgb_image(const ImageInfo&
     return std::make_unique<Fl_RGB_Image>(fltk_pixels, scaled_width, scaled_height, 3);
 }
 
-void Fl_JustifiedLayout::thumbnail_worker_thread() {
-    log_ui_debug("Thumbnail worker thread " + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) + " started");
-
-    ThumbnailTask task;
-    int tasks_processed = 0;
-
-    while (!should_stop_.load()) {
-	bool found_task = false;
-
-	// Try high priority queue first
-	if (high_priority_queue_.try_dequeue(task)) {
-	    found_task = true;
-	    log_ui_debug("Worker dequeued HIGH priority task for image " + std::to_string(task.image_index) +
-		    " (" + std::to_string(task.target_width) + "x" + std::to_string(task.target_height) + ")");
-	}
-	// Fall back to low priority queue
-	else if (low_priority_queue_.try_dequeue(task)) {
-	    found_task = true;
-	    log_ui_debug("Worker dequeued LOW priority task for image " + std::to_string(task.image_index) +
-		    " (" + std::to_string(task.target_width) + "x" + std::to_string(task.target_height) + ")");
-	}
-
-	if (found_task) {
-	    active_tasks_.fetch_add(1);
-	    tasks_processed++;
-
-	    if (task.image_index >= 0 && task.image_index < static_cast<int>(images_.size())) {
-		const auto& img_info = images_[task.image_index];
-
-		// Create cache key
-		std::string cache_key = img_info.hash + "_" +
-		    std::to_string(task.target_width) + "x" +
-		    std::to_string(task.target_height);
-
-		// Check cache before generating thumbnail (avoid duplicate work)
-		{
-		    std::lock_guard<std::mutex> lock(image_cache_mutex_);
-		    if (image_cache_.find(cache_key) != image_cache_.end()) {
-			// Thumbnail already cached
-			active_tasks_.fetch_sub(1);
-			completed_tasks_.fetch_add(1);
-			continue;
-		    }
-		}
-
-		std::unique_ptr<Fl_RGB_Image> thumbnail;
-
-		// Check if image has thumbnails in database
-		if (img_info.has_thumbnails) {
-		    // Load from existing thumbnail data
-		    thumbnail = worker_decode_fl_rgb_image(img_info, task.target_width, task.target_height);
-		} else {
-		    // Generate thumbnail from source image using database
-		    if (database_) {
-			// Generate thumbnails for this hash
-			if (database_->generate_thumbnails_for_hash(img_info.hash, img_info.path)) {
-			    // Reload the image info to get the thumbnails
-			    ImageInfo updated_img = img_info;
-			    MDB_txn* read_txn;
-			    if (database_->begin_read_transaction(read_txn)) {
-				if (database_->load_image_info(read_txn, img_info.hash, updated_img)) {
-				    // Decode the thumbnail
-				    thumbnail = worker_decode_fl_rgb_image(updated_img, task.target_width, task.target_height);
-
-				    // Update the main image list
-				    {
-					std::lock_guard<std::mutex> lock(image_cache_mutex_);
-					if (task.image_index < static_cast<int>(images_.size())) {
-					    images_[task.image_index] = updated_img;
-					}
-				    }
-
-				    // Notify UI that thumbnail is ready
-				    handle_thumbnail_ready(img_info.hash);
-				}
-				database_->abort_transaction(read_txn);
-			    }
-			}
-		    }
-		}
-
-		if (thumbnail) {
-		    log_ui_debug("Thumbnail created for image " + std::to_string(task.image_index) + ", enqueueing result");
-		    ThumbnailResult result(task.image_index, std::move(thumbnail), cache_key);
-		    result_queue_.enqueue(std::move(result));
-		    debug_awake(result_processor_callback, this, "thumbnail generation result");
-		}
-	    }
-
-	    active_tasks_.fetch_sub(1);
-	    completed_tasks_.fetch_add(1);
-	}
-	else {
-	    // No tasks available, sleep briefly
-	    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-	}
-    }
-
-    log_ui_debug("Thumbnail worker thread shutting down after processing " + std::to_string(tasks_processed) + " tasks");
-}
-
 void Fl_JustifiedLayout::result_processor_callback(void* data) {
     if (data) {
-	static_cast<Fl_JustifiedLayout*>(data)->process_thumbnail_results();
+	static_cast<Fl_JustifiedLayout*>(data)->process_thread_manager_results();
     }
 }
 
 void Fl_JustifiedLayout::progress_update_callback(void* data) {
     if (data) {
 	Fl_JustifiedLayout* widget = static_cast<Fl_JustifiedLayout*>(data);
-	if (widget->generating_.load() && widget->content_widget_) {
+	if (widget->content_widget_) {
 	    widget->content_widget_->redraw();
-	    // Schedule next update
-	    Fl::add_timeout(0.1, progress_update_callback, data);
 	}
     }
 }
 
-void Fl_JustifiedLayout::process_thumbnail_results() {
-    static std::atomic_flag processing = ATOMIC_FLAG_INIT;
-    if (processing.test_and_set()) {
-	return;  // Avoid re-entry
-    }
-
-    ThumbnailResult result;
-    bool any_processed = false;
-    int results_processed = 0;
-
-    // Process all available results
-    while (result_queue_.try_dequeue(result)) {
-	results_processed++;
-
-	if (result.thumbnail) {
-	    std::lock_guard<std::mutex> lock(image_cache_mutex_);
-	    if (image_cache_.find(result.cache_key) != image_cache_.end()) {
-		continue; // Already in cache, skip duplicate job
-	    }
-	    image_cache_[result.cache_key] = std::move(result.thumbnail);
-	    any_processed = true;
-	}
-    }
-
-    log_batch_debug("Processed " + std::to_string(results_processed) + " thumbnail results, any_processed: " +
-	    (any_processed ? "true" : "false"));
-
-    // Trigger redraw if any thumbnails were processed
-    if (any_processed) {
-	if (content_widget_) {
-	    content_widget_->redraw();
-	}
-
-	// Update progress if callback is set
-	if (progress_callback_) {
-	    int completed = completed_tasks_.load();
-	    int total = total_tasks_.load();
-	    progress_callback_(completed, total, "Generating thumbnails...");
-	}
-    }
-
-    processing.clear();
-}
 
 void Fl_JustifiedLayout::process_thread_manager_results() {
     if (!thread_manager_) {
@@ -349,53 +198,7 @@ void Fl_JustifiedLayout::process_thread_manager_results() {
     processing.clear();
 }
 
-int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority) {
-    int num_queued = 0;
-    for (int idx : indices) {
-	if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
-	    const auto& item = layout_items_[idx];
-	    const auto& img = images_[idx];
 
-	    // Skip images that already have thumbnails
-	    if (img.has_thumbnails) {
-		continue;
-	    }
-
-	    int target_w = static_cast<int>(item.w) - 2 * THUMBNAIL_BORDER_WIDTH;
-	    int target_h = static_cast<int>(item.h) - 2 * THUMBNAIL_BORDER_WIDTH;
-
-	    // Check if we already have a cached version
-	    std::string cache_key = img.hash + "_" +
-		std::to_string(target_w) + "x" + std::to_string(target_h);
-	    {
-		std::lock_guard<std::mutex> lock(image_cache_mutex_);
-		if (image_cache_.find(cache_key) != image_cache_.end()) {
-		    continue; // Already cached, do not queue
-		}
-	    }
-
-	    // Queue thumbnail generation task for this image
-	    ThumbnailTask task(idx, priority, target_w, target_h);
-
-	    if (priority == ThumbnailPriority::HIGH) {
-		high_priority_queue_.enqueue(task);
-	    } else {
-		low_priority_queue_.enqueue(task);
-	    }
-
-	    total_tasks_.fetch_add(1);
-	    num_queued++;
-	}
-    }
-
-    if (num_queued > 0) {
-	log_ui_debug("Queued " + std::to_string(num_queued) + " " +
-		(priority == ThumbnailPriority::HIGH ? "HIGH" : "LOW") +
-		" priority thumbnail tasks, total tasks now: " + std::to_string(total_tasks_.load()));
-    }
-
-    return num_queued;
-}
 
 Fl_JustifiedLayout::~Fl_JustifiedLayout() {
     // Cancel any pending batch flush timers
@@ -408,14 +211,10 @@ Fl_JustifiedLayout::~Fl_JustifiedLayout() {
     flush_pending_image_batch(true);
 
     cancel_directory_scan();
-    stop_background_generation();
     clear_image_cache();
 }
 
 bool Fl_JustifiedLayout::set_database_path(const std::string& db_path) {
-    // Stop any ongoing generation first
-    stop_background_generation();
-
     current_db_path_ = db_path;
 
     // Create and initialize database manager
@@ -446,7 +245,6 @@ bool Fl_JustifiedLayout::set_database_path(const std::string& db_path) {
 bool Fl_JustifiedLayout::set_directory_path(const std::string& dir_path) {
     // Cancel any ongoing operations
     cancel_directory_scan();
-    stop_background_generation();
 
     // Use common cache database path instead of directory-specific path
     std::string db_path = get_cache_db_path();
@@ -457,133 +255,11 @@ bool Fl_JustifiedLayout::set_directory_path(const std::string& dir_path) {
     return true;
 }
 
-void Fl_JustifiedLayout::start_background_generation() {
-    if (generating_.load()) return;
 
-    // If ThreadManager is available, don't start internal workers
-    if (thread_manager_) {
-	log_ui_debug("ThreadManager is available, skipping internal thumbnail worker startup");
-	return;
-    }
 
-    generating_.store(true);
-    should_stop_.store(false);
 
-    // Clear previous state
-    completed_tasks_.store(0);
-    total_tasks_.store(0);
 
-    // Start worker threads (use half of available cores, minimum 1, maximum 4)
-    int num_workers = std::max(1, std::min(4, static_cast<int>(std::thread::hardware_concurrency() / 2)));
 
-    worker_threads_.clear();
-    worker_threads_.reserve(num_workers);
-
-    for (int i = 0; i < num_workers; ++i) {
-	worker_threads_.emplace_back(&Fl_JustifiedLayout::thumbnail_worker_thread, this);
-    }
-
-    // Queue high priority tasks for visible region
-    prefetch_visible_region();
-
-    // Queue low priority tasks for all images
-    std::vector<int> all_indices;
-    for (int i = 0; i < static_cast<int>(images_.size()); ++i) {
-	all_indices.push_back(i);
-    }
-    queue_thumbnail_tasks(all_indices, ThumbnailPriority::LOW);
-
-    if (progress_callback_) {
-	progress_callback_(0, total_tasks_.load(), "Starting background generation...");
-    }
-
-    // Start periodic progress updates
-    Fl::add_timeout(0.1, progress_update_callback, this);
-}
-
-void Fl_JustifiedLayout::stop_background_generation() {
-    should_stop_.store(true);
-
-    // Wait for all worker threads to complete
-    for (size_t i = 0; i < worker_threads_.size(); ++i) {
-	auto& thread = worker_threads_[i];
-	if (thread.joinable()) {
-	    thread.join();
-	}
-    }
-    worker_threads_.clear();
-
-    // Clear queues
-    ThumbnailTask task;
-    int high_cleared = 0, low_cleared = 0;
-    while (high_priority_queue_.try_dequeue(task)) { high_cleared++; }
-    while (low_priority_queue_.try_dequeue(task)) { low_cleared++; }
-
-    ThumbnailResult result;
-    int results_cleared = 0;
-    while (result_queue_.try_dequeue(result)) { results_cleared++; }
-
-    generating_.store(false);
-
-    // Remove any pending progress update timers
-    Fl::remove_timeout(progress_update_callback, this);
-}
-
-void Fl_JustifiedLayout::prefetch_visible_region() {
-    if (layout_items_.empty()) return;
-
-    // If ThreadManager is available, use update_visibility_and_queue_thumbnails
-    // which has the proper ThreadManager integration
-    if (thread_manager_) {
-	update_visibility_and_queue_thumbnails();
-	return;
-    }
-
-    // Fallback to old system if ThreadManager not available
-    if (!generating_.load()) return;
-
-    // Queue visible region for high priority processing
-    std::vector<int> visible_indices;
-    for (int i = visible_start_idx_; i <= visible_end_idx_; ++i) {
-	visible_indices.push_back(i);
-    }
-
-    if (!visible_indices.empty()) {
-	int num_queued = queue_thumbnail_tasks(visible_indices, ThumbnailPriority::HIGH);
-    }
-}
-
-void Fl_JustifiedLayout::prefetch_next_region() {
-    if (!generating_.load() || layout_items_.empty()) return;
-
-    // Calculate and prefetch next page of thumbnails
-    int next_start = visible_end_idx_ + 1;
-    int next_end = std::min(next_start + 20, static_cast<int>(images_.size()) - 1);
-
-    if (next_start <= next_end) {
-	std::vector<int> next_indices;
-	for (int i = next_start; i <= next_end; ++i) {
-	    next_indices.push_back(i);
-	}
-	queue_thumbnail_tasks(next_indices, ThumbnailPriority::HIGH);
-    }
-}
-
-void Fl_JustifiedLayout::prefetch_previous_region() {
-    if (!generating_.load() || layout_items_.empty()) return;
-
-    // Calculate and prefetch previous page of thumbnails
-    int prev_end = visible_start_idx_ - 1;
-    int prev_start = std::max(prev_end - 20, 0);
-
-    if (prev_start <= prev_end) {
-	std::vector<int> prev_indices;
-	for (int i = prev_start; i <= prev_end; ++i) {
-	    prev_indices.push_back(i);
-	}
-	queue_thumbnail_tasks(prev_indices, ThumbnailPriority::HIGH);
-    }
-}
 
 int Fl_JustifiedLayout::handle(int event) {
     switch (event) {
@@ -625,9 +301,9 @@ void Fl_JustifiedLayout::resize(int X, int Y, int W, int H) {
     // Relayout will trigger new thumbnail generation if needed
     relayout();
 
-    // If generation is active, queue visible region for high priority
-    if (generating_.load()) {
-	prefetch_visible_region();
+    // Queue visible region for high priority if ThreadManager is available
+    if (thread_manager_) {
+	update_visibility_and_queue_thumbnails();
     }
 }
 
@@ -702,9 +378,9 @@ void Fl_JustifiedLayout::calculate_layout() {
 	}
     }
 
-    // Trigger prefetching when visible region is calculated
-    if (generating_.load()) {
-	prefetch_visible_region();
+    // Trigger prefetching when visible region is calculated through ThreadManager
+    if (thread_manager_) {
+	update_visibility_and_queue_thumbnails();
     }
 
 }
@@ -851,14 +527,14 @@ void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const 
 }
 
 void Fl_JustifiedLayout::draw_thumbnail_placeholder(int x, int y, int w, int h, const ImageInfo& info) {
-    // Check if this thumbnail is being generated
-    bool is_loading = generating_.load();
+    // Check if ThreadManager is available for thumbnail generation
+    bool is_loading = (thread_manager_ != nullptr);
 
     // Draw outer border with different color based on state
     if (is_loading) {
-	fl_color(FL_BLUE);  // Blue border when thumbnails are being generated
+	fl_color(FL_BLUE);  // Blue border when ThreadManager is available
     } else {
-	fl_color(FL_DARK2); // Darker border for newly discovered images
+	fl_color(FL_DARK2); // Darker border when no thumbnail system available
     }
     fl_rect(x, y, w, h);
 
@@ -1027,36 +703,6 @@ void Fl_JustifiedLayout_Content::draw() {
 
     fl_pop_clip();
 
-    // Draw progress indicator if generating
-    if (parent_->generating_.load()) {
-	int completed = parent_->completed_tasks_.load();
-	int total = parent_->total_tasks_.load();
-	int active = parent_->active_tasks_.load();
-
-	// Draw progress background
-	fl_color(FL_YELLOW);
-	fl_rectf(x() + w() - 150, y() + 5, 145, 25);
-	fl_color(FL_BLACK);
-	fl_rect(x() + w() - 150, y() + 5, 145, 25);
-
-	// Draw progress bar
-	if (total > 0) {
-	    int progress_width = (completed * 140) / total;
-	    fl_color(FL_GREEN);
-	    fl_rectf(x() + w() - 148, y() + 7, progress_width, 8);
-	}
-
-	// Draw progress text
-	fl_font(FL_HELVETICA, 9);
-	char progress_text[64];
-	if (total > 0) {
-	    snprintf(progress_text, sizeof(progress_text), "%d/%d (%d active)", completed, total, active);
-	} else {
-	    snprintf(progress_text, sizeof(progress_text), "Initializing...");
-	}
-	fl_color(FL_BLACK);
-	fl_draw(progress_text, x() + w() - 145, y() + 23);
-    }
 }
 
 int Fl_JustifiedLayout_Content::handle(int event) {
@@ -1232,8 +878,6 @@ void Fl_JustifiedLayout::directory_scan_thread(const std::string& dir_path, cons
 		    if (widget->progress_callback_) {
 		    widget->progress_callback_(0, 0, "Scan complete - " + std::to_string(widget->images_.size()) + " images loaded");
 		    }
-		    // Start background thumbnail generation
-		    widget->start_background_generation();
 		    }, this, "scan complete");
 	} else {
 	    debug_awake([](void* data) {
@@ -1266,9 +910,6 @@ void Fl_JustifiedLayout::complete_directory_scan() {
 	if (progress_callback_) {
 	    progress_callback_(0, 0, "Scan complete - " + std::to_string(images_.size()) + " images loaded");
 	}
-
-	// Start background thumbnail generation
-	start_background_generation();
     } else {
 	if (progress_callback_) {
 	    progress_callback_(0, 0, "Failed to load images from database");
@@ -1508,44 +1149,6 @@ void Fl_JustifiedLayout::handle_thumbnail_ready(const std::string& hash) {
     debug_awake(thumbnail_notification_callback, this, "thumbnail ready notification");
 }
 
-void Fl_JustifiedLayout::process_thumbnail_notifications() {
-    ThumbnailNotification notification("", false);
-    bool needs_redraw = false;
-
-    while (thumbnail_notifications_.try_dequeue(notification)) {
-	if (notification.is_ready) {
-	    // Find the image by hash and update it
-	    auto it = hash_to_index_map_.find(notification.hash);
-	    if (it != hash_to_index_map_.end()) {
-		int index = it->second;
-		if (index >= 0 && index < static_cast<int>(images_.size())) {
-		    std::lock_guard<std::mutex> lock(image_cache_mutex_);
-
-		    // Reload image info from database to get thumbnail data
-		    if (database_) {
-			MDB_txn* read_txn;
-			if (database_->begin_read_transaction(read_txn)) {
-			    if (database_->load_image_info(read_txn, notification.hash, images_[index])) {
-				// Clear cached image so it will be reloaded with thumbnail
-				auto cache_it = image_cache_.find(notification.hash);
-				if (cache_it != image_cache_.end()) {
-				    image_cache_.erase(cache_it);
-				}
-				needs_redraw = true;
-			    }
-			    database_->abort_transaction(read_txn);
-			}
-		    }
-		}
-	    }
-	}
-    }
-
-    if (needs_redraw) {
-	redraw();
-    }
-}
-
 void Fl_JustifiedLayout::draw_loading_indicator(int x, int y, int w, int h) {
     // Draw a simple loading placeholder
     fl_color(FL_LIGHT2);
@@ -1572,7 +1175,7 @@ void Fl_JustifiedLayout::draw_loading_indicator(int x, int y, int w, int h) {
 // Static callback for thumbnail notifications
 void Fl_JustifiedLayout::thumbnail_notification_callback(void* data) {
     if (data) {
-	static_cast<Fl_JustifiedLayout*>(data)->process_thumbnail_notifications();
+	static_cast<Fl_JustifiedLayout*>(data)->redraw();
     }
 }
 
@@ -1617,54 +1220,44 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
     }
 
     // Queue high priority thumbnails first
-    if (!high_priority_indices.empty()) {
-	if (thread_manager_) {
-	    // Use ThreadManager for thumbnail requests
-	    for (int idx : high_priority_indices) {
-		if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
-		    const auto& item = layout_items_[idx];
-		    const auto& img = images_[idx];
+    if (!high_priority_indices.empty() && thread_manager_) {
+	// Use ThreadManager for thumbnail requests
+	for (int idx : high_priority_indices) {
+	    if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
+		const auto& item = layout_items_[idx];
+		const auto& img = images_[idx];
 
-		    UIThumbnailTask task(
-			idx,
-			UIThumbnailTask::HIGH,
-			static_cast<int>(item.w) - 2, // Account for border
-			static_cast<int>(item.h) - 2, // Account for border
-			img.hash
-		    );
+		UIThumbnailTask task(
+		    idx,
+		    UIThumbnailTask::HIGH,
+		    static_cast<int>(item.w) - 2, // Account for border
+		    static_cast<int>(item.h) - 2, // Account for border
+		    img.hash
+		);
 
-		    thread_manager_->request_thumbnail(task);
-		}
+		thread_manager_->request_thumbnail(task);
 	    }
-	} else {
-	    // Fallback to internal system
-	    int queued = queue_thumbnail_tasks(high_priority_indices, ThumbnailPriority::HIGH);
 	}
     }
 
     // Queue lower priority thumbnails
-    if (!low_priority_indices.empty()) {
-	if (thread_manager_) {
-	    // Use ThreadManager for thumbnail requests
-	    for (int idx : low_priority_indices) {
-		if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
-		    const auto& item = layout_items_[idx];
-		    const auto& img = images_[idx];
+    if (!low_priority_indices.empty() && thread_manager_) {
+	// Use ThreadManager for thumbnail requests
+	for (int idx : low_priority_indices) {
+	    if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
+		const auto& item = layout_items_[idx];
+		const auto& img = images_[idx];
 
-		    UIThumbnailTask task(
-			idx,
-			UIThumbnailTask::LOW,
-			static_cast<int>(item.w) - 2, // Account for border
-			static_cast<int>(item.h) - 2, // Account for border
-			img.hash
-		    );
+		UIThumbnailTask task(
+		    idx,
+		    UIThumbnailTask::LOW,
+		    static_cast<int>(item.w) - 2, // Account for border
+		    static_cast<int>(item.h) - 2, // Account for border
+		    img.hash
+		);
 
-		    thread_manager_->request_thumbnail(task);
-		}
+		thread_manager_->request_thumbnail(task);
 	    }
-	} else {
-	    // Fallback to internal system
-	    int queued = queue_thumbnail_tasks(low_priority_indices, ThumbnailPriority::LOW);
 	}
     }
 }
