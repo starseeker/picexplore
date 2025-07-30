@@ -159,6 +159,11 @@ class PicExploreWindow {
 	    // Create main layout widget
 	    layout_widget_ = new Fl_JustifiedLayout(10, 35, 1180, 750);
 
+	    // Connect ThreadManager to layout widget
+	    if (layout_widget_ && thread_manager_) {
+		layout_widget_->set_thread_manager(thread_manager_.get());
+	    }
+
 	    window_->end();
 	    window_->resizable(layout_widget_);
 	}
@@ -200,7 +205,7 @@ class PicExploreWindow {
 		    Fl::awake([](void* data) {
 			auto* args = static_cast<std::pair<PicExploreWindow*, ImageInfo>*>(data);
 			// Add image to layout widget incrementally
-			// args->first->layout_widget_->add_image_incremental(args->second);
+			args->first->layout_widget_->handle_image_info_ready(args->second);
 			delete args;
 		    }, new std::pair<PicExploreWindow*, ImageInfo>(this, info));
 		}
@@ -233,39 +238,39 @@ class PicExploreWindow {
 		    // Open database connection
 		    DatabaseManager db;
 		    std::string db_path = get_cache_db_path();
-		    
+
 		    if (!db.open(db_path)) {
 			fl_alert("Error: Failed to open database at %s", db_path.c_str());
 			return;
 		    }
-		    
+
 		    // Get all images from database
 		    std::vector<ImageInfo> images = db.get_all_images();
-		    
+
 		    if (images.empty()) {
 			fl_alert("No images found in database. Please scan a directory first.");
 			return;
 		    }
-		    
+
 		    // Create PDF with default options
 		    PDFOptions pdf_options;
 		    PDFGenerator pdf_gen;
 		    Timer timer;
 		    StatusReporter reporter(1); // Report every second for GUI
-		    
+
 		    reporter.start();
 		    reporter.update_status("Generating PDF...");
-		    
+
 		    bool success = pdf_gen.generate_pdf(images, path, timer, reporter, pdf_options);
-		    
+
 		    reporter.stop();
-		    
+
 		    if (success) {
 			fl_message("PDF generated successfully: %s", path);
 		    } else {
 			fl_alert("Error: Failed to generate PDF");
 		    }
-		    
+
 		} catch (const std::exception& e) {
 		    fl_alert("Error generating PDF: %s", e.what());
 		}

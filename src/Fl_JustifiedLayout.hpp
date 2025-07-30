@@ -46,6 +46,7 @@
 // Forward declarations
 class DatabaseManager;
 class Fl_JustifiedLayout_Content;
+class ThreadManager;
 
 // Priority levels for thumbnail generation
 enum class ThumbnailPriority {
@@ -188,6 +189,9 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     void set_progress_callback(ProgressCallback callback) { progress_callback_ = callback; }
     void set_selection_callback(SelectionCallback callback) { selection_callback_ = callback; }
 
+    // ThreadManager integration
+    void set_thread_manager(ThreadManager* thread_manager) { thread_manager_ = thread_manager; }
+
     // Async thumbnail generation control (stubbed for now)
     void start_background_generation();
     void stop_background_generation();
@@ -232,6 +236,7 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     void result_processor_thread();
     int queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority);
     void process_thumbnail_results();
+    void process_thread_manager_results();
     void process_thumbnail_notifications();  // Process readiness notifications
     static void result_processor_callback(void* data);
     static void progress_update_callback(void* data);
@@ -301,6 +306,9 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     // Enhanced debug logging state
     mutable std::mutex debug_log_mutex_;
     size_t debug_batch_counter_ = 0;
+
+    // ThreadManager integration
+    ThreadManager* thread_manager_;
 
     // Debug output configuration
     bool debug_output_enabled_ = false;
