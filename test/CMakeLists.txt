@@ -5,7 +5,7 @@ target_include_directories(justified_layout_test PRIVATE ${CMAKE_CURRENT_SOURCE_
 
 # Layout debug test
 if(JPEG_FOUND)
-    add_executable(layout_debug_test layout_debug_test.cpp ../src/Fl_JustifiedLayout.cpp ../src/database.cpp ../src/pdf.cpp ../src/utils.cpp ../src/stb_impl.cpp ../third_party/TinyEXIF.cpp)
+    add_executable(layout_debug_test layout_debug_test.cpp ../src/Fl_JustifiedLayout.cpp ../src/database.cpp ../src/pdf.cpp ../src/utils.cpp ../src/stb_impl.cpp ../src/thread_manager.cpp ../third_party/TinyEXIF.cpp)
     target_include_directories(layout_debug_test PRIVATE
         ${XXHASH_DIR}
         ${STB_DIR}
