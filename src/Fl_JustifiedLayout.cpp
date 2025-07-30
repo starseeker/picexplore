@@ -616,8 +616,14 @@ void Fl_JustifiedLayout_Content::draw() {
     // Process any available thumbnail results from ThreadManager
     parent_->process_thread_manager_results();
 
-    // Clear background
+    // Clear the background behind the layout (eliminates stray lines
+    // and fragments of images from previous layout configurations.)
+    fl_push_clip(x(), y(), w(), h());
     fl_color(parent_->color());
+    fl_rectf(x(), y(), w(), h());
+    fl_pop_clip();
+
+    // Clear image background
     fl_rectf(x(), y(), w(), h());
 
     if (parent_->images_.empty()) {
