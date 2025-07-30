@@ -523,9 +523,12 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	Timer& timer, bool& should_skip) {
     should_skip = false;
 
+    std::cout << "[DEBUG] DatabaseManager: Processing image file: " << filepath << std::endl;
+
     // First, try to extract metadata quickly without loading full image
     ImageInfo quick_info;
     if (extract_image_metadata(filepath, quick_info)) {
+	std::cout << "[DEBUG] DatabaseManager: Extracted metadata - hash: " << quick_info.hash << ", aspect_ratio: " << quick_info.aspect_ratio << std::endl;
 	// Emit ImageInfo immediately for stage 1 UI population
 	if (image_info_callback_) {
 	    image_info_callback_(quick_info);
@@ -536,6 +539,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	write_tasks.emplace_back(WriteTask::STORE_PATH, path_key, filepath);
 	write_tasks.emplace_back(WriteTask::STORE_IMAGE_METADATA, quick_info.hash, filepath, quick_info.aspect_ratio);
     } else {
+	std::cout << "[DEBUG] DatabaseManager: Failed to extract metadata, skipping file: " << filepath << std::endl;
 	// Fallback to full image loading for problematic files
 	should_skip = true;
 	return false;
@@ -543,8 +547,10 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 
     // Load image with stb_image for thumbnail generation
     int width, height, channels;
+    std::cout << "[DEBUG] DatabaseManager: Loading image data for thumbnail generation: " << filepath << std::endl;
     unsigned char* image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 0);
     if (!image_data) {
+	std::cout << "[DEBUG] DatabaseManager: Failed to load image data, returning with metadata only - file: " << filepath << ", reason: " << stbi_failure_reason() << std::endl;
 	fprintf(stderr, "Error: Failed to load image '%s': %s\n", filepath.c_str(), stbi_failure_reason());
 	// Don't mark as should_skip since we already have metadata
 	return true; // Return true since we have metadata stored
@@ -552,6 +558,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 
     // Check for zero width or height
     if (width <= 0 || height <= 0) {
+	std::cout << "[DEBUG] DatabaseManager: Invalid image dimensions, returning with metadata only - file: " << filepath << ", dimensions: " << width << "x" << height << std::endl;
 	fprintf(stderr, "Error: Invalid image dimensions for '%s': %dx%d\n", filepath.c_str(), width, height);
 	stbi_image_free(image_data);
 	// Don't mark as should_skip since we already have metadata
@@ -757,6 +764,8 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	}
     }
 
+    std::cout << "[DEBUG] DatabaseManager: Completed thumbnail generation for file: " << filepath << ", success: " << (thumbnails_generated ? "true" : "false") << std::endl;
+    std::cout.flush();
     stbi_image_free(image_data);
     return thumbnails_generated;
 }

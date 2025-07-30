@@ -79,7 +79,10 @@ bool DirectoryScanThread::start_scan(const std::string& directory_path, const st
 
     // Set up database callback for stage 1 metadata
     database_->set_image_info_callback([this](const ImageInfo& info) {
+	std::cout << "[DEBUG] DirectoryScanThread: Received image metadata callback - path: " << info.path << ", hash: " << info.hash << ", aspect_ratio: " << info.aspect_ratio << std::endl;
+	std::cout.flush();
 	if (metadata_callback_) {
+	    std::cout << "[DEBUG] DirectoryScanThread: Invoking metadata callback for UI notification - path: " << info.path << std::endl;
 	    metadata_callback_(info);
 	}
     });
@@ -272,7 +275,7 @@ void WorkerPool::worker_thread_main() {
 
 	// Try to get work from scan thread
 	if (scan_thread_ && scan_thread_->thumbnail_gen_queue_.try_dequeue(task)) {
-	    std::cout << "[DEBUG] WorkerPool: Dequeued thumbnail generation task from rectLayoutQueue - file: " << task.file_path << ", hash: " << task.hash << std::endl;
+	    std::cout << "[DEBUG] WorkerPool: Dequeued thumbnail generation task from thumbnail_gen_queue - file: " << task.file_path << ", hash: " << task.hash << std::endl;
 	    found_task = true;
 	    processed_count_.fetch_add(1);
 
@@ -853,6 +856,8 @@ void ThreadManager::set_metadata_callback(DirectoryScanThread::ImageMetadataCall
 }
 
 void ThreadManager::request_thumbnail(const UIThumbnailTask& task) {
+    std::cout << "[DEBUG] ThreadManager: Received thumbnail request - image_index: " << task.image_index << ", priority: " << (task.priority == UIThumbnailTask::HIGH ? "HIGH" : "LOW") << ", hash: " << task.hash << std::endl;
+    std::cout.flush();
     if (thumbnail_workers_) {
 	if (task.priority == UIThumbnailTask::HIGH) {
 	    thumbnail_workers_->enqueue_high_priority(task);
@@ -864,7 +869,12 @@ void ThreadManager::request_thumbnail(const UIThumbnailTask& task) {
 
 bool ThreadManager::get_thumbnail_result(UIDrawTask& result) {
     if (thumbnail_workers_) {
-	return thumbnail_workers_->try_dequeue_result(result);
+	bool success = thumbnail_workers_->try_dequeue_result(result);
+	if (success) {
+	    std::cout << "[DEBUG] ThreadManager: Retrieved thumbnail result - image_index: " << result.image_index << ", cache_key: " << result.cache_key << std::endl;
+	    std::cout.flush();
+	}
+	return success;
     }
     return false;
 }
