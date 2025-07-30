@@ -170,6 +170,16 @@ bool is_image_file(const std::string& filepath) {
     return (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" || ext == ".tga");
 }
 
+// Thumbnail key utilities
+std::string make_thumbnail_key(const std::string& hash, int size) {
+    return hash + ":" + std::to_string(size);
+}
+
+std::string make_thumbnail_key(const std::string& hash, int width, int height) {
+    int size = std::max(width, height);
+    return hash + ":" + std::to_string(size);
+}
+
 std::string get_cache_db_path(bool silent) {
     std::filesystem::path cache_dir;
 

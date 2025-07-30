@@ -3,6 +3,14 @@ add_executable(justified_layout_test justified_layout_test.cpp)
 target_compile_options(justified_layout_test PRIVATE -g)
 target_include_directories(justified_layout_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
+# Test thumbnail key utilities (no dependencies)
+add_executable(test_thumbnail_key test_thumbnail_key.cpp ../src/utils.cpp)
+target_include_directories(test_thumbnail_key PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${STB_DIR}
+)
+target_compile_options(test_thumbnail_key PRIVATE -g)
+
 # Layout debug test
 if(JPEG_FOUND)
     add_executable(layout_debug_test layout_debug_test.cpp ../src/Fl_JustifiedLayout.cpp ../src/database.cpp ../src/pdf.cpp ../src/utils.cpp ../src/stb_impl.cpp ../src/thread_manager.cpp ../third_party/TinyEXIF.cpp)

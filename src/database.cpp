@@ -23,6 +23,7 @@
  */
 
 #include "database.hpp"
+#include "utils.hpp"
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
@@ -410,7 +411,7 @@ bool DatabaseManager::generate_thumbnails(MDB_txn* txn, const std::string& filep
 		    std::vector<uint8_t> thumb_data = encode_jpeg(rgb_thumb.data(), actual_width, actual_height, 90);
 
 		    if (!thumb_data.empty()) {
-			std::string thumb_key = hash + ":" + std::to_string(thumb_size);
+			std::string thumb_key = make_thumbnail_key(hash, thumb_size);
 			if (!store_key_data(txn, thumb_key, thumb_data)) {
 			    fprintf(stderr, "Error: Failed to store thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
 			    thumbnails_generated = false;
@@ -504,7 +505,7 @@ bool DatabaseManager::generate_thumbnails(MDB_txn* txn, const std::string& filep
 	    }
 
 	    if (thumb_success && !thumb_data.empty()) {
-		std::string thumb_key = hash + ":" + std::to_string(thumb_size);
+		std::string thumb_key = make_thumbnail_key(hash, thumb_size);
 		if (!store_key_data(txn, thumb_key, thumb_data)) {
 		    fprintf(stderr, "Error: Failed to store thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
 		    thumbnails_generated = false;
@@ -665,7 +666,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 		    std::vector<uint8_t> thumb_data = encode_jpeg(rgb_thumb.data(), actual_width, actual_height, 90);
 
 		    if (!thumb_data.empty()) {
-			std::string thumb_key = hash_str + ":" + std::to_string(thumb_size);
+			std::string thumb_key = make_thumbnail_key(hash_str, thumb_size);
 			write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, thumb_key, thumb_data);
 		    } else {
 			fprintf(stderr, "Error: Failed to encode JPEG thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
@@ -756,7 +757,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	    }
 
 	    if (thumb_success && !thumb_data.empty()) {
-		std::string thumb_key = hash_str + ":" + std::to_string(thumb_size);
+		std::string thumb_key = make_thumbnail_key(hash_str, thumb_size);
 		write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, thumb_key, thumb_data);
 	    } else {
 		thumbnails_generated = false;
@@ -1163,7 +1164,7 @@ bool DatabaseManager::load_image_info(MDB_txn* txn, const std::string& hash, Ima
     std::vector<uint8_t> best_data;
 
     for (int size : sizes) {
-	std::string thumb_key = hash + ":" + std::to_string(size);
+	std::string thumb_key = make_thumbnail_key(hash, size);
 	std::vector<uint8_t> data;
 	if (get_key_data(txn, thumb_key, data)) {
 	    best_size = size;
@@ -1273,7 +1274,7 @@ bool DatabaseManager::has_thumbnails(const std::string& hash) {
     }
 
     // Check if any thumbnail exists for this hash
-    std::string thumb_key = hash + ":32"; // Check smallest size
+    std::string thumb_key = make_thumbnail_key(hash, 32); // Check smallest size
     std::vector<uint8_t> data;
     bool has_thumb = get_key_data(read_txn, thumb_key, data);
 

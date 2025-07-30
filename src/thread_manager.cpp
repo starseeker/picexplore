@@ -289,7 +289,7 @@ void WorkerPool::worker_thread_main() {
 		// - EXIF orientation correction
 		// - Error handling for corrupt images
 		bool success = scan_thread_->database_->generate_thumbnails_for_hash(task.hash, task.file_path);
-		
+
 		if (success) {
 		    std::cout << "[DEBUG] WorkerPool: Successfully generated thumbnails, enqueuing write task to writeQueue - hash: " << task.hash << std::endl;
 		    // Create a completion task for the writer thread
@@ -299,7 +299,7 @@ void WorkerPool::worker_thread_main() {
 		    write_queue_.enqueue(std::move(write_task));
 		} else {
 		    std::cout << "[DEBUG] WorkerPool: Failed to generate thumbnails for file: " << task.file_path << " (hash: " << task.hash << ")" << std::endl;
-		    std::cerr << "[WARNING] WorkerPool: Failed to generate thumbnails for " 
+		    std::cerr << "[WARNING] WorkerPool: Failed to generate thumbnails for "
 			      << task.file_path << " (hash: " << task.hash << ")" << std::endl;
 		}
 	    }
@@ -566,8 +566,8 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	return create_placeholder_thumbnail(task.target_width, task.target_height, "DB Error");
     }
 
-    // Construct database key: "hash:thumb_size" format
-    std::string thumb_key = task.hash + ":thumb_" + std::to_string(best_size);
+    // Construct database key: "hash:size" format (consistent format)
+    std::string thumb_key = make_thumbnail_key(task.hash, best_size);
     std::vector<uint8_t> thumb_data;
 
     std::cout << "[DEBUG] ThumbnailWorkers: Looking up thumbnail in LMDB - key: " << thumb_key << std::endl;
@@ -587,7 +587,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 		break;
 	    }
 
-	    std::string fallback_key = task.hash + ":thumb_" + std::to_string(fallback_size);
+	    std::string fallback_key = make_thumbnail_key(task.hash, fallback_size);
 	    success = database_->get_key_data(read_txn, fallback_key, thumb_data);
 	    database_->commit_transaction(read_txn);
 
@@ -618,7 +618,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 
     if (!rgb_data) {
 	std::cout << "[DEBUG] ThumbnailWorkers: Failed to decode JPEG, creating decode error placeholder - hash: " << task.hash << ", reason: " << stbi_failure_reason() << std::endl;
-	std::cerr << "[ERROR] ThumbnailWorkers: Failed to decode thumbnail for hash " << task.hash 
+	std::cerr << "[ERROR] ThumbnailWorkers: Failed to decode thumbnail for hash " << task.hash
 		  << ": " << stbi_failure_reason() << std::endl;
 	return create_placeholder_thumbnail(task.target_width, task.target_height, "Decode Error");
     }
@@ -628,14 +628,14 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     // Resize thumbnail to match UI requirements while preserving aspect ratio
     int final_width = thumb_width;
     int final_height = thumb_height;
-    
+
     unsigned char* final_data = rgb_data;
     if (thumb_width != task.target_width || thumb_height != task.target_height) {
 	std::cout << "[DEBUG] ThumbnailWorkers: Resizing thumbnail to target size - hash: " << task.hash << ", from: " << thumb_width << "x" << thumb_height << " to target: " << task.target_width << "x" << task.target_height << std::endl;
 	// Calculate aspect-preserving dimensions
 	double aspect = (double)thumb_width / thumb_height;
 	double target_aspect = (double)task.target_width / task.target_height;
-	
+
 	if (aspect > target_aspect) {
 	    // Image is wider than target - fit to width
 	    final_width = task.target_width;
@@ -645,7 +645,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	    final_height = task.target_height;
 	    final_width = (int)(task.target_height * aspect);
 	}
-	
+
 	// Allocate memory for resized image
 	final_data = (unsigned char*)malloc(final_width * final_height * 3);
 	if (!final_data) {
@@ -653,7 +653,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	    std::cerr << "[ERROR] ThumbnailWorkers: Failed to allocate memory for resizing hash " << task.hash << std::endl;
 	    return create_placeholder_thumbnail(task.target_width, task.target_height, "Memory Error");
 	}
-	
+
 	// Resize using stb_image_resize with linear interpolation for good quality
 	if (!stbir_resize_uint8_linear(
 	    rgb_data, thumb_width, thumb_height, 0,
@@ -664,13 +664,13 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	    std::cerr << "[ERROR] ThumbnailWorkers: Failed to resize thumbnail for hash " << task.hash << std::endl;
 	    return create_placeholder_thumbnail(task.target_width, task.target_height, "Resize Error");
 	}
-	
+
 	stbi_image_free(rgb_data);
     }
 
     // Create FLTK RGB image - Fl_RGB_Image takes ownership of the data pointer
     auto thumbnail = std::make_unique<Fl_RGB_Image>(final_data, final_width, final_height, 3);
-    
+
     return thumbnail;
 }
 
@@ -680,25 +680,25 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::create_placeholder_thumbnail(int
     // - "Error"/"Decode Error": Red tinted center (image decode failure)
     // - "Not Found": Blue tinted center (missing thumbnail data)
     // - Others: Grey with dark border (general errors)
-    
+
     std::cout << "[DEBUG] ThumbnailWorkers: Creating placeholder thumbnail - size: " << width << "x" << height << ", message: " << message << std::endl;
     std::cout.flush();
-    
+
     int data_size = width * height * 3;
     unsigned char* placeholder_data = (unsigned char*)malloc(data_size);
-    
+
     if (!placeholder_data) {
 	std::cout << "[DEBUG] ThumbnailWorkers: Failed to allocate memory for placeholder" << std::endl;
 	return nullptr;
     }
-    
+
     // Fill with medium grey background (RGB: 128, 128, 128)
     for (int i = 0; i < data_size; i += 3) {
 	placeholder_data[i] = 128;     // R
-	placeholder_data[i + 1] = 128; // G 
+	placeholder_data[i + 1] = 128; // G
 	placeholder_data[i + 2] = 128; // B
     }
-    
+
     // Add a darker border (2 pixels wide) for visual definition
     for (int y = 0; y < height; y++) {
 	for (int x = 0; x < width; x++) {
@@ -710,7 +710,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::create_placeholder_thumbnail(int
 	    }
 	}
     }
-    
+
     // Add visual indication based on error type in center third of image
     if (message == "Error" || message == "Decode Error") {
 	// Add red tint for decode errors - indicates corrupt/unreadable image data
@@ -733,7 +733,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::create_placeholder_thumbnail(int
 	    }
 	}
     }
-    
+
     return std::make_unique<Fl_RGB_Image>(placeholder_data, width, height, 3);
 }
 

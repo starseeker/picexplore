@@ -402,7 +402,7 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
     }
 
     // Create cache key based on hash and target dimensions
-    std::string cache_key = info.hash + "_" + std::to_string(target_width) + "x" + std::to_string(target_height);
+    std::string cache_key = make_thumbnail_key(info.hash, target_width, target_height);
 
     // Check cache first (thread-safe)
     {
