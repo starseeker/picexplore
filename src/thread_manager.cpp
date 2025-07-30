@@ -538,6 +538,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     }
 
     // Find the best thumbnail size from the database using canonical size function
+    // This ensures consistency with the UI cache lookup system
     int best_size = pick_thumbnail_size(task.target_width, task.target_height);
 
     std::cout << "[DEBUG] ThumbnailWorkers: Selected best thumbnail size " << best_size << "px for hash: " << task.hash << std::endl;

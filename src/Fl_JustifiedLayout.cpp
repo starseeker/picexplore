@@ -321,7 +321,8 @@ void Fl_JustifiedLayout::clear_image_cache() {
 }
 
 Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, int target_width, int target_height) {
-    // Get canonical size for cache lookup
+    // Get canonical size for cache lookup - this ensures we use consistent cache keys
+    // regardless of the exact requested size, preventing cache misses
     int canonical_size = pick_thumbnail_size(target_width, target_height);
     std::string canonical_cache_key = make_thumbnail_key(info.hash, canonical_size);
     
@@ -329,7 +330,7 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
     std::lock_guard<std::mutex> lock(image_cache_mutex_);
     auto cache_it = image_cache_.find(canonical_cache_key);
     if (cache_it == image_cache_.end()) {
-	// Canonical size image not in cache
+	// Canonical size image not in cache - ThreadManager will generate it
 	return nullptr;
     }
     
@@ -344,7 +345,7 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
 	return canonical_image;
     }
     
-    // Need downsampling - create cache key for downsampled version
+    // Need downsampling - check if we already have a downsampled version cached
     std::string downsampled_cache_key = make_thumbnail_key(info.hash, target_width, target_height);
     auto downsampled_it = image_cache_.find(downsampled_cache_key);
     if (downsampled_it != image_cache_.end()) {
@@ -352,18 +353,32 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
 	return downsampled_it->second.get();
     }
     
-    // Create downsampled version
+    // Create downsampled version using FLTK or stb_image_resize fallback
     std::unique_ptr<Fl_RGB_Image> downsampled_image = downsample_image(canonical_image, target_width, target_height);
     if (downsampled_image) {
 	Fl_RGB_Image* result = downsampled_image.get();
+	// Cache the downsampled version for future use
 	image_cache_[downsampled_cache_key] = std::move(downsampled_image);
 	return result;
     }
     
     // Fallback: return canonical image even if it's larger than requested
+    // This ensures we always display something rather than a placeholder
     return canonical_image;
 }
 
+/**
+ * Downsamples a thumbnail image to the target dimensions while maintaining aspect ratio.
+ * 
+ * This function is used when the cached canonical thumbnail is larger than the requested
+ * display size. It tries FLTK's built-in copy() method first, then falls back to
+ * stb_image_resize if FLTK fails.
+ * 
+ * @param source        Source image (must be a valid Fl_RGB_Image)
+ * @param target_width  Target display width in pixels  
+ * @param target_height Target display height in pixels
+ * @return Downsampled image, or nullptr on failure
+ */
 std::unique_ptr<Fl_RGB_Image> Fl_JustifiedLayout::downsample_image(Fl_RGB_Image* source, int target_width, int target_height) {
     if (!source || source->w() <= 0 || source->h() <= 0) {
 	return nullptr;
