@@ -281,8 +281,11 @@ void Fl_JustifiedLayout::restore_scroll_position() {
 	
 	// Apply the scroll position
 	scroll_to(xposition(), new_scroll_y);
+    } else if (saved_content_height_ <= 0.0) {
+	// If original content was empty/zero, start from top
+	scroll_to(xposition(), 0);
     } else {
-	// Simple restoration for cases where height didn't change significantly
+	// Simple restoration for cases where new content height is zero/invalid
 	int max_scroll_y = std::max(0, static_cast<int>(total_height_) - h());
 	int bounded_scroll_y = std::max(0, std::min(saved_scroll_y_, max_scroll_y));
 	scroll_to(xposition(), bounded_scroll_y);
