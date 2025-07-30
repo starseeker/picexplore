@@ -48,34 +48,13 @@ class DatabaseManager;
 class Fl_JustifiedLayout_Content;
 class ThreadManager;
 
-// Priority levels for thumbnail generation
+// Priority levels for thumbnail generation (compatibility with ThreadManager)
 enum class ThumbnailPriority {
     HIGH,   // Visible/soon-to-be-visible images
     LOW     // Background population
 };
 
-// Thumbnail generation task
-struct ThumbnailTask {
-    int image_index;
-    ThumbnailPriority priority;
-    int target_width;
-    int target_height;
 
-    ThumbnailTask() = default;
-    ThumbnailTask(int idx, ThumbnailPriority prio, int w, int h)
-	: image_index(idx), priority(prio), target_width(w), target_height(h) {}
-};
-
-// Result of thumbnail generation
-struct ThumbnailResult {
-    int image_index;
-    std::unique_ptr<Fl_RGB_Image> thumbnail;
-    std::string cache_key;
-
-    ThumbnailResult() = default;
-    ThumbnailResult(int idx, std::unique_ptr<Fl_RGB_Image> thumb, const std::string& key)
-	: image_index(idx), thumbnail(std::move(thumb)), cache_key(key) {}
-};
 
 // Thumbnail readiness notification
 struct ThumbnailNotification {
@@ -117,7 +96,7 @@ using SelectionCallback = std::function<void(const std::string& image_path, cons
  * Features:
  * - Displays thumbnails for images in justified layout with native scrollbar
  * - API to set LMDB database path
- * - Async thumbnail generation queues with priority support
+ * - Thumbnail generation through unified ThreadManager architecture
  * - Progress indication
  * - Selection callbacks for thumbnail interaction
  * - Scrollable view with prefetch support
@@ -192,16 +171,9 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     // ThreadManager integration
     void set_thread_manager(ThreadManager* thread_manager) { thread_manager_ = thread_manager; }
 
-    // Async thumbnail generation control (stubbed for now)
-    void start_background_generation();
-    void stop_background_generation();
-    bool is_generating() const { return generating_.load(); }
-
-    // Prefetch control
-    void prefetch_visible_region();
-    void prefetch_next_region();
-    void prefetch_previous_region();
-    void update_visibility_and_queue_thumbnails();  // Check visibility and queue high-priority tasks
+    // UI thumbnail generation and result processing
+    void update_visibility_and_queue_thumbnails();  // Check visibility and queue high-priority tasks through ThreadManager
+    void process_thread_manager_results();  // Process results from ThreadManager
 
     // FLTK widget overrides
     void draw() override;
@@ -224,28 +196,22 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     Fl_RGB_Image* load_thumbnail_image(const ImageInfo& info, int target_width, int target_height);
     void clear_image_cache();
 
-    // Event handling
-    void handle_click(int x, int y);
-
     // Database operations
     bool load_image_list();
     void add_images_incremental(const std::vector<ImageInfo>& new_images);
 
-    // Worker thread methods
-    void thumbnail_worker_thread();
-    void result_processor_thread();
-    int queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority);
-    void process_thumbnail_results();
-    void process_thread_manager_results();
-    void process_thumbnail_notifications();  // Process readiness notifications
-    static void result_processor_callback(void* data);
-    static void progress_update_callback(void* data);
-    static void thumbnail_notification_callback(void* data);  // FLTK callback for notifications
-    static void batch_flush_callback(void* data);  // FLTK callback for batch processing
+    // Event handling
+    void handle_click(int x, int y);
 
     // Directory scanning methods
     void directory_scan_thread(const std::string& dir_path, const std::string& db_path);
     void complete_directory_scan();
+
+    // UI update callbacks
+    static void result_processor_callback(void* data);
+    static void progress_update_callback(void* data);
+    static void thumbnail_notification_callback(void* data);  // FLTK callback for notifications
+    static void batch_flush_callback(void* data);  // FLTK callback for batch processing
 
     private:
     // Content widget for scrollable area
@@ -266,24 +232,13 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     // Selection state
     int selected_index_;
 
-    // Async generation state
-    std::atomic<bool> generating_;
-    std::atomic<bool> should_stop_;
-
     // Directory scanning state
     std::atomic<bool> scanning_;
     std::atomic<bool> should_cancel_scan_;
     std::thread scan_thread_;
 
-    // Threading for thumbnail generation
-    std::vector<std::thread> worker_threads_;
-    moodycamel::ConcurrentQueue<ThumbnailTask> high_priority_queue_;
-    moodycamel::ConcurrentQueue<ThumbnailTask> low_priority_queue_;
-    moodycamel::ConcurrentQueue<ThumbnailResult> result_queue_;
-    mutable std::mutex image_cache_mutex_;
-    std::atomic<int> active_tasks_;
-    std::atomic<int> completed_tasks_;
-    std::atomic<int> total_tasks_;
+    // ThreadManager integration
+    ThreadManager* thread_manager_;
 
     // Callbacks
     ProgressCallback progress_callback_;
@@ -292,6 +247,7 @@ class Fl_JustifiedLayout : public Fl_Scroll {
 
     // Image cache for decoded thumbnails
     std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> image_cache_;
+    mutable std::mutex image_cache_mutex_;
 
     // Two-stage processing support
     moodycamel::ConcurrentQueue<ThumbnailNotification> thumbnail_notifications_;
@@ -306,9 +262,6 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     // Enhanced debug logging state
     mutable std::mutex debug_log_mutex_;
     size_t debug_batch_counter_ = 0;
-
-    // ThreadManager integration
-    ThreadManager* thread_manager_;
 
     // Debug output configuration
     bool debug_output_enabled_ = false;
