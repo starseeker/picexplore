@@ -178,6 +178,10 @@ void Fl_JustifiedLayout::process_thread_manager_results() {
 		continue; // Already in cache, skip duplicate job
 	    }
 	    image_cache_[result.cache_key] = std::move(result.thumbnail);
+	    if (result.image_index >= 0 && result.image_index < images_.size()) {
+		std::cout << "[DEBUG] has_thumbnails set to true" << std::endl;
+		images_[result.image_index].has_thumbnails = true;
+	    }
 	    any_processed = true;
 
 	    log_ui_debug("Processed ThreadManager result for image " + std::to_string(result.image_index) +
