@@ -537,23 +537,9 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	return nullptr;
     }
 
-    // Find the best thumbnail size from the database
-    // We have pre-generated thumbnails at: 32, 64, 128, 256, 512, 1024 pixels
-    std::vector<int> available_sizes = {32, 64, 128, 256, 512, 1024};
-    int best_size = 0;
-
-    // Choose the smallest thumbnail that's >= our target size for best quality
-    for (int size : available_sizes) {
-	if (size >= std::max(task.target_width, task.target_height)) {
-	    best_size = size;
-	    break;
-	}
-    }
-
-    // If no size is large enough, use the largest available (1024px)
-    if (best_size == 0) {
-	best_size = 1024;
-    }
+    // Find the best thumbnail size from the database using canonical size function
+    // This ensures consistency with the UI cache lookup system
+    int best_size = pick_thumbnail_size(task.target_width, task.target_height);
 
     std::cout << "[DEBUG] ThumbnailWorkers: Selected best thumbnail size " << best_size << "px for hash: " << task.hash << std::endl;
 
@@ -578,6 +564,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	std::cout << "[DEBUG] ThumbnailWorkers: Primary thumbnail size not found, trying fallback sizes - hash: " << task.hash << std::endl;
 	// Try fallback sizes if the preferred size isn't available
 	// This handles cases where thumbnail generation was incomplete
+	static const std::vector<int> available_sizes = {32, 64, 128, 256, 512, 1024};
 	for (int fallback_size : available_sizes) {
 	    if (fallback_size == best_size) continue; // Already tried this one
 

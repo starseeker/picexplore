@@ -170,14 +170,62 @@ bool is_image_file(const std::string& filepath) {
     return (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" || ext == ".tga");
 }
 
+// Thumbnail size utilities
+
+/**
+ * Selects the most appropriate canonical thumbnail size for a given display size.
+ * 
+ * This function ensures cache consistency by mapping any requested thumbnail size
+ * to one of the predefined canonical sizes {32, 64, 128, 256, 512, 1024} pixels.
+ * This prevents cache misses due to exact size mismatches.
+ * 
+ * @param requested_width  Target display width in pixels
+ * @param requested_height Target display height in pixels
+ * @return The smallest canonical size >= max(requested_width, requested_height),
+ *         or 1024 if the request exceeds all canonical sizes
+ */
+int pick_thumbnail_size(int requested_width, int requested_height) {
+    // Canonical thumbnail sizes supported by the database
+    static const std::vector<int> canonical_sizes = {32, 64, 128, 256, 512, 1024};
+    
+    int requested_size = std::max(requested_width, requested_height);
+    
+    // Find the smallest canonical size that is >= requested size for best quality
+    for (int size : canonical_sizes) {
+	if (size >= requested_size) {
+	    return size;
+	}
+    }
+    
+    // If no size is large enough, use the largest available (1024px)
+    return 1024;
+}
+
 // Thumbnail key utilities
+
+/**
+ * Creates a cache key for a thumbnail with a specific canonical size.
+ * @param hash The image hash
+ * @param size The canonical thumbnail size
+ * @return Cache key in format "hash:size"
+ */
 std::string make_thumbnail_key(const std::string& hash, int size) {
     return hash + ":" + std::to_string(size);
 }
 
+/**
+ * Creates a cache key for a thumbnail using canonical size selection.
+ * This version automatically selects the appropriate canonical size based on
+ * the requested dimensions, ensuring cache consistency.
+ * 
+ * @param hash   The image hash
+ * @param width  Requested display width
+ * @param height Requested display height
+ * @return Cache key using canonical size in format "hash:canonical_size"
+ */
 std::string make_thumbnail_key(const std::string& hash, int width, int height) {
-    int size = std::max(width, height);
-    return hash + ":" + std::to_string(size);
+    int canonical_size = pick_thumbnail_size(width, height);
+    return hash + ":" + std::to_string(canonical_size);
 }
 
 std::string get_cache_db_path(bool silent) {

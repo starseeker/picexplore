@@ -75,6 +75,15 @@ class StatusReporter {
 std::vector<uint8_t> encode_jpeg(const unsigned char* rgb_data, int width, int height, int quality = 90);
 bool is_image_file(const std::string& filepath);
 
+// Thumbnail size utilities
+
+/**
+ * Selects the most appropriate canonical thumbnail size for a given display size.
+ * Maps any requested size to one of the canonical sizes {32, 64, 128, 256, 512, 1024}
+ * to ensure cache consistency and prevent cache misses due to exact size mismatches.
+ */
+int pick_thumbnail_size(int requested_width, int requested_height);
+
 // Thumbnail key utilities
 std::string make_thumbnail_key(const std::string& hash, int size);
 std::string make_thumbnail_key(const std::string& hash, int width, int height);

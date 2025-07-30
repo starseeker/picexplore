@@ -16,6 +16,7 @@
 #include <thread>
 #include <filesystem>
 #include "stb_image.h"
+#include "stb_image_resize2.h"
 #include "utils.hpp"
 
 // Helper function to wrap Fl::awake call
@@ -320,18 +321,141 @@ void Fl_JustifiedLayout::clear_image_cache() {
 }
 
 Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, int target_width, int target_height) {
-    // Create cache key based on hash and target dimensions
-    std::string cache_key = make_thumbnail_key(info.hash, target_width, target_height);
-
-    // Check cache only - UI no longer decodes from info.thumb_data
+    // Get canonical size for cache lookup - this ensures we use consistent cache keys
+    // regardless of the exact requested size, preventing cache misses
+    int canonical_size = pick_thumbnail_size(target_width, target_height);
+    std::string canonical_cache_key = make_thumbnail_key(info.hash, canonical_size);
+    
+    // Check cache for canonical size image
     std::lock_guard<std::mutex> lock(image_cache_mutex_);
-    auto cache_it = image_cache_.find(cache_key);
-    if (cache_it != image_cache_.end()) {
-	return cache_it->second.get();
+    auto cache_it = image_cache_.find(canonical_cache_key);
+    if (cache_it == image_cache_.end()) {
+	// Canonical size image not in cache - ThreadManager will generate it
+	return nullptr;
     }
+    
+    Fl_RGB_Image* canonical_image = cache_it->second.get();
+    if (!canonical_image) {
+	return nullptr;
+    }
+    
+    // If canonical image matches target size exactly, return it directly
+    int target_size = std::max(target_width, target_height);
+    if (canonical_size == target_size) {
+	return canonical_image;
+    }
+    
+    // Need downsampling - check if we already have a downsampled version cached
+    std::string downsampled_cache_key = make_thumbnail_key(info.hash, target_width, target_height);
+    auto downsampled_it = image_cache_.find(downsampled_cache_key);
+    if (downsampled_it != image_cache_.end()) {
+	// Already have downsampled version in cache  
+	return downsampled_it->second.get();
+    }
+    
+    // Create downsampled version using FLTK or stb_image_resize fallback
+    std::unique_ptr<Fl_RGB_Image> downsampled_image = downsample_image(canonical_image, target_width, target_height);
+    if (downsampled_image) {
+	Fl_RGB_Image* result = downsampled_image.get();
+	// Cache the downsampled version for future use
+	image_cache_[downsampled_cache_key] = std::move(downsampled_image);
+	return result;
+    }
+    
+    // Fallback: return canonical image even if it's larger than requested
+    // This ensures we always display something rather than a placeholder
+    return canonical_image;
+}
 
-    // Return nullptr if not in cache - no fallback decode from info.thumb_data
-    return nullptr;
+/**
+ * Downsamples a thumbnail image to the target dimensions while maintaining aspect ratio.
+ * 
+ * This function is used when the cached canonical thumbnail is larger than the requested
+ * display size. It tries FLTK's built-in copy() method first, then falls back to
+ * stb_image_resize if FLTK fails.
+ * 
+ * @param source        Source image (must be a valid Fl_RGB_Image)
+ * @param target_width  Target display width in pixels  
+ * @param target_height Target display height in pixels
+ * @return Downsampled image, or nullptr on failure
+ */
+std::unique_ptr<Fl_RGB_Image> Fl_JustifiedLayout::downsample_image(Fl_RGB_Image* source, int target_width, int target_height) {
+    if (!source || source->w() <= 0 || source->h() <= 0) {
+	return nullptr;
+    }
+    
+    // Calculate target dimensions while maintaining aspect ratio
+    int src_w = source->w();
+    int src_h = source->h();
+    float aspect_ratio = static_cast<float>(src_w) / static_cast<float>(src_h);
+    
+    int final_w, final_h;
+    if (target_width * src_h > target_height * src_w) {
+	// Height is the limiting factor
+	final_h = target_height;
+	final_w = static_cast<int>(target_height * aspect_ratio);
+    } else {
+	// Width is the limiting factor
+	final_w = target_width;
+	final_h = static_cast<int>(target_width / aspect_ratio);
+    }
+    
+    // Ensure dimensions are at least 1
+    final_w = std::max(1, final_w);
+    final_h = std::max(1, final_h);
+    
+    // If source is already smaller than or equal to target, return a copy
+    if (src_w <= final_w && src_h <= final_h) {
+	try {
+	    // Use FLTK's copy method to create a duplicate
+	    return std::unique_ptr<Fl_RGB_Image>(static_cast<Fl_RGB_Image*>(source->copy()));
+	} catch (...) {
+	    return nullptr;
+	}
+    }
+    
+    // Try FLTK's built-in downsampling first
+    try {
+	Fl_RGB_Image* downsampled = static_cast<Fl_RGB_Image*>(source->copy(final_w, final_h));
+	if (downsampled && downsampled->w() > 0 && downsampled->h() > 0) {
+	    return std::unique_ptr<Fl_RGB_Image>(downsampled);
+	}
+    } catch (...) {
+	// FLTK downsampling failed, continue to stb fallback
+    }
+    
+    // Fallback to stb_image_resize
+    const unsigned char* src_data = reinterpret_cast<const unsigned char*>(source->array);
+    if (!src_data) {
+	return nullptr;
+    }
+    
+    int src_channels = source->d();  // depth/channels
+    if (src_channels != 3 && src_channels != 4) {
+	return nullptr;  // Unsupported format
+    }
+    
+    // Allocate output buffer
+    std::vector<unsigned char> output_data(final_w * final_h * src_channels);
+    
+    // Perform resize using stb_image_resize
+    stbir_pixel_layout layout = (src_channels == 3) ? STBIR_RGB : STBIR_RGBA;
+    unsigned char* resize_result = stbir_resize_uint8_linear(
+	src_data, src_w, src_h, 0,
+	output_data.data(), final_w, final_h, 0,
+	layout
+    );
+    
+    if (!resize_result) {
+	return nullptr;
+    }
+    
+    // Create new Fl_RGB_Image from resized data
+    // FLTK will take ownership of the data, so we need to allocate it separately
+    unsigned char* fltk_data = new unsigned char[output_data.size()];
+    std::memcpy(fltk_data, output_data.data(), output_data.size());
+    
+    return std::unique_ptr<Fl_RGB_Image>(new Fl_RGB_Image(fltk_data, final_w, final_h, src_channels));
 }
 
 void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const ImageInfo& info) {
