@@ -1106,7 +1106,7 @@ void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& 
 	    );
 
 	    log_ui_debug("Queuing UIThumbnailTask for image " + std::to_string(image_index) +
-		" (hash: " + info.hash + ", size: " + std::to_string(task.target_width) + "x" + std::to_string(task.target_height) + ")");
+		" (hash: " + make_thumbnail_key(info.hash, task.target_width, task.target_height) + ")");
 
 	    thread_manager_->request_thumbnail(task);
 	}

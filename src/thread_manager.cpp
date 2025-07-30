@@ -441,13 +441,13 @@ void ThumbnailWorkers::join_all() {
 }
 
 void ThumbnailWorkers::enqueue_high_priority(const UIThumbnailTask& task) {
-    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing high priority task to highPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << ", size: " << task.target_width << "x" << task.target_height << std::endl;
+    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing high priority task to highPriorityQueue - image_index: " << task.image_index << ", hash: " << make_thumbnail_key(task.hash, task.target_width, task.target_height) << std::endl;
     std::cout.flush();
     high_priority_queue_.enqueue(task);
 }
 
 void ThumbnailWorkers::enqueue_low_priority(const UIThumbnailTask& task) {
-    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing low priority task to lowPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << ", size: " << task.target_width << "x" << task.target_height << std::endl;
+    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing low priority task to lowPriorityQueue - image_index: " << task.image_index << ", hash: " <<  make_thumbnail_key(task.hash, task.target_width, task.target_height) << std::endl;
     std::cout.flush();
     low_priority_queue_.enqueue(task);
 }
@@ -487,9 +487,7 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 
 	    // Generate UI thumbnail
 	    std::unique_ptr<Fl_RGB_Image> thumbnail;
-	    std::string cache_key = task.hash + "_" +
-		std::to_string(task.target_width) + "x" +
-		std::to_string(task.target_height);
+	    std::string cache_key = make_thumbnail_key(task.hash, task.target_width, task.target_height);
 
 	    // Generate UI thumbnail from database
 	    thumbnail = generate_ui_thumbnail(task);
@@ -531,7 +529,7 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     // This function handles the complete pipeline from LMDB lookup to FLTK image creation
     // Returns nullptr if no real thumbnail is available - placeholders are handled in UI
 
-    std::cout << "[DEBUG] ThumbnailWorkers: Starting thumbnail generation from LMDB - hash: " << task.hash << ", target size: " << task.target_width << "x" << task.target_height << std::endl;
+    std::cout << "[DEBUG] ThumbnailWorkers: Starting thumbnail generation from LMDB - hash: " << make_thumbnail_key(task.hash, task.target_width, task.target_height) << std::endl;
 
     if (!database_) {
 	std::cout << "[DEBUG] ThumbnailWorkers: Database not available, no thumbnail to generate - hash: " << task.hash << std::endl;
