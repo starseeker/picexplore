@@ -530,7 +530,17 @@ void Fl_JustifiedLayout::stop_background_generation() {
 }
 
 void Fl_JustifiedLayout::prefetch_visible_region() {
-    if (!generating_.load() || layout_items_.empty()) return;
+    if (layout_items_.empty()) return;
+
+    // If ThreadManager is available, use update_visibility_and_queue_thumbnails
+    // which has the proper ThreadManager integration
+    if (thread_manager_) {
+	update_visibility_and_queue_thumbnails();
+	return;
+    }
+
+    // Fallback to old system if ThreadManager not available
+    if (!generating_.load()) return;
 
     // Queue visible region for high priority processing
     std::vector<int> visible_indices;
@@ -1608,12 +1618,54 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
 
     // Queue high priority thumbnails first
     if (!high_priority_indices.empty()) {
-	int queued = queue_thumbnail_tasks(high_priority_indices, ThumbnailPriority::HIGH);
+	if (thread_manager_) {
+	    // Use ThreadManager for thumbnail requests
+	    for (int idx : high_priority_indices) {
+		if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
+		    const auto& item = layout_items_[idx];
+		    const auto& img = images_[idx];
+
+		    UIThumbnailTask task(
+			idx,
+			UIThumbnailTask::HIGH,
+			static_cast<int>(item.w) - 2, // Account for border
+			static_cast<int>(item.h) - 2, // Account for border
+			img.hash
+		    );
+
+		    thread_manager_->request_thumbnail(task);
+		}
+	    }
+	} else {
+	    // Fallback to internal system
+	    int queued = queue_thumbnail_tasks(high_priority_indices, ThumbnailPriority::HIGH);
+	}
     }
 
     // Queue lower priority thumbnails
     if (!low_priority_indices.empty()) {
-	int queued = queue_thumbnail_tasks(low_priority_indices, ThumbnailPriority::LOW);
+	if (thread_manager_) {
+	    // Use ThreadManager for thumbnail requests
+	    for (int idx : low_priority_indices) {
+		if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
+		    const auto& item = layout_items_[idx];
+		    const auto& img = images_[idx];
+
+		    UIThumbnailTask task(
+			idx,
+			UIThumbnailTask::LOW,
+			static_cast<int>(item.w) - 2, // Account for border
+			static_cast<int>(item.h) - 2, // Account for border
+			img.hash
+		    );
+
+		    thread_manager_->request_thumbnail(task);
+		}
+	    }
+	} else {
+	    // Fallback to internal system
+	    int queued = queue_thumbnail_tasks(low_priority_indices, ThumbnailPriority::LOW);
+	}
     }
 }
 
