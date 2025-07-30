@@ -106,6 +106,7 @@ struct UIDrawTask {
     std::unique_ptr<Fl_RGB_Image> thumbnail;
     std::string cache_key;
 
+    UIDrawTask() = default;
     UIDrawTask(int idx, std::unique_ptr<Fl_RGB_Image> thumb, const std::string& key)
 	: image_index(idx), thumbnail(std::move(thumb)), cache_key(key) {}
 };

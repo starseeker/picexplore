@@ -5,6 +5,7 @@
  */
 
 #include "Fl_JustifiedLayout.hpp"
+#include "thread_manager.hpp"
 #include <FL/fl_draw.H>
 #include <FL/Fl.H>
 #include <FL/Fl_RGB_Image.H>
@@ -40,6 +41,7 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     , total_tasks_(0)
     , thumbnail_notification_callback_(nullptr)
       , batch_flush_scheduled_(false)
+    , thread_manager_(nullptr)
 {
     // Initialize layout configuration with reasonable defaults
     layout_config_.w = W - 20; // Leave some margin for scrollbar
@@ -303,6 +305,50 @@ void Fl_JustifiedLayout::process_thumbnail_results() {
     processing.clear();
 }
 
+void Fl_JustifiedLayout::process_thread_manager_results() {
+    if (!thread_manager_) {
+	return; // No ThreadManager available
+    }
+
+    static std::atomic_flag processing = ATOMIC_FLAG_INIT;
+    if (processing.test_and_set()) {
+	return;  // Avoid re-entry
+    }
+
+    UIDrawTask result;
+    bool any_processed = false;
+    int results_processed = 0;
+
+    // Process all available results from ThreadManager
+    while (thread_manager_->get_thumbnail_result(result)) {
+	results_processed++;
+
+	if (result.thumbnail) {
+	    std::lock_guard<std::mutex> lock(image_cache_mutex_);
+	    if (image_cache_.find(result.cache_key) != image_cache_.end()) {
+		continue; // Already in cache, skip duplicate job
+	    }
+	    image_cache_[result.cache_key] = std::move(result.thumbnail);
+	    any_processed = true;
+
+	    log_ui_debug("Processed ThreadManager result for image " + std::to_string(result.image_index) +
+		" (cache_key: " + result.cache_key + ")");
+	}
+    }
+
+    log_batch_debug("Processed " + std::to_string(results_processed) + " ThreadManager thumbnail results, any_processed: " +
+	    (any_processed ? "true" : "false"));
+
+    // Trigger redraw if any thumbnails were processed
+    if (any_processed) {
+	if (content_widget_) {
+	    content_widget_->redraw();
+	}
+    }
+
+    processing.clear();
+}
+
 int Fl_JustifiedLayout::queue_thumbnail_tasks(const std::vector<int>& indices, ThumbnailPriority priority) {
     int num_queued = 0;
     for (int idx : indices) {
@@ -414,6 +460,12 @@ bool Fl_JustifiedLayout::set_directory_path(const std::string& dir_path) {
 void Fl_JustifiedLayout::start_background_generation() {
     if (generating_.load()) return;
 
+    // If ThreadManager is available, don't start internal workers
+    if (thread_manager_) {
+	log_ui_debug("ThreadManager is available, skipping internal thumbnail worker startup");
+	return;
+    }
+
     generating_.store(true);
     should_stop_.store(false);
 
@@ -478,7 +530,17 @@ void Fl_JustifiedLayout::stop_background_generation() {
 }
 
 void Fl_JustifiedLayout::prefetch_visible_region() {
-    if (!generating_.load() || layout_items_.empty()) return;
+    if (layout_items_.empty()) return;
+
+    // If ThreadManager is available, use update_visibility_and_queue_thumbnails
+    // which has the proper ThreadManager integration
+    if (thread_manager_) {
+	update_visibility_and_queue_thumbnails();
+	return;
+    }
+
+    // Fallback to old system if ThreadManager not available
+    if (!generating_.load()) return;
 
     // Queue visible region for high priority processing
     std::vector<int> visible_indices;
@@ -912,6 +974,9 @@ Fl_JustifiedLayout_Content::Fl_JustifiedLayout_Content(int X, int Y, int W, int 
 
 void Fl_JustifiedLayout_Content::draw() {
     if (!parent_) return;
+
+    // Process any available thumbnail results from ThreadManager
+    parent_->process_thread_manager_results();
 
     // Clear background
     fl_color(parent_->color());
@@ -1383,6 +1448,31 @@ void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& 
     log_ui_debug("Triggering redraw for batch of " + std::to_string(batch.size()) + " images");
     redraw();
 
+    // Queue thumbnail requests for new images if ThreadManager is available
+    if (thread_manager_) {
+	log_ui_debug("ThreadManager available, queuing thumbnail requests for " + std::to_string(batch.size()) + " new images");
+	for (size_t i = 0; i < batch.size(); ++i) {
+	    const auto& info = batch[i];
+	    int image_index = old_size + i; // Image index in the main images_ vector
+
+	    // Create UIThumbnailTask for this image
+	    UIThumbnailTask task(
+		image_index,
+		UIThumbnailTask::HIGH, // High priority for newly added images
+		static_cast<int>(layout_config_.rh * info.aspect_ratio), // target_width
+		static_cast<int>(layout_config_.rh), // target_height
+		info.hash
+	    );
+
+	    log_ui_debug("Queuing UIThumbnailTask for image " + std::to_string(image_index) +
+		" (hash: " + info.hash + ", size: " + std::to_string(task.target_width) + "x" + std::to_string(task.target_height) + ")");
+
+	    thread_manager_->request_thumbnail(task);
+	}
+    } else {
+	log_ui_debug("ThreadManager not available, using legacy thumbnail system");
+    }
+
     log_batch_debug("Completed processing batch of " + std::to_string(batch.size()) + " images");
 }
 
@@ -1528,12 +1618,54 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
 
     // Queue high priority thumbnails first
     if (!high_priority_indices.empty()) {
-	int queued = queue_thumbnail_tasks(high_priority_indices, ThumbnailPriority::HIGH);
+	if (thread_manager_) {
+	    // Use ThreadManager for thumbnail requests
+	    for (int idx : high_priority_indices) {
+		if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
+		    const auto& item = layout_items_[idx];
+		    const auto& img = images_[idx];
+
+		    UIThumbnailTask task(
+			idx,
+			UIThumbnailTask::HIGH,
+			static_cast<int>(item.w) - 2, // Account for border
+			static_cast<int>(item.h) - 2, // Account for border
+			img.hash
+		    );
+
+		    thread_manager_->request_thumbnail(task);
+		}
+	    }
+	} else {
+	    // Fallback to internal system
+	    int queued = queue_thumbnail_tasks(high_priority_indices, ThumbnailPriority::HIGH);
+	}
     }
 
     // Queue lower priority thumbnails
     if (!low_priority_indices.empty()) {
-	int queued = queue_thumbnail_tasks(low_priority_indices, ThumbnailPriority::LOW);
+	if (thread_manager_) {
+	    // Use ThreadManager for thumbnail requests
+	    for (int idx : low_priority_indices) {
+		if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
+		    const auto& item = layout_items_[idx];
+		    const auto& img = images_[idx];
+
+		    UIThumbnailTask task(
+			idx,
+			UIThumbnailTask::LOW,
+			static_cast<int>(item.w) - 2, // Account for border
+			static_cast<int>(item.h) - 2, // Account for border
+			img.hash
+		    );
+
+		    thread_manager_->request_thumbnail(task);
+		}
+	    }
+	} else {
+	    // Fallback to internal system
+	    int queued = queue_thumbnail_tasks(low_priority_indices, ThumbnailPriority::LOW);
+	}
     }
 }
 
