@@ -42,6 +42,7 @@
 #include "utils.hpp"
 #include "justified_layout.hpp"
 #include "concurrentqueue.h"
+#include "blockingconcurrentqueue.h"
 
 // Forward declarations
 class DatabaseManager;
@@ -60,8 +61,17 @@ enum class ThumbnailPriority {
 struct ThumbnailNotification {
     std::string hash;
     bool is_ready;
+    bool is_shutdown_sentinel = false;  // Flag for shutdown coordination
 
+    ThumbnailNotification() = default;
     ThumbnailNotification(const std::string& h, bool ready) : hash(h), is_ready(ready) {}
+    
+    // Create shutdown sentinel
+    static ThumbnailNotification create_shutdown_sentinel() {
+	ThumbnailNotification notification;
+	notification.is_shutdown_sentinel = true;
+	return notification;
+    }
 };
 
 // Batch processing configuration
@@ -265,7 +275,7 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     mutable std::mutex image_cache_mutex_;
 
     // Two-stage processing support
-    moodycamel::ConcurrentQueue<ThumbnailNotification> thumbnail_notifications_;
+    moodycamel::BlockingConcurrentQueue<ThumbnailNotification> thumbnail_notifications_;  // BlockingConcurrentQueue for efficient blocking
     std::unordered_map<std::string, int> hash_to_index_map_;  // Map hash to image index
 
     // Batch processing state
