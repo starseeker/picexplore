@@ -442,6 +442,15 @@ void ThumbnailWorkers::start_workers(int num_workers) {
 
 void ThumbnailWorkers::stop_workers() {
     should_stop_.store(true);
+    
+    // Clear all in-flight requests during shutdown to prevent memory leaks
+    {
+	std::lock_guard<std::mutex> lock(in_flight_mutex_);
+	if (!in_flight_requests_.empty()) {
+	    std::cout << "[DEBUG] ThumbnailWorkers: Clearing " << in_flight_requests_.size() << " in-flight requests during shutdown" << std::endl;
+	    in_flight_requests_.clear();
+	}
+    }
 }
 
 void ThumbnailWorkers::join_all() {
@@ -454,13 +463,37 @@ void ThumbnailWorkers::join_all() {
 }
 
 void ThumbnailWorkers::enqueue_high_priority(const UIThumbnailTask& task) {
-    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing high priority task to highPriorityQueue - image_index: " << task.image_index << ", hash: " << make_thumbnail_key(task.hash, task.target_width, task.target_height) << std::endl;
+    std::string cache_key = make_thumbnail_key(task.hash, task.target_width, task.target_height);
+    
+    // Deduplication: Check if a request for this thumbnail is already in progress
+    if (is_request_in_flight(cache_key)) {
+	std::cout << "[DEBUG] ThumbnailWorkers: Skipping duplicate high priority request - cache_key: " << cache_key << " already in flight" << std::endl;
+	std::cout.flush();
+	return;
+    }
+
+    // Mark request as in-flight before enqueuing to prevent race conditions
+    mark_request_in_flight(cache_key);
+    
+    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing high priority task to highPriorityQueue - image_index: " << task.image_index << ", hash: " << cache_key << std::endl;
     std::cout.flush();
     high_priority_queue_.enqueue(task);
 }
 
 void ThumbnailWorkers::enqueue_low_priority(const UIThumbnailTask& task) {
-    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing low priority task to lowPriorityQueue - image_index: " << task.image_index << ", hash: " <<  make_thumbnail_key(task.hash, task.target_width, task.target_height) << std::endl;
+    std::string cache_key = make_thumbnail_key(task.hash, task.target_width, task.target_height);
+    
+    // Deduplication: Check if a request for this thumbnail is already in progress
+    if (is_request_in_flight(cache_key)) {
+	std::cout << "[DEBUG] ThumbnailWorkers: Skipping duplicate low priority request - cache_key: " << cache_key << " already in flight" << std::endl;
+	std::cout.flush();
+	return;
+    }
+
+    // Mark request as in-flight before enqueuing to prevent race conditions
+    mark_request_in_flight(cache_key);
+    
+    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing low priority task to lowPriorityQueue - image_index: " << task.image_index << ", hash: " <<  cache_key << std::endl;
     std::cout.flush();
     low_priority_queue_.enqueue(task);
 }
@@ -520,6 +553,10 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 
 	    // Generate UI thumbnail from database
 	    thumbnail = generate_ui_thumbnail(task);
+
+	    // Mark the request as completed in deduplication tracker
+	    // This allows future requests for the same hash:size to be processed
+	    mark_request_completed(cache_key);
 
 	    // Only queue real thumbnails for UI - placeholders are generated dynamically in draw code
 	    if (thumbnail) {
@@ -752,6 +789,31 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::create_placeholder_thumbnail(int
     }
 
     return std::make_unique<Fl_RGB_Image>(placeholder_data, width, height, 3);
+}
+
+//==============================================================================
+// ThumbnailWorkers Deduplication Helper Methods
+//==============================================================================
+
+bool ThumbnailWorkers::is_request_in_flight(const std::string& cache_key) {
+    std::lock_guard<std::mutex> lock(in_flight_mutex_);
+    return in_flight_requests_.find(cache_key) != in_flight_requests_.end();
+}
+
+void ThumbnailWorkers::mark_request_in_flight(const std::string& cache_key) {
+    std::lock_guard<std::mutex> lock(in_flight_mutex_);
+    in_flight_requests_.insert(cache_key);
+    std::cout << "[DEBUG] ThumbnailWorkers: Marked request in-flight - cache_key: " << cache_key << " (total in-flight: " << in_flight_requests_.size() << ")" << std::endl;
+}
+
+void ThumbnailWorkers::mark_request_completed(const std::string& cache_key) {
+    std::lock_guard<std::mutex> lock(in_flight_mutex_);
+    size_t removed = in_flight_requests_.erase(cache_key);
+    if (removed > 0) {
+	std::cout << "[DEBUG] ThumbnailWorkers: Marked request completed - cache_key: " << cache_key << " (total in-flight: " << in_flight_requests_.size() << ")" << std::endl;
+    } else {
+	std::cout << "[DEBUG] ThumbnailWorkers: Request already completed or not found - cache_key: " << cache_key << std::endl;
+    }
 }
 
 //==============================================================================

@@ -33,6 +33,7 @@
 #include <atomic>
 #include <functional>
 #include <filesystem>
+#include <unordered_set>
 #include <FL/Fl_RGB_Image.H>
 #include "database.hpp"
 #include "concurrentqueue.h"
@@ -352,6 +353,11 @@ private:
     std::unique_ptr<Fl_RGB_Image> generate_ui_thumbnail(const UIThumbnailTask& task);
     std::unique_ptr<Fl_RGB_Image> create_placeholder_thumbnail(int width, int height, const std::string& message = "Error");
 
+    // Deduplication helper methods
+    bool is_request_in_flight(const std::string& cache_key);
+    void mark_request_in_flight(const std::string& cache_key);
+    void mark_request_completed(const std::string& cache_key);
+
     std::vector<std::thread> worker_threads_;
     std::atomic<bool> should_stop_;
 
@@ -366,6 +372,11 @@ private:
 
     // UI notification widget pointer
     Fl_Widget* ui_notify_widget_;
+
+    // Deduplication mechanism: Track in-flight thumbnail requests by cache_key (hash:size)
+    // Thread-safe: Protected by mutex to prevent race conditions during concurrent access
+    std::unordered_set<std::string> in_flight_requests_;
+    std::mutex in_flight_mutex_;
 };
 
 /**
