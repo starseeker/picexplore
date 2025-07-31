@@ -848,17 +848,17 @@ void ThreadManager::shutdown_all() {
     if (initialized_) {
 	// Enqueue shutdown sentinels to all blocking queues to wake up waiting threads
 	// This ensures clean thread termination without indefinite blocking
-	
+
 	// Stop scan thread first to prevent new work from being generated
 	if (scan_thread_) {
 	    scan_thread_->stop_scan();
-	    
+
 	    // Enqueue shutdown sentinels for thumbnail generation workers
 	    if (worker_pool_) {
 		// Send one shutdown sentinel per worker thread
 		size_t num_workers = worker_pool_->get_worker_count();
 		for (size_t i = 0; i < num_workers; ++i) {
-		    scan_thread_->thumbnail_gen_queue_.enqueue(ThumbnailGenerationTask::create_shutdown_sentinel());
+		    scan_thread_->enqueue_shutdown_thumbnail_task();
 		}
 	    }
 	}
@@ -867,23 +867,22 @@ void ThreadManager::shutdown_all() {
 	if (monitor_thread_) monitor_thread_->stop_monitoring();
 	if (worker_pool_) {
 	    worker_pool_->stop_workers();
-	    
+
 	    // Enqueue shutdown sentinels for writer thread
 	    worker_pool_->get_write_queue().enqueue(WriteTask::create_shutdown_sentinel());
 	}
 	if (writer_thread_) writer_thread_->stop_writing();
 	if (thumbnail_workers_) {
 	    thumbnail_workers_->stop_workers();
-	    
+
 	    // Enqueue shutdown sentinels for thumbnail workers (both priority queues)
 	    size_t num_thumb_workers = thumbnail_workers_->get_worker_count();
 	    for (size_t i = 0; i < num_thumb_workers; ++i) {
-		thumbnail_workers_->high_priority_queue_.enqueue(UIThumbnailTask::create_shutdown_sentinel());
-		thumbnail_workers_->low_priority_queue_.enqueue(UIThumbnailTask::create_shutdown_sentinel());
+		thumbnail_workers_->enqueue_shutdown_tasks();
 	    }
-	    
+
 	    // Also send shutdown sentinel to result queue
-	    thumbnail_workers_->result_queue_.enqueue(UIDrawTask::create_shutdown_sentinel());
+	    thumbnail_workers_->enqueue_shutdown_result();
 	}
 
 	// Wait for threads to complete - they should exit cleanly after processing shutdown sentinels
