@@ -465,15 +465,15 @@ void ThumbnailWorkers::join_all() {
 void ThumbnailWorkers::enqueue_high_priority(const UIThumbnailTask& task) {
     std::string cache_key = make_thumbnail_key(task.hash, task.target_width, task.target_height);
     
-    // Deduplication: Check if a request for this thumbnail is already in progress
-    if (is_request_in_flight(cache_key)) {
-	std::cout << "[DEBUG] ThumbnailWorkers: Skipping duplicate high priority request - cache_key: " << cache_key << " already in flight" << std::endl;
+    // Priority-aware deduplication: Check if this request should be allowed
+    if (!should_allow_request(cache_key, UIThumbnailTask::HIGH)) {
+	std::cout << "[DEBUG] ThumbnailWorkers: Skipping duplicate high priority request - cache_key: " << cache_key << " already in flight at same or higher priority" << std::endl;
 	std::cout.flush();
 	return;
     }
 
     // Mark request as in-flight before enqueuing to prevent race conditions
-    mark_request_in_flight(cache_key);
+    mark_request_in_flight(cache_key, UIThumbnailTask::HIGH);
     
     std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing high priority task to highPriorityQueue - image_index: " << task.image_index << ", hash: " << cache_key << std::endl;
     std::cout.flush();
@@ -483,15 +483,15 @@ void ThumbnailWorkers::enqueue_high_priority(const UIThumbnailTask& task) {
 void ThumbnailWorkers::enqueue_low_priority(const UIThumbnailTask& task) {
     std::string cache_key = make_thumbnail_key(task.hash, task.target_width, task.target_height);
     
-    // Deduplication: Check if a request for this thumbnail is already in progress
-    if (is_request_in_flight(cache_key)) {
+    // Priority-aware deduplication: Check if this request should be allowed
+    if (!should_allow_request(cache_key, UIThumbnailTask::LOW)) {
 	std::cout << "[DEBUG] ThumbnailWorkers: Skipping duplicate low priority request - cache_key: " << cache_key << " already in flight" << std::endl;
 	std::cout.flush();
 	return;
     }
 
     // Mark request as in-flight before enqueuing to prevent race conditions
-    mark_request_in_flight(cache_key);
+    mark_request_in_flight(cache_key, UIThumbnailTask::LOW);
     
     std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing low priority task to lowPriorityQueue - image_index: " << task.image_index << ", hash: " <<  cache_key << std::endl;
     std::cout.flush();
@@ -795,15 +795,37 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::create_placeholder_thumbnail(int
 // ThumbnailWorkers Deduplication Helper Methods
 //==============================================================================
 
-bool ThumbnailWorkers::is_request_in_flight(const std::string& cache_key) {
+bool ThumbnailWorkers::should_allow_request(const std::string& cache_key, UIThumbnailTask::Priority priority) {
     std::lock_guard<std::mutex> lock(in_flight_mutex_);
-    return in_flight_requests_.find(cache_key) != in_flight_requests_.end();
+    
+    auto it = in_flight_requests_.find(cache_key);
+    if (it == in_flight_requests_.end()) {
+        // No request in flight - allow this request
+        return true;
+    }
+    
+    UIThumbnailTask::Priority in_flight_priority = it->second;
+    
+    // Allow high priority requests to bypass low priority requests
+    if (priority == UIThumbnailTask::HIGH && in_flight_priority == UIThumbnailTask::LOW) {
+        std::cout << "[DEBUG] ThumbnailWorkers: Allowing high priority request to bypass low priority - cache_key: " << cache_key << std::endl;
+        return true;
+    }
+    
+    // Block all other duplicate requests (same priority, or low priority when high priority is in flight)
+    return false;
 }
 
-void ThumbnailWorkers::mark_request_in_flight(const std::string& cache_key) {
+void ThumbnailWorkers::mark_request_in_flight(const std::string& cache_key, UIThumbnailTask::Priority priority) {
     std::lock_guard<std::mutex> lock(in_flight_mutex_);
-    in_flight_requests_.insert(cache_key);
-    std::cout << "[DEBUG] ThumbnailWorkers: Marked request in-flight - cache_key: " << cache_key << " (total in-flight: " << in_flight_requests_.size() << ")" << std::endl;
+    
+    // Update or insert the request with its priority
+    // If a high priority request is replacing a low priority one, this will update the priority
+    in_flight_requests_[cache_key] = priority;
+    
+    std::cout << "[DEBUG] ThumbnailWorkers: Marked request in-flight - cache_key: " << cache_key 
+              << " priority: " << (priority == UIThumbnailTask::HIGH ? "HIGH" : "LOW") 
+              << " (total in-flight: " << in_flight_requests_.size() << ")" << std::endl;
 }
 
 void ThumbnailWorkers::mark_request_completed(const std::string& cache_key) {

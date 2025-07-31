@@ -119,6 +119,25 @@ if(JPEG_FOUND)
     target_compile_options(test_deduplication_manual PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
 endif()
 
+# Build the priority bypass test
+if(JPEG_FOUND)
+    add_executable(test_priority_bypass test_priority_bypass.cpp ../src/thread_manager.cpp ../src/database.cpp ../src/utils.cpp ../src/stb_impl.cpp ../third_party/TinyEXIF.cpp)
+    target_include_directories(test_priority_bypass PRIVATE
+	${XXHASH_DIR}
+	${STB_DIR}
+	${LMDB_DIR}
+	${STRUETYPE_DIR}
+	${STRUETYPE_DIR}/examples
+	${CONCURRENTQUEUE_DIR}
+	${CMAKE_SOURCE_DIR}/third_party
+	${JPEG_INCLUDE_DIRS}
+	${FLTK_DIR}
+	../src
+    )
+    target_link_libraries(test_priority_bypass xxhash lmdb fltk ${JPEG_LIBRARIES})
+    target_compile_options(test_priority_bypass PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
+endif()
+
 # Local Variables:
 # tab-width: 8
 # mode: cmake
