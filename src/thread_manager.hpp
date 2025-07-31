@@ -41,6 +41,7 @@ namespace fs = std::filesystem;
 
 // Forward declarations
 class DatabaseManager;
+class Fl_Widget;
 
 /**
  * Global shutdown and cancel mechanisms
@@ -187,6 +188,11 @@ public:
 	progress_reporter_ = reporter;
     }
 
+    // UI notification widget management
+    void set_ui_notify_widget(Fl_Widget* widget) {
+	ui_notify_widget_ = widget;
+    }
+
 private:
     void monitor_thread_main();
 
@@ -195,6 +201,9 @@ private:
 
     std::shared_ptr<DirectoryScanThread> scan_thread_;
     std::shared_ptr<ProgressReporter> progress_reporter_;
+    
+    // UI notification widget pointer
+    Fl_Widget* ui_notify_widget_;
 };
 
 /**
@@ -270,6 +279,11 @@ public:
 
     void set_database(DatabaseManager *database) { database_ = database; }
 
+    // UI notification widget management
+    void set_ui_notify_widget(Fl_Widget* widget) {
+	ui_notify_widget_ = widget;
+    }
+
 private:
     void thumbnail_worker_thread_main();
     std::unique_ptr<Fl_RGB_Image> generate_ui_thumbnail(const UIThumbnailTask& task);
@@ -286,6 +300,9 @@ private:
     DatabaseManager *database_ = nullptr;
     std::atomic<int> active_tasks_;
     std::atomic<int> completed_tasks_;
+    
+    // UI notification widget pointer
+    Fl_Widget* ui_notify_widget_;
 };
 
 /**
@@ -304,6 +321,16 @@ public:
     // Progress and callbacks
     void set_progress_callback(ProgressReporter::ProgressCallback callback);
     void set_metadata_callback(DirectoryScanThread::ImageMetadataCallback callback);
+
+    // UI notification widget management
+    void set_ui_notify_widget(Fl_Widget* widget) {
+	if (monitor_thread_) {
+	    monitor_thread_->set_ui_notify_widget(widget);
+	}
+	if (thumbnail_workers_) {
+	    thumbnail_workers_->set_ui_notify_widget(widget);
+	}
+    }
 
     // Thumbnail generation for UI
     void request_thumbnail(const UIThumbnailTask& task);
