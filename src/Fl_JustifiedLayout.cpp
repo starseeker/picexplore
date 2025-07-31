@@ -492,7 +492,7 @@ std::unique_ptr<Fl_RGB_Image> Fl_JustifiedLayout::downsample_image(Fl_RGB_Image*
     // FLTK will take ownership of the data, so we need to allocate it separately
     unsigned char* fltk_data = new unsigned char[output_data.size()];
     std::memcpy(fltk_data, output_data.data(), output_data.size());
-    
+
     return std::unique_ptr<Fl_RGB_Image>(new Fl_RGB_Image(fltk_data, final_w, final_h, src_channels));
 }
 
@@ -517,11 +517,10 @@ void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const 
 	int img_y = y + THUMBNAIL_BORDER_WIDTH + (h - 2 * THUMBNAIL_BORDER_WIDTH - img_h) / 2;
 
 	// Draw the image
-	std::cout << "[DEBUG] drawing loaded thumbnail\n";
 	thumb_image->draw(img_x, img_y);
     } else {
 	// Fallback to placeholder rendering
-	std::cout << "[DEBUG] drawing placeholder\n";
+	std::cout << "[DEBUG] drawing placeholder for " << info.path << "\n";
 	draw_thumbnail_placeholder(x, y, w, h, info);
     }
 }
