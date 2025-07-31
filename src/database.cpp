@@ -772,7 +772,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 }
 
 void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_t start_idx, size_t end_idx,
-	moodycamel::ConcurrentQueue<WriteTask>& write_queue,
+	moodycamel::BlockingConcurrentQueue<WriteTask>& write_queue,
 	Timer& timer, StatusReporter& reporter,
 	std::atomic<int>& processed_count, std::atomic<int>& skipped_count) {
 
@@ -820,7 +820,7 @@ void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_
     std::cout.flush();
 }
 
-void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& write_queue,
+void DatabaseManager::writer_thread(moodycamel::BlockingConcurrentQueue<WriteTask>& write_queue,
 	std::atomic<bool>& workers_done,
 	Timer& timer, StatusReporter& reporter,
 	std::atomic<int>& write_count) {
@@ -838,21 +838,39 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
     while (!workers_done.load() || write_queue.size_approx() > 0) {
 	batch.clear();
 
-	// Dequeue a batch of writes
+	// Dequeue a batch of writes - use blocking wait for first item, then try immediate dequeue for batch
 	WriteTask task;
-	int dequeued_count = 0;
-	for (int i = 0; i < BATCH_SIZE && write_queue.try_dequeue(task); i++) {
+	if (write_queue.wait_dequeue_timed(task, std::chrono::milliseconds(100))) {
+	    // Check for shutdown sentinel
+	    if (task.type == WriteTask::SHUTDOWN) {
+		std::cout << "[DEBUG] DatabaseManager: Received shutdown sentinel in writer thread, exiting" << std::endl;
+		break;
+	    }
+	    
 	    std::cout << "[DEBUG] DatabaseManager: Dequeued write task from writeQueue - type: " << task.type << ", key: " << task.key << std::endl;
 	    batch.push_back(std::move(task));
-	    dequeued_count++;
-	}
-
-	if (batch.empty()) {
-	    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	    
+	    // Try to dequeue additional items for batching (non-blocking)
+	    for (int i = 1; i < BATCH_SIZE && write_queue.try_dequeue(task); i++) {
+		// Check for shutdown sentinel in batch
+		if (task.type == WriteTask::SHUTDOWN) {
+		    std::cout << "[DEBUG] DatabaseManager: Received shutdown sentinel during batching, processing current batch then exiting" << std::endl;
+		    workers_done.store(true);  // Signal to exit after this batch
+		    break;
+		}
+		std::cout << "[DEBUG] DatabaseManager: Batched additional write task - type: " << task.type << ", key: " << task.key << std::endl;
+		batch.push_back(std::move(task));
+	    }
+	} else {
+	    // Timeout occurred, continue to check workers_done and queue size
 	    continue;
 	}
 
-	std::cout << "[DEBUG] DatabaseManager: Processing batch " << batch_counter << " with " << dequeued_count << " write tasks" << std::endl;
+	if (batch.empty()) {
+	    continue;  // Should not happen after wait_dequeue_timed success, but be safe
+	}
+
+	std::cout << "[DEBUG] DatabaseManager: Processing batch " << batch_counter << " with " << batch.size() << " write tasks" << std::endl;
 	batch_counter++;
 
 	// Process batch in a single transaction
@@ -978,7 +996,7 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
     std::atomic<int> write_count(0);
     std::atomic<bool> workers_done(false);
 
-    moodycamel::ConcurrentQueue<WriteTask> write_queue;
+    moodycamel::BlockingConcurrentQueue<WriteTask> write_queue;
 
     timer.start("Parallel Image Processing");
 

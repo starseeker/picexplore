@@ -271,47 +271,54 @@ void WorkerPool::worker_thread_main() {
     std::cout << "[DEBUG] WorkerPool: Worker thread started" << std::endl;
     std::cout.flush();
 
-    ThumbnailGenerationTask task{"", "", ImageInfo{}};
+    ThumbnailGenerationTask task;
 
     while (!should_stop_.load() && !GlobalFlags::is_shutdown_requested()) {
 	bool found_task = false;
 
-	// Try to get work from scan thread
-	if (scan_thread_ && scan_thread_->thumbnail_gen_queue_.try_dequeue(task)) {
-	    std::cout << "[DEBUG] WorkerPool: Dequeued thumbnail generation task from thumbnail_gen_queue - file: " << task.file_path << ", hash: " << task.hash << std::endl;
-	    found_task = true;
-	    processed_count_.fetch_add(1);
+	// Try to get work from scan thread with short timeout to remain responsive
+	if (scan_thread_) {
+	    // Use wait_dequeue_timed to block efficiently instead of polling
+	    if (scan_thread_->thumbnail_gen_queue_.wait_dequeue_timed(task, std::chrono::milliseconds(100))) {
+		// Check for shutdown sentinel
+		if (task.is_shutdown_sentinel) {
+		    std::cout << "[DEBUG] WorkerPool: Received shutdown sentinel, exiting worker thread" << std::endl;
+		    break;
+		}
 
-	    // Process the thumbnail generation task from directory scan
-	    // This connects to the existing DatabaseManager thumbnail generation pipeline
-	    if (scan_thread_ && scan_thread_->database_) {
-		std::cout << "[DEBUG] WorkerPool: Generating thumbnails for file: " << task.file_path << std::endl;
-		// Use the existing optimized thumbnail generation method that handles:
-		// - JPEG DCT-domain downscaling for efficiency
-		// - Multiple thumbnail sizes (32, 64, 128, 256, 512, 1024px)
-		// - EXIF orientation correction
-		// - Error handling for corrupt images
-		bool success = scan_thread_->database_->generate_thumbnails_for_hash(task.hash, task.file_path);
+		std::cout << "[DEBUG] WorkerPool: Dequeued thumbnail generation task from thumbnail_gen_queue - file: " << task.file_path << ", hash: " << task.hash << std::endl;
+		found_task = true;
+		processed_count_.fetch_add(1);
 
-		if (success) {
-		    std::cout << "[DEBUG] WorkerPool: Successfully generated thumbnails, enqueuing write task to writeQueue - hash: " << task.hash << std::endl;
-		    // Create a completion task for the writer thread
-		    // Note: generate_thumbnails_for_hash handles its own database writes,
-		    // so this is mainly for progress tracking
-		    WriteTask write_task(WriteTask::STORE_THUMBNAIL, task.hash, std::vector<uint8_t>());
-		    write_queue_.enqueue(std::move(write_task));
-		} else {
-		    std::cout << "[DEBUG] WorkerPool: Failed to generate thumbnails for file: " << task.file_path << " (hash: " << task.hash << ")" << std::endl;
-		    std::cerr << "[WARNING] WorkerPool: Failed to generate thumbnails for "
-			      << task.file_path << " (hash: " << task.hash << ")" << std::endl;
+		// Process the thumbnail generation task from directory scan
+		// This connects to the existing DatabaseManager thumbnail generation pipeline
+		if (scan_thread_->database_) {
+		    std::cout << "[DEBUG] WorkerPool: Generating thumbnails for file: " << task.file_path << std::endl;
+		    // Use the existing optimized thumbnail generation method that handles:
+		    // - JPEG DCT-domain downscaling for efficiency
+		    // - Multiple thumbnail sizes (32, 64, 128, 256, 512, 1024px)
+		    // - EXIF orientation correction
+		    // - Error handling for corrupt images
+		    bool success = scan_thread_->database_->generate_thumbnails_for_hash(task.hash, task.file_path);
+
+		    if (success) {
+			std::cout << "[DEBUG] WorkerPool: Successfully generated thumbnails, enqueuing write task to writeQueue - hash: " << task.hash << std::endl;
+			// Create a completion task for the writer thread
+			// Note: generate_thumbnails_for_hash handles its own database writes,
+			// so this is mainly for progress tracking
+			WriteTask write_task(WriteTask::STORE_THUMBNAIL, task.hash, std::vector<uint8_t>());
+			write_queue_.enqueue(std::move(write_task));
+		    } else {
+			std::cout << "[DEBUG] WorkerPool: Failed to generate thumbnails for file: " << task.file_path << " (hash: " << task.hash << ")" << std::endl;
+			std::cerr << "[WARNING] WorkerPool: Failed to generate thumbnails for "
+				  << task.file_path << " (hash: " << task.hash << ")" << std::endl;
+		    }
 		}
 	    }
+	    // If wait_dequeue_timed returned false, it means timeout - continue loop to check shutdown flags
 	}
 
-	if (!found_task) {
-	    // No work available, sleep briefly
-	    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-	}
+	// No explicit sleep needed - wait_dequeue_timed handles efficient blocking
     }
 
     active_workers_.fetch_sub(1);
@@ -360,13 +367,19 @@ void WriterThread::writer_thread_main() {
     const size_t BATCH_SIZE = 100;
 
     while (!should_stop_.load() && !GlobalFlags::is_shutdown_requested()) {
-	bool found_task = false;
+	// Try to get work from worker pool with short timeout for responsiveness
+	if (worker_pool_) {
+	    if (worker_pool_->get_write_queue().wait_dequeue_timed(task, std::chrono::milliseconds(100))) {
+		// Check for shutdown sentinel
+		if (task.type == WriteTask::SHUTDOWN) {
+		    std::cout << "[DEBUG] WriterThread: Received shutdown sentinel, exiting writer thread" << std::endl;
+		    break;
+		}
 
-	// Try to get work from worker pool
-	if (worker_pool_ && worker_pool_->get_write_queue().try_dequeue(task)) {
-	    std::cout << "[DEBUG] WriterThread: Dequeued write task from writeQueue - type: " << task.type << ", key: " << task.key << std::endl;
-	    found_task = true;
-	    batch.push_back(std::move(task));
+		std::cout << "[DEBUG] WriterThread: Dequeued write task from writeQueue - type: " << task.type << ", key: " << task.key << std::endl;
+		batch.push_back(std::move(task));
+	    }
+	    // If wait_dequeue_timed returned false, it means timeout - continue to check batch processing
 	}
 
 	// Process batch if it's full or if we're stopping
@@ -381,10 +394,7 @@ void WriterThread::writer_thread_main() {
 	    batch.clear();
 	}
 
-	if (!found_task) {
-	    // No work available, sleep briefly
-	    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-	}
+	// No explicit sleep needed - wait_dequeue_timed handles efficient blocking
     }
 
     // Process any remaining batch items
@@ -458,6 +468,11 @@ void ThumbnailWorkers::enqueue_low_priority(const UIThumbnailTask& task) {
 bool ThumbnailWorkers::try_dequeue_result(UIDrawTask& result) {
     bool success = result_queue_.try_dequeue(result);
     if (success) {
+	// Check for shutdown sentinel and handle accordingly
+	if (result.is_shutdown_sentinel) {
+	    std::cout << "[DEBUG] ThumbnailWorkers: Received shutdown sentinel on result queue" << std::endl;
+	    return false;  // Don't return shutdown sentinels to the UI
+	}
 	std::cout << "[DEBUG] ThumbnailWorkers: Dequeued draw result from result_queue - image_index: " << result.image_index << ", cache_key: " << result.cache_key << std::endl;
 	std::cout.flush();
     }
@@ -474,14 +489,25 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
     while (!should_stop_.load() && !GlobalFlags::is_shutdown_requested()) {
 	bool found_task = false;
 
-	// Try high priority queue first
-	if (high_priority_queue_.try_dequeue(task)) {
+	// Try high priority queue first with short timeout for responsiveness
+	if (high_priority_queue_.wait_dequeue_timed(task, std::chrono::milliseconds(50))) {
+	    // Check for shutdown sentinel
+	    if (task.is_shutdown_sentinel) {
+		std::cout << "[DEBUG] ThumbnailWorkers: Received shutdown sentinel on high priority queue, exiting worker thread" << std::endl;
+		break;
+	    }
 	    std::cout << "[DEBUG] ThumbnailWorkers: Dequeued task from highPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << std::endl;
 	    found_task = true;
-	} else if (low_priority_queue_.try_dequeue(task)) {
+	} else if (low_priority_queue_.wait_dequeue_timed(task, std::chrono::milliseconds(50))) {
+	    // Check for shutdown sentinel
+	    if (task.is_shutdown_sentinel) {
+		std::cout << "[DEBUG] ThumbnailWorkers: Received shutdown sentinel on low priority queue, exiting worker thread" << std::endl;
+		break;
+	    }
 	    std::cout << "[DEBUG] ThumbnailWorkers: Dequeued task from lowPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << std::endl;
 	    found_task = true;
 	}
+	// If both wait_dequeue_timed calls returned false, it means timeout - continue loop to check shutdown flags
 
 	if (found_task) {
 	    active_tasks_.fetch_add(1);
@@ -519,10 +545,9 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 
 	    active_tasks_.fetch_sub(1);
 	    completed_tasks_.fetch_add(1);
-	} else {
-	    // No work available, sleep briefly
-	    std::this_thread::sleep_for(std::chrono::milliseconds(10));
 	}
+
+	// No explicit sleep needed - wait_dequeue_timed handles efficient blocking
     }
 
     std::cout << "[DEBUG] ThumbnailWorkers: Thumbnail worker thread exiting, processed "
@@ -821,14 +846,47 @@ void ThreadManager::shutdown_all() {
     GlobalFlags::request_shutdown();
 
     if (initialized_) {
-	// Stop all threads in order
-	if (scan_thread_) scan_thread_->stop_scan();
-	if (monitor_thread_) monitor_thread_->stop_monitoring();
-	if (worker_pool_) worker_pool_->stop_workers();
-	if (writer_thread_) writer_thread_->stop_writing();
-	if (thumbnail_workers_) thumbnail_workers_->stop_workers();
+	// Enqueue shutdown sentinels to all blocking queues to wake up waiting threads
+	// This ensures clean thread termination without indefinite blocking
+	
+	// Stop scan thread first to prevent new work from being generated
+	if (scan_thread_) {
+	    scan_thread_->stop_scan();
+	    
+	    // Enqueue shutdown sentinels for thumbnail generation workers
+	    if (worker_pool_) {
+		// Send one shutdown sentinel per worker thread
+		size_t num_workers = worker_pool_->get_worker_count();
+		for (size_t i = 0; i < num_workers; ++i) {
+		    scan_thread_->thumbnail_gen_queue_.enqueue(ThumbnailGenerationTask::create_shutdown_sentinel());
+		}
+	    }
+	}
 
-	// Wait for threads to complete
+	// Stop other threads and enqueue their shutdown sentinels
+	if (monitor_thread_) monitor_thread_->stop_monitoring();
+	if (worker_pool_) {
+	    worker_pool_->stop_workers();
+	    
+	    // Enqueue shutdown sentinels for writer thread
+	    worker_pool_->get_write_queue().enqueue(WriteTask::create_shutdown_sentinel());
+	}
+	if (writer_thread_) writer_thread_->stop_writing();
+	if (thumbnail_workers_) {
+	    thumbnail_workers_->stop_workers();
+	    
+	    // Enqueue shutdown sentinels for thumbnail workers (both priority queues)
+	    size_t num_thumb_workers = thumbnail_workers_->get_worker_count();
+	    for (size_t i = 0; i < num_thumb_workers; ++i) {
+		thumbnail_workers_->high_priority_queue_.enqueue(UIThumbnailTask::create_shutdown_sentinel());
+		thumbnail_workers_->low_priority_queue_.enqueue(UIThumbnailTask::create_shutdown_sentinel());
+	    }
+	    
+	    // Also send shutdown sentinel to result queue
+	    thumbnail_workers_->result_queue_.enqueue(UIDrawTask::create_shutdown_sentinel());
+	}
+
+	// Wait for threads to complete - they should exit cleanly after processing shutdown sentinels
 	if (scan_thread_) scan_thread_->join();
 	if (monitor_thread_) monitor_thread_->join();
 	if (worker_pool_) worker_pool_->join_all();
@@ -836,7 +894,7 @@ void ThreadManager::shutdown_all() {
 	if (thumbnail_workers_) thumbnail_workers_->join_all();
     }
 
-    std::cout << "[INFO] ThreadManager: All threads shut down" << std::endl;
+    std::cout << "[INFO] ThreadManager: All threads shut down cleanly" << std::endl;
 }
 
 void ThreadManager::set_progress_callback(ProgressReporter::ProgressCallback callback) {

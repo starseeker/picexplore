@@ -35,6 +35,7 @@
 #include "lmdb.h"
 #include "utils.hpp"
 #include "concurrentqueue.h"
+#include "blockingconcurrentqueue.h"
 
 // Image information structure
 struct ImageInfo {
@@ -53,7 +54,8 @@ struct WriteTask {
     enum TaskType {
 	STORE_PATH,
 	STORE_THUMBNAIL,
-	STORE_IMAGE_METADATA  // New: Store metadata without thumbnails for stage 1
+	STORE_IMAGE_METADATA,  // Store metadata without thumbnails for stage 1
+	SHUTDOWN  // Sentinel task for clean thread shutdown
     };
 
     TaskType type;
@@ -75,6 +77,11 @@ struct WriteTask {
     // Constructor for metadata storage
     WriteTask(TaskType t, const std::string& k, const std::string& path, double aspect)
 	: type(t), key(k), file_path(path), aspect_ratio(aspect) {}
+    
+    // Create shutdown sentinel
+    static WriteTask create_shutdown_sentinel() {
+	return WriteTask(SHUTDOWN, "", "");
+    }
 };
 
 // Database manager class
@@ -131,12 +138,12 @@ class DatabaseManager {
 
 	// Worker thread functions
 	void worker_thread(const std::vector<std::string>& files, size_t start_idx, size_t end_idx,
-		moodycamel::ConcurrentQueue<WriteTask>& write_queue,
+		moodycamel::BlockingConcurrentQueue<WriteTask>& write_queue,
 		Timer& timer, StatusReporter& reporter,
 		std::atomic<int>& processed_count, std::atomic<int>& skipped_count);
 
 	// Writer thread function
-	void writer_thread(moodycamel::ConcurrentQueue<WriteTask>& write_queue,
+	void writer_thread(moodycamel::BlockingConcurrentQueue<WriteTask>& write_queue,
 		std::atomic<bool>& workers_done,
 		Timer& timer, StatusReporter& reporter,
 		std::atomic<int>& write_count);

@@ -36,6 +36,7 @@
 #include <FL/Fl_RGB_Image.H>
 #include "database.hpp"
 #include "concurrentqueue.h"
+#include "blockingconcurrentqueue.h"
 
 namespace fs = std::filesystem;
 
@@ -45,6 +46,15 @@ class Fl_Widget;
 
 /**
  * Global shutdown and cancel mechanisms
+ * 
+ * Shutdown Coordination:
+ * - GlobalFlags::request_shutdown() signals all threads to begin shutdown
+ * - BlockingConcurrentQueue with shutdown sentinels ensures clean thread termination
+ * - Each queue type has shutdown sentinel support to wake blocked threads
+ * - ThreadManager::shutdown_all() coordinates the complete shutdown sequence:
+ *   1. Enqueue shutdown sentinels to all blocking queues
+ *   2. Set shutdown flags
+ *   3. Join all threads (which should exit after processing sentinels)
  */
 class GlobalFlags {
 public:
@@ -62,11 +72,18 @@ public:
 
 /**
  * Task types for different queues
+ * 
+ * Blocking Queue Pattern:
+ * - All task types support shutdown sentinels via is_shutdown_sentinel flags
+ * - Worker threads use wait_dequeue_timed() for responsive blocking
+ * - Shutdown sentinels wake waiting threads for clean termination
+ * - Sentinels are processed immediately and cause thread exit
  */
 struct ScanTask {
     enum Type {
 	SCAN_FILE,
-	SCAN_COMPLETE
+	SCAN_COMPLETE,
+	SHUTDOWN  // Sentinel task for clean thread shutdown
     };
 
     Type type;
@@ -80,9 +97,18 @@ struct ThumbnailGenerationTask {
     std::string file_path;
     std::string hash;
     ImageInfo metadata;
+    bool is_shutdown_sentinel = false;  // Flag for shutdown coordination
 
+    ThumbnailGenerationTask() = default;
     ThumbnailGenerationTask(const std::string& path, const std::string& h, const ImageInfo& info)
 	: file_path(path), hash(h), metadata(info) {}
+    
+    // Create shutdown sentinel
+    static ThumbnailGenerationTask create_shutdown_sentinel() {
+	ThumbnailGenerationTask task;
+	task.is_shutdown_sentinel = true;
+	return task;
+    }
 };
 
 struct UIThumbnailTask {
@@ -96,20 +122,36 @@ struct UIThumbnailTask {
     int target_width;
     int target_height;
     std::string hash;
+    bool is_shutdown_sentinel = false;  // Flag for shutdown coordination
 
     UIThumbnailTask() = default;
     UIThumbnailTask(int idx, Priority prio, int w, int h, const std::string& hash_val)
 	: image_index(idx), priority(prio), target_width(w), target_height(h), hash(hash_val) {}
+    
+    // Create shutdown sentinel
+    static UIThumbnailTask create_shutdown_sentinel() {
+	UIThumbnailTask task;
+	task.is_shutdown_sentinel = true;
+	return task;
+    }
 };
 
 struct UIDrawTask {
     int image_index;
     std::unique_ptr<Fl_RGB_Image> thumbnail;
     std::string cache_key;
+    bool is_shutdown_sentinel = false;  // Flag for shutdown coordination
 
     UIDrawTask() = default;
     UIDrawTask(int idx, std::unique_ptr<Fl_RGB_Image> thumb, const std::string& key)
 	: image_index(idx), thumbnail(std::move(thumb)), cache_key(key) {}
+    
+    // Create shutdown sentinel
+    static UIDrawTask create_shutdown_sentinel() {
+	UIDrawTask task;
+	task.is_shutdown_sentinel = true;
+	return task;
+    }
 };
 
 /**
@@ -165,8 +207,8 @@ private:
     std::shared_ptr<ProgressReporter> progress_reporter_;
     ImageMetadataCallback metadata_callback_;
 
-    // Queues for communication with other threads
-    moodycamel::ConcurrentQueue<ThumbnailGenerationTask> thumbnail_gen_queue_;
+    // Queues for communication with other threads - using BlockingConcurrentQueue for efficient blocking
+    moodycamel::BlockingConcurrentQueue<ThumbnailGenerationTask> thumbnail_gen_queue_;
 
     friend class WorkerPool;
     friend class UpdateMonitorThread;
@@ -222,8 +264,11 @@ public:
 	scan_thread_ = scan_thread;
     }
 
-    // Access to write queue for Writer Thread
-    moodycamel::ConcurrentQueue<WriteTask>& get_write_queue() { return write_queue_; }
+    // Access to write queue for Writer Thread - using BlockingConcurrentQueue for efficient blocking
+    moodycamel::BlockingConcurrentQueue<WriteTask>& get_write_queue() { return write_queue_; }
+    
+    // Get worker count for shutdown coordination
+    size_t get_worker_count() const { return worker_threads_.size(); }
 
 private:
     void worker_thread_main();
@@ -232,7 +277,7 @@ private:
     std::atomic<bool> should_stop_;
 
     std::shared_ptr<DirectoryScanThread> scan_thread_;
-    moodycamel::ConcurrentQueue<WriteTask> write_queue_;
+    moodycamel::BlockingConcurrentQueue<WriteTask> write_queue_;  // BlockingConcurrentQueue for efficient blocking
 
     std::atomic<int> processed_count_;
     std::atomic<int> active_workers_;
@@ -283,6 +328,9 @@ public:
     void set_ui_notify_widget(Fl_Widget* widget) {
 	ui_notify_widget_ = widget;
     }
+    
+    // Get worker count for shutdown coordination
+    size_t get_worker_count() const { return worker_threads_.size(); }
 
 private:
     void thumbnail_worker_thread_main();
@@ -292,10 +340,10 @@ private:
     std::vector<std::thread> worker_threads_;
     std::atomic<bool> should_stop_;
 
-    // Priority queues
-    moodycamel::ConcurrentQueue<UIThumbnailTask> high_priority_queue_;
-    moodycamel::ConcurrentQueue<UIThumbnailTask> low_priority_queue_;
-    moodycamel::ConcurrentQueue<UIDrawTask> result_queue_;
+    // Priority queues - using BlockingConcurrentQueue for efficient blocking
+    moodycamel::BlockingConcurrentQueue<UIThumbnailTask> high_priority_queue_;
+    moodycamel::BlockingConcurrentQueue<UIThumbnailTask> low_priority_queue_;
+    moodycamel::BlockingConcurrentQueue<UIDrawTask> result_queue_;
 
     DatabaseManager *database_ = nullptr;
     std::atomic<int> active_tasks_;
