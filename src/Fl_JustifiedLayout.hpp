@@ -34,6 +34,7 @@
 #include <memory>
 #include <atomic>
 #include <unordered_map>
+#include <unordered_set>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -185,6 +186,10 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     void update_visibility_and_queue_thumbnails();  // Check visibility and queue high-priority tasks through ThreadManager
     void process_thread_manager_results();  // Process results from ThreadManager
 
+    // OPTIMIZATION: Viewport-based caching management for thumbnail optimization
+    void update_image_visibility_status();     // Update is_visible_or_near flags based on current viewport
+    void cleanup_cached_thumbnails_outside_viewport();  // Release cached thumbnails for images far from viewport
+
     // FLTK widget overrides
     void draw() override;
     int handle(int event) override;
@@ -273,6 +278,12 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     // Image cache for decoded thumbnails
     std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> image_cache_;
     mutable std::mutex image_cache_mutex_;
+    
+    // OPTIMIZATION: Per-rectangle thumbnail cache for visible/near-visible items
+    // Key: "index:width:height", Value: cached resized thumbnail 
+    std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> rectangle_thumbnail_cache_;
+    std::unordered_set<int> visible_or_near_indices_;  // Track which rectangles are near viewport
+    mutable std::mutex rectangle_cache_mutex_;
 
     // Two-stage processing support
     moodycamel::BlockingConcurrentQueue<ThumbnailNotification> thumbnail_notifications_;  // BlockingConcurrentQueue for efficient blocking

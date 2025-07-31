@@ -359,50 +359,82 @@ void Fl_JustifiedLayout::clear_image_cache() {
 }
 
 Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, int target_width, int target_height) {
+    // OPTIMIZATION: Check per-rectangle cache first for visible/near-visible items
+    // This avoids repeated decoding/downsampling for the same rectangle display size
+    
+    // Create a cache key that includes image hash and target dimensions
+    std::string rect_cache_key = info.hash + ":" + std::to_string(target_width) + ":" + std::to_string(target_height);
+    
+    {
+        std::lock_guard<std::mutex> rect_lock(rectangle_cache_mutex_);
+        auto rect_it = rectangle_thumbnail_cache_.find(rect_cache_key);
+        if (rect_it != rectangle_thumbnail_cache_.end()) {
+            // Found cached resized thumbnail - return it directly, no processing needed!
+            return rect_it->second.get();
+        }
+    }
+    
     // Get canonical size for cache lookup - this ensures we use consistent cache keys
     // regardless of the exact requested size, preventing cache misses
     int canonical_size = pick_thumbnail_size(target_width, target_height);
     std::string canonical_cache_key = make_thumbnail_key(info.hash, canonical_size);
     
+    Fl_RGB_Image* canonical_image = nullptr;
+    Fl_RGB_Image* result = nullptr;
+    
     // Check cache for canonical size image
-    std::lock_guard<std::mutex> lock(image_cache_mutex_);
-    auto cache_it = image_cache_.find(canonical_cache_key);
-    if (cache_it == image_cache_.end()) {
-	// Canonical size image not in cache - ThreadManager will generate it
-	return nullptr;
+    {
+        std::lock_guard<std::mutex> lock(image_cache_mutex_);
+        auto cache_it = image_cache_.find(canonical_cache_key);
+        if (cache_it == image_cache_.end()) {
+            // Canonical size image not in cache - ThreadManager will generate it
+            return nullptr;
+        }
+        
+        canonical_image = cache_it->second.get();
+        if (!canonical_image) {
+            return nullptr;
+        }
+        
+        // If canonical image matches target size exactly, we can use it directly
+        int target_size = std::max(target_width, target_height);
+        if (canonical_size == target_size) {
+            result = canonical_image;
+        } else {
+            // Need downsampling - check if we already have a downsampled version cached in global cache
+            std::string downsampled_cache_key = make_thumbnail_key(info.hash, target_width, target_height);
+            auto downsampled_it = image_cache_.find(downsampled_cache_key);
+            if (downsampled_it != image_cache_.end()) {
+                result = downsampled_it->second.get();
+            } else {
+                // Create downsampled version using FLTK or stb_image_resize fallback
+                std::unique_ptr<Fl_RGB_Image> downsampled_image = downsample_image(canonical_image, target_width, target_height);
+                if (downsampled_image) {
+                    result = downsampled_image.get();
+                    // Cache the downsampled version in global cache for future use
+                    image_cache_[downsampled_cache_key] = std::move(downsampled_image);
+                } else {
+                    // Fallback: return canonical image even if it's larger than requested
+                    result = canonical_image;
+                }
+            }
+        }
     }
     
-    Fl_RGB_Image* canonical_image = cache_it->second.get();
-    if (!canonical_image) {
-	return nullptr;
+    // OPTIMIZATION: Cache the result in rectangle cache for faster future access
+    if (result) {
+        std::lock_guard<std::mutex> rect_lock(rectangle_cache_mutex_);
+        // Only cache if not already present (avoid duplicate work)
+        if (rectangle_thumbnail_cache_.find(rect_cache_key) == rectangle_thumbnail_cache_.end()) {
+            // Create a copy for the rectangle cache
+            std::unique_ptr<Fl_RGB_Image> cached_copy = downsample_image(canonical_image, target_width, target_height);
+            if (cached_copy) {
+                rectangle_thumbnail_cache_[rect_cache_key] = std::move(cached_copy);
+            }
+        }
     }
     
-    // If canonical image matches target size exactly, return it directly
-    int target_size = std::max(target_width, target_height);
-    if (canonical_size == target_size) {
-	return canonical_image;
-    }
-    
-    // Need downsampling - check if we already have a downsampled version cached
-    std::string downsampled_cache_key = make_thumbnail_key(info.hash, target_width, target_height);
-    auto downsampled_it = image_cache_.find(downsampled_cache_key);
-    if (downsampled_it != image_cache_.end()) {
-	// Already have downsampled version in cache  
-	return downsampled_it->second.get();
-    }
-    
-    // Create downsampled version using FLTK or stb_image_resize fallback
-    std::unique_ptr<Fl_RGB_Image> downsampled_image = downsample_image(canonical_image, target_width, target_height);
-    if (downsampled_image) {
-	Fl_RGB_Image* result = downsampled_image.get();
-	// Cache the downsampled version for future use
-	image_cache_[downsampled_cache_key] = std::move(downsampled_image);
-	return result;
-    }
-    
-    // Fallback: return canonical image even if it's larger than requested
-    // This ensures we always display something rather than a placeholder
-    return canonical_image;
+    return result;
 }
 
 /**
@@ -682,7 +714,7 @@ void Fl_JustifiedLayout_Content::draw() {
 
     for (size_t i = parent_->visible_start_idx_; i <= parent_->visible_end_idx_ && i < parent_->layout_items_.size(); ++i) {
 	const auto& item = parent_->layout_items_[i];
-	const auto& img = parent_->images_[i];
+	const auto& img = parent_->images_[i];  // Back to const reference
 
 	int item_x = x() + static_cast<int>(item.l);
 	int item_y = y() + static_cast<int>(item.t);
@@ -1201,6 +1233,9 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
 	return;
     }
 
+    // OPTIMIZATION: Update visibility status for caching optimization
+    update_image_visibility_status();
+
     // Get current scroll position
     int scroll_y = yposition();
     int viewport_height = h();
@@ -1285,6 +1320,80 @@ void Fl_JustifiedLayout::draw() {
     // The content widget (Fl_JustifiedLayout_Content) handles the actual thumbnail drawing
     Fl_Scroll::draw();
 
+}
+
+// OPTIMIZATION: Update visibility status of images based on current viewport
+void Fl_JustifiedLayout::update_image_visibility_status() {
+    if (layout_items_.empty() || images_.empty()) {
+        return;
+    }
+
+    // Get current scroll position and viewport dimensions
+    int scroll_y = yposition();
+    int viewport_height = h();
+    
+    // Define extended viewport bounds for "near-visible" determination
+    // Images just outside the viewport should keep their cached thumbnails
+    int viewport_tolerance = viewport_height; // Keep cache for 1 viewport height above/below
+    int near_visible_start = scroll_y - viewport_tolerance;
+    int near_visible_end = scroll_y + viewport_height + viewport_tolerance;
+
+    std::unordered_set<int> new_visible_or_near_indices;
+
+    // Update visibility flags for each image
+    for (size_t i = 0; i < layout_items_.size() && i < images_.size(); i++) {
+        const auto& item = layout_items_[i];
+        
+        int item_top = static_cast<int>(item.t);
+        int item_bottom = item_top + static_cast<int>(item.h);
+        
+        // Determine if this rectangle is visible or near-visible
+        bool is_visible_or_near = (item_bottom >= near_visible_start && item_top <= near_visible_end);
+        
+        if (is_visible_or_near) {
+            new_visible_or_near_indices.insert(static_cast<int>(i));
+        }
+    }
+    
+    // OPTIMIZATION: Clean up rectangle cache for indices that are no longer near-visible
+    {
+        std::lock_guard<std::mutex> rect_lock(rectangle_cache_mutex_);
+        
+        // Find indices that were visible but are no longer
+        std::vector<int> indices_to_remove;
+        for (int old_idx : visible_or_near_indices_) {
+            if (new_visible_or_near_indices.find(old_idx) == new_visible_or_near_indices.end()) {
+                indices_to_remove.push_back(old_idx);
+            }
+        }
+        
+        // Remove cache entries for images that are no longer near-visible
+        for (int idx : indices_to_remove) {
+            if (idx >= 0 && idx < static_cast<int>(images_.size())) {
+                const auto& img = images_[idx];
+                // Remove all cache entries for this image (all target sizes)
+                std::vector<std::string> keys_to_remove;
+                for (const auto& entry : rectangle_thumbnail_cache_) {
+                    if (entry.first.substr(0, img.hash.length()) == img.hash) {
+                        keys_to_remove.push_back(entry.first);
+                    }
+                }
+                for (const std::string& key : keys_to_remove) {
+                    rectangle_thumbnail_cache_.erase(key);
+                }
+            }
+        }
+        
+        // Update the visible indices set
+        visible_or_near_indices_ = std::move(new_visible_or_near_indices);
+    }
+}
+
+// OPTIMIZATION: Clean up cached thumbnails for images outside viewport tolerance
+void Fl_JustifiedLayout::cleanup_cached_thumbnails_outside_viewport() {
+    // This function is called by update_image_visibility_status(), 
+    // so no additional cleanup is needed here for now.
+    // We could add more aggressive cleanup policies here if needed.
 }
 
 
