@@ -46,6 +46,15 @@ class Fl_Widget;
 
 /**
  * Global shutdown and cancel mechanisms
+ * 
+ * Shutdown Coordination:
+ * - GlobalFlags::request_shutdown() signals all threads to begin shutdown
+ * - BlockingConcurrentQueue with shutdown sentinels ensures clean thread termination
+ * - Each queue type has shutdown sentinel support to wake blocked threads
+ * - ThreadManager::shutdown_all() coordinates the complete shutdown sequence:
+ *   1. Enqueue shutdown sentinels to all blocking queues
+ *   2. Set shutdown flags
+ *   3. Join all threads (which should exit after processing sentinels)
  */
 class GlobalFlags {
 public:
@@ -63,6 +72,12 @@ public:
 
 /**
  * Task types for different queues
+ * 
+ * Blocking Queue Pattern:
+ * - All task types support shutdown sentinels via is_shutdown_sentinel flags
+ * - Worker threads use wait_dequeue_timed() for responsive blocking
+ * - Shutdown sentinels wake waiting threads for clean termination
+ * - Sentinels are processed immediately and cause thread exit
  */
 struct ScanTask {
     enum Type {
