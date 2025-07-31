@@ -160,6 +160,8 @@ class PicExploreWindow {
 	    // Connect ThreadManager to layout widget
 	    if (layout_widget_ && thread_manager_) {
 		layout_widget_->set_thread_manager(thread_manager_.get());
+		// Set the layout widget as the UI notification target for redraws
+		thread_manager_->set_ui_notify_widget(layout_widget_);
 	    }
 
 	    window_->end();

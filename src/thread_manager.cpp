@@ -154,7 +154,7 @@ void DirectoryScanThread::scan_directory_recursive(const std::string& directory)
 // UpdateMonitorThread Implementation
 //==============================================================================
 
-UpdateMonitorThread::UpdateMonitorThread() : should_stop_(false) {
+UpdateMonitorThread::UpdateMonitorThread() : should_stop_(false), ui_notify_widget_(nullptr) {
 }
 
 UpdateMonitorThread::~UpdateMonitorThread() {
@@ -191,14 +191,17 @@ void UpdateMonitorThread::monitor_thread_main() {
 	if (GlobalFlags::is_scanning()) {
 	    // Use Fl::awake to notify UI of incremental updates
 	    // This is called from a worker thread, so we need Fl::awake
-	    static auto ui_update_callback = [](void* data) {
+	    auto ui_update_callback = [](void* data) {
 		// UI update callback - this runs in the main UI thread
-		// Update progress bars, refresh layouts, etc.
+		UpdateMonitorThread* self = static_cast<UpdateMonitorThread*>(data);
+		if (self && self->ui_notify_widget_) {
+		    self->ui_notify_widget_->redraw();
+		}
 	    };
 
 	    std::cout << "[DEBUG] UpdateMonitorThread: Notifying UI via Fl::awake() for scan progress update" << std::endl;
 	    std::cout.flush();
-	    Fl::awake(ui_update_callback, nullptr);
+	    Fl::awake(ui_update_callback, this);
 	}
 
 	// Check for cancellation requests
@@ -399,7 +402,7 @@ void WriterThread::writer_thread_main() {
 // ThumbnailWorkers Implementation
 //==============================================================================
 
-ThumbnailWorkers::ThumbnailWorkers() : should_stop_(false), active_tasks_(0), completed_tasks_(0) {
+ThumbnailWorkers::ThumbnailWorkers() : should_stop_(false), active_tasks_(0), completed_tasks_(0), ui_notify_widget_(nullptr) {
 }
 
 ThumbnailWorkers::~ThumbnailWorkers() {
@@ -499,14 +502,17 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 		result_queue_.enqueue(std::move(result));
 
 		// Notify UI that thumbnail is ready
-		static auto thumbnail_ready_callback = [](void* data) {
+		auto thumbnail_ready_callback = [](void* data) {
 		    // This runs in the main UI thread
-		    // Trigger layout refresh, redraw, etc.
+		    ThumbnailWorkers* self = static_cast<ThumbnailWorkers*>(data);
+		    if (self && self->ui_notify_widget_) {
+			self->ui_notify_widget_->redraw();
+		    }
 		};
 
 		std::cout << "[DEBUG] ThumbnailWorkers: Notifying UI via Fl::awake() for completed thumbnail - image_index: " << task.image_index << std::endl;
 		std::cout.flush();
-		Fl::awake(thumbnail_ready_callback, nullptr);
+		Fl::awake(thumbnail_ready_callback, this);
 	    } else {
 		std::cout << "[DEBUG] ThumbnailWorkers: No real thumbnail available for task - image_index: " << task.image_index << ", hash: " << task.hash << " (placeholder will be generated in UI)" << std::endl;
 	    }
