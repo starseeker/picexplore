@@ -512,6 +512,21 @@ bool ThumbnailWorkers::try_dequeue_result(UIDrawTask& result) {
     return success;
 }
 
+void ThumbnailWorkers::flush_high_priority_queue() {
+    // Drain all items from the high priority queue
+    UIThumbnailTask dummy_task;
+    size_t flushed_count = 0;
+    while (high_priority_queue_.try_dequeue(dummy_task)) {
+	flushed_count++;
+    }
+    std::cout << "[DEBUG] ThumbnailWorkers: Flushed " << flushed_count << " items from high priority queue" << std::endl;
+    std::cout.flush();
+}
+
+uint64_t ThumbnailWorkers::get_next_generation_id() {
+    return current_generation_id_.fetch_add(1) + 1;
+}
+
 void ThumbnailWorkers::thumbnail_worker_thread_main() {
     std::cout << "[DEBUG] ThumbnailWorkers: Thumbnail worker thread started" << std::endl;
     std::cout.flush();
@@ -529,7 +544,15 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 		std::cout << "[DEBUG] ThumbnailWorkers: Received shutdown sentinel on high priority queue, exiting worker thread" << std::endl;
 		break;
 	    }
-	    std::cout << "[DEBUG] ThumbnailWorkers: Dequeued task from highPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << std::endl;
+	    
+	    // Check generation ID for high priority tasks - discard stale requests
+	    if (task.generation_id != 0 && task.generation_id < current_generation_id_.load()) {
+		std::cout << "[DEBUG] ThumbnailWorkers: Discarding stale high priority task - image_index: " << task.image_index 
+			  << ", task_gen: " << task.generation_id << ", current_gen: " << current_generation_id_.load() << std::endl;
+		continue;  // Skip this task and get next one
+	    }
+	    
+	    std::cout << "[DEBUG] ThumbnailWorkers: Dequeued task from highPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << ", gen_id: " << task.generation_id << std::endl;
 	    found_task = true;
 	} else if (low_priority_queue_.wait_dequeue_timed(task, std::chrono::milliseconds(50))) {
 	    // Check for shutdown sentinel
@@ -992,6 +1015,19 @@ bool ThreadManager::get_thumbnail_result(UIDrawTask& result) {
 	return success;
     }
     return false;
+}
+
+void ThreadManager::flush_high_priority_queue() {
+    if (thumbnail_workers_) {
+	thumbnail_workers_->flush_high_priority_queue();
+    }
+}
+
+uint64_t ThreadManager::get_next_generation_id() {
+    if (thumbnail_workers_) {
+	return thumbnail_workers_->get_next_generation_id();
+    }
+    return 0;
 }
 
 // Local Variables:
