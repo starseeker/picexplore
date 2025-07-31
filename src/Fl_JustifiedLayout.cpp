@@ -120,6 +120,8 @@ void Fl_JustifiedLayout::process_thread_manager_results() {
 	if (content_widget_) {
 	    content_widget_->redraw();
 	}
+        // Start refinement timer after new thumbnails arrive
+        start_refinement_timer();
     }
 
     processing.clear();
@@ -128,6 +130,9 @@ void Fl_JustifiedLayout::process_thread_manager_results() {
 
 
 Fl_JustifiedLayout::~Fl_JustifiedLayout() {
+    // Stop refinement timer
+    stop_refinement_timer();
+
     // Cancel any pending batch flush timers
     if (batch_flush_scheduled_.load()) {
 	Fl::remove_timeout(batch_flush_callback, this);
@@ -232,6 +237,9 @@ void Fl_JustifiedLayout::resize(int X, int Y, int W, int H) {
     if (thread_manager_) {
 	update_visibility_and_queue_thumbnails();
     }
+
+    // Start refinement timer after resize events
+    start_refinement_timer();
 }
 
 void Fl_JustifiedLayout::relayout() {
@@ -274,11 +282,11 @@ void Fl_JustifiedLayout::restore_scroll_position() {
 	// Calculate proportional position if content height changed
 	double position_ratio = static_cast<double>(saved_scroll_y_) / saved_content_height_;
 	int new_scroll_y = static_cast<int>(position_ratio * total_height_);
-	
+
 	// Ensure new position is within valid bounds
 	int max_scroll_y = std::max(0, static_cast<int>(total_height_) - h());
 	new_scroll_y = std::max(0, std::min(new_scroll_y, max_scroll_y));
-	
+
 	// Apply the scroll position
 	scroll_to(xposition(), new_scroll_y);
     } else if (saved_content_height_ <= 0.0) {
@@ -361,10 +369,10 @@ void Fl_JustifiedLayout::clear_image_cache() {
 Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, int target_width, int target_height) {
     // OPTIMIZATION: Check per-rectangle cache first for visible/near-visible items
     // This avoids repeated decoding/downsampling for the same rectangle display size
-    
+
     // Create a cache key that includes image hash and target dimensions
     std::string rect_cache_key = info.hash + ":" + std::to_string(target_width) + ":" + std::to_string(target_height);
-    
+
     {
         std::lock_guard<std::mutex> rect_lock(rectangle_cache_mutex_);
         auto rect_it = rectangle_thumbnail_cache_.find(rect_cache_key);
@@ -373,15 +381,15 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
             return rect_it->second.get();
         }
     }
-    
+
     // Get canonical size for cache lookup - this ensures we use consistent cache keys
     // regardless of the exact requested size, preventing cache misses
     int canonical_size = pick_thumbnail_size(target_width, target_height);
     std::string canonical_cache_key = make_thumbnail_key(info.hash, canonical_size);
-    
+
     Fl_RGB_Image* canonical_image = nullptr;
     Fl_RGB_Image* result = nullptr;
-    
+
     // Check cache for canonical size image
     {
         std::lock_guard<std::mutex> lock(image_cache_mutex_);
@@ -390,12 +398,12 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
             // Canonical size image not in cache - ThreadManager will generate it
             return nullptr;
         }
-        
+
         canonical_image = cache_it->second.get();
         if (!canonical_image) {
             return nullptr;
         }
-        
+
         // If canonical image matches target size exactly, we can use it directly
         int target_size = std::max(target_width, target_height);
         if (canonical_size == target_size) {
@@ -420,7 +428,7 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
             }
         }
     }
-    
+
     // OPTIMIZATION: Cache the result in rectangle cache for faster future access
     if (result) {
         std::lock_guard<std::mutex> rect_lock(rectangle_cache_mutex_);
@@ -433,19 +441,19 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
             }
         }
     }
-    
+
     return result;
 }
 
 /**
  * Downsamples a thumbnail image to the target dimensions while maintaining aspect ratio.
- * 
+ *
  * This function is used when the cached canonical thumbnail is larger than the requested
  * display size. It tries FLTK's built-in copy() method first, then falls back to
  * stb_image_resize if FLTK fails.
- * 
+ *
  * @param source        Source image (must be a valid Fl_RGB_Image)
- * @param target_width  Target display width in pixels  
+ * @param target_width  Target display width in pixels
  * @param target_height Target display height in pixels
  * @return Downsampled image, or nullptr on failure
  */
@@ -453,12 +461,12 @@ std::unique_ptr<Fl_RGB_Image> Fl_JustifiedLayout::downsample_image(Fl_RGB_Image*
     if (!source || source->w() <= 0 || source->h() <= 0) {
 	return nullptr;
     }
-    
+
     // Calculate target dimensions while maintaining aspect ratio
     int src_w = source->w();
     int src_h = source->h();
     float aspect_ratio = static_cast<float>(src_w) / static_cast<float>(src_h);
-    
+
     int final_w, final_h;
     if (target_width * src_h > target_height * src_w) {
 	// Height is the limiting factor
@@ -469,11 +477,11 @@ std::unique_ptr<Fl_RGB_Image> Fl_JustifiedLayout::downsample_image(Fl_RGB_Image*
 	final_w = target_width;
 	final_h = static_cast<int>(target_width / aspect_ratio);
     }
-    
+
     // Ensure dimensions are at least 1
     final_w = std::max(1, final_w);
     final_h = std::max(1, final_h);
-    
+
     // If source is already smaller than or equal to target, return a copy
     if (src_w <= final_w && src_h <= final_h) {
 	try {
@@ -483,7 +491,7 @@ std::unique_ptr<Fl_RGB_Image> Fl_JustifiedLayout::downsample_image(Fl_RGB_Image*
 	    return nullptr;
 	}
     }
-    
+
     // Try FLTK's built-in downsampling first
     try {
 	Fl_RGB_Image* downsampled = static_cast<Fl_RGB_Image*>(source->copy(final_w, final_h));
@@ -493,21 +501,21 @@ std::unique_ptr<Fl_RGB_Image> Fl_JustifiedLayout::downsample_image(Fl_RGB_Image*
     } catch (...) {
 	// FLTK downsampling failed, continue to stb fallback
     }
-    
+
     // Fallback to stb_image_resize
     const unsigned char* src_data = reinterpret_cast<const unsigned char*>(source->array);
     if (!src_data) {
 	return nullptr;
     }
-    
+
     int src_channels = source->d();  // depth/channels
     if (src_channels != 3 && src_channels != 4) {
 	return nullptr;  // Unsupported format
     }
-    
+
     // Allocate output buffer
     std::vector<unsigned char> output_data(final_w * final_h * src_channels);
-    
+
     // Perform resize using stb_image_resize
     stbir_pixel_layout layout = (src_channels == 3) ? STBIR_RGB : STBIR_RGBA;
     unsigned char* resize_result = stbir_resize_uint8_linear(
@@ -515,11 +523,11 @@ std::unique_ptr<Fl_RGB_Image> Fl_JustifiedLayout::downsample_image(Fl_RGB_Image*
 	output_data.data(), final_w, final_h, 0,
 	layout
     );
-    
+
     if (!resize_result) {
 	return nullptr;
     }
-    
+
     // Create new Fl_RGB_Image from resized data
     // FLTK will take ownership of the data, so we need to allocate it separately
     unsigned char* fltk_data = new unsigned char[output_data.size()];
@@ -530,30 +538,52 @@ std::unique_ptr<Fl_RGB_Image> Fl_JustifiedLayout::downsample_image(Fl_RGB_Image*
 
 void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const ImageInfo& info) {
     // Try to load the real thumbnail image
-    Fl_RGB_Image* thumb_image = load_thumbnail_image(info, w - 2 * THUMBNAIL_BORDER_WIDTH, h - 2 * THUMBNAIL_BORDER_WIDTH);
+    int target_w = w - 2 * THUMBNAIL_BORDER_WIDTH;
+    int target_h = h - 2 * THUMBNAIL_BORDER_WIDTH;
+    Fl_RGB_Image* thumb_image = load_thumbnail_image(info, target_w, target_h);
 
     if (thumb_image) {
-	// Draw border
-	fl_color(FL_GRAY);
-	fl_rect(x, y, w, h);
+        // Find the image index for quality tracking
+        int image_index = -1;
+        for (size_t i = 0; i < images_.size(); ++i) {
+            if (images_[i].hash == info.hash) {
+                image_index = static_cast<int>(i);
+                break;
+            }
+        }
 
-	// Fill background
-	fl_color(FL_WHITE);
-	fl_rectf(x + THUMBNAIL_BORDER_WIDTH, y + THUMBNAIL_BORDER_WIDTH,
-		w - 2 * THUMBNAIL_BORDER_WIDTH, h - 2 * THUMBNAIL_BORDER_WIDTH);
+        // Track thumbnail quality information
+        if (image_index >= 0) {
+            int actual_w = thumb_image->w();
+            int actual_h = thumb_image->h();
 
-	// Center the image within the allocated space
-	int img_w = thumb_image->w();
-	int img_h = thumb_image->h();
-	int img_x = x + THUMBNAIL_BORDER_WIDTH + (w - 2 * THUMBNAIL_BORDER_WIDTH - img_w) / 2;
-	int img_y = y + THUMBNAIL_BORDER_WIDTH + (h - 2 * THUMBNAIL_BORDER_WIDTH - img_h) / 2;
+            // Determine if thumbnail is upscaled (displayed larger than its actual size)
+            bool is_upscaled = (target_w > actual_w) || (target_h > actual_h);
 
-	// Draw the image
-	thumb_image->draw(img_x, img_y);
+            update_thumbnail_quality_info(image_index, target_w, target_h, actual_w, actual_h, is_upscaled);
+        }
+
+        // Draw border
+        fl_color(FL_GRAY);
+        fl_rect(x, y, w, h);
+
+        // Fill background
+        fl_color(FL_WHITE);
+        fl_rectf(x + THUMBNAIL_BORDER_WIDTH, y + THUMBNAIL_BORDER_WIDTH,
+            w - 2 * THUMBNAIL_BORDER_WIDTH, h - 2 * THUMBNAIL_BORDER_WIDTH);
+
+        // Center the image within the allocated space
+        int img_w = thumb_image->w();
+        int img_h = thumb_image->h();
+        int img_x = x + THUMBNAIL_BORDER_WIDTH + (w - 2 * THUMBNAIL_BORDER_WIDTH - img_w) / 2;
+        int img_y = y + THUMBNAIL_BORDER_WIDTH + (h - 2 * THUMBNAIL_BORDER_WIDTH - img_h) / 2;
+
+        // Draw the image
+        thumb_image->draw(img_x, img_y);
     } else {
-	// Fallback to placeholder rendering
-	std::cout << "[DEBUG] drawing placeholder for " << info.path << "\n";
-	draw_thumbnail_placeholder(x, y, w, h, info);
+        // Fallback to placeholder rendering
+        std::cout << "[DEBUG] drawing placeholder for " << info.path << "\n";
+        draw_thumbnail_placeholder(x, y, w, h, info);
     }
 }
 
@@ -1312,6 +1342,9 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
 	    }
 	}
     }
+
+    // Start refinement timer after visibility changes (scroll events)
+    start_refinement_timer();
 }
 
 void Fl_JustifiedLayout::draw() {
@@ -1331,7 +1364,7 @@ void Fl_JustifiedLayout::update_image_visibility_status() {
     // Get current scroll position and viewport dimensions
     int scroll_y = yposition();
     int viewport_height = h();
-    
+
     // Define extended viewport bounds for "near-visible" determination
     // Images just outside the viewport should keep their cached thumbnails
     int viewport_tolerance = viewport_height; // Keep cache for 1 viewport height above/below
@@ -1343,22 +1376,22 @@ void Fl_JustifiedLayout::update_image_visibility_status() {
     // Update visibility flags for each image
     for (size_t i = 0; i < layout_items_.size() && i < images_.size(); i++) {
         const auto& item = layout_items_[i];
-        
+
         int item_top = static_cast<int>(item.t);
         int item_bottom = item_top + static_cast<int>(item.h);
-        
+
         // Determine if this rectangle is visible or near-visible
         bool is_visible_or_near = (item_bottom >= near_visible_start && item_top <= near_visible_end);
-        
+
         if (is_visible_or_near) {
             new_visible_or_near_indices.insert(static_cast<int>(i));
         }
     }
-    
+
     // OPTIMIZATION: Clean up rectangle cache for indices that are no longer near-visible
     {
         std::lock_guard<std::mutex> rect_lock(rectangle_cache_mutex_);
-        
+
         // Find indices that were visible but are no longer
         std::vector<int> indices_to_remove;
         for (int old_idx : visible_or_near_indices_) {
@@ -1366,7 +1399,7 @@ void Fl_JustifiedLayout::update_image_visibility_status() {
                 indices_to_remove.push_back(old_idx);
             }
         }
-        
+
         // Remove cache entries for images that are no longer near-visible
         for (int idx : indices_to_remove) {
             if (idx >= 0 && idx < static_cast<int>(images_.size())) {
@@ -1383,7 +1416,7 @@ void Fl_JustifiedLayout::update_image_visibility_status() {
                 }
             }
         }
-        
+
         // Update the visible indices set
         visible_or_near_indices_ = std::move(new_visible_or_near_indices);
     }
@@ -1391,9 +1424,150 @@ void Fl_JustifiedLayout::update_image_visibility_status() {
 
 // OPTIMIZATION: Clean up cached thumbnails for images outside viewport tolerance
 void Fl_JustifiedLayout::cleanup_cached_thumbnails_outside_viewport() {
-    // This function is called by update_image_visibility_status(), 
+    // This function is called by update_image_visibility_status(),
     // so no additional cleanup is needed here for now.
     // We could add more aggressive cleanup policies here if needed.
+}
+
+
+// ===============================
+// Thumbnail Refinement System
+// ===============================
+
+void Fl_JustifiedLayout::refinement_timer_callback(void* data) {
+    if (data) {
+        static_cast<Fl_JustifiedLayout*>(data)->perform_refinement_pass();
+    }
+}
+
+void Fl_JustifiedLayout::start_refinement_timer() {
+    if (!refinement_timer_active_) {
+        refinement_timer_active_ = true;
+        Fl::add_timeout(REFINEMENT_CHECK_INTERVAL, refinement_timer_callback, this);
+    }
+}
+
+void Fl_JustifiedLayout::stop_refinement_timer() {
+    if (refinement_timer_active_) {
+        refinement_timer_active_ = false;
+        Fl::remove_timeout(refinement_timer_callback, this);
+    }
+}
+
+void Fl_JustifiedLayout::perform_refinement_pass() {
+    if (!refinement_timer_active_) {
+        return; // Timer was stopped
+    }
+
+    bool any_refinement_needed = false;
+
+    // Check all visible thumbnails for potential improvements
+    {
+        std::lock_guard<std::mutex> lock(thumbnail_quality_mutex_);
+
+        for (size_t i = visible_start_idx_; i <= visible_end_idx_ && i < layout_items_.size() && i < images_.size(); ++i) {
+            auto quality_it = visible_thumbnail_quality_.find(static_cast<int>(i));
+            if (quality_it != visible_thumbnail_quality_.end()) {
+                const auto& quality_info = quality_it->second;
+
+                // Check if this thumbnail needs refinement
+                if (quality_info.needs_refinement || quality_info.is_upscaled) {
+                    const auto& img = images_[i];
+                    const auto& layout_item = layout_items_[i];
+
+                    // Calculate target size for this layout item
+                    int target_w = static_cast<int>(layout_item.w) - 2 * THUMBNAIL_BORDER_WIDTH;
+                    int target_h = static_cast<int>(layout_item.h) - 2 * THUMBNAIL_BORDER_WIDTH;
+
+                    // Check if a better quality thumbnail might be available now
+                    int canonical_size = pick_thumbnail_size(target_w, target_h);
+                    std::string canonical_cache_key = make_thumbnail_key(img.hash, canonical_size);
+
+                    bool better_available = false;
+                    {
+                        std::lock_guard<std::mutex> cache_lock(image_cache_mutex_);
+                        auto cache_it = image_cache_.find(canonical_cache_key);
+                        if (cache_it != image_cache_.end() && cache_it->second) {
+                            // A canonical size image is available
+                            int canonical_w = cache_it->second->w();
+                            int canonical_h = cache_it->second->h();
+
+                            // Better if canonical image is larger than what we're currently using
+                            if (canonical_w > quality_info.actual_width ||
+                                canonical_h > quality_info.actual_height) {
+                                better_available = true;
+                            }
+                        }
+                    }
+
+                    if (better_available) {
+                        any_refinement_needed = true;
+                        // Request thumbnail regeneration at higher quality
+                        if (thread_manager_) {
+                            UIThumbnailTask task(
+                                static_cast<int>(i),
+                                UIThumbnailTask::HIGH,
+                                target_w, target_h,
+                                img.hash
+                            );
+                            thread_manager_->request_thumbnail(task);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Check if we should continue refinement or stop the timer
+    if (any_refinement_needed) {
+        // Schedule next refinement check
+        Fl::add_timeout(REFINEMENT_CHECK_INTERVAL, refinement_timer_callback, this);
+    } else if (all_visible_thumbnails_optimal()) {
+        // All visible thumbnails are optimal, stop refinement
+        stop_refinement_timer();
+    } else {
+        // Continue checking in case new thumbnails become available
+        Fl::add_timeout(REFINEMENT_CHECK_INTERVAL, refinement_timer_callback, this);
+    }
+}
+
+bool Fl_JustifiedLayout::all_visible_thumbnails_optimal() {
+    std::lock_guard<std::mutex> lock(thumbnail_quality_mutex_);
+
+    for (size_t i = visible_start_idx_; i <= visible_end_idx_ && i < layout_items_.size() && i < images_.size(); ++i) {
+        auto quality_it = visible_thumbnail_quality_.find(static_cast<int>(i));
+        if (quality_it != visible_thumbnail_quality_.end()) {
+            const auto& quality_info = quality_it->second;
+            if (quality_info.needs_refinement || quality_info.is_upscaled) {
+                return false;
+            }
+        } else {
+            // No quality info means we haven't drawn this thumbnail yet
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void Fl_JustifiedLayout::update_thumbnail_quality_info(int image_index, int req_w, int req_h,
+                                                       int actual_w, int actual_h, bool upscaled) {
+    std::lock_guard<std::mutex> lock(thumbnail_quality_mutex_);
+
+    ThumbnailQualityInfo& info = visible_thumbnail_quality_[image_index];
+    info.requested_width = req_w;
+    info.requested_height = req_h;
+    info.actual_width = actual_w;
+    info.actual_height = actual_h;
+    info.is_upscaled = upscaled;
+
+    // Determine if refinement is needed
+    // Consider it needs refinement if:
+    // 1. It's upscaled, or
+    // 2. The actual size is significantly smaller than requested
+    info.needs_refinement = upscaled ||
+                           (actual_w < req_w * 0.8) ||
+                           (actual_h < req_h * 0.8);
 }
 
 

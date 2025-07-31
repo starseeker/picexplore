@@ -66,7 +66,7 @@ struct ThumbnailNotification {
 
     ThumbnailNotification() = default;
     ThumbnailNotification(const std::string& h, bool ready) : hash(h), is_ready(ready) {}
-    
+
     // Create shutdown sentinel
     static ThumbnailNotification create_shutdown_sentinel() {
 	ThumbnailNotification notification;
@@ -190,6 +190,15 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     void update_image_visibility_status();     // Update is_visible_or_near flags based on current viewport
     void cleanup_cached_thumbnails_outside_viewport();  // Release cached thumbnails for images far from viewport
 
+    // Thumbnail refinement system
+    void start_refinement_timer();           // Start the refinement timer
+    void stop_refinement_timer();            // Stop the refinement timer
+    void perform_refinement_pass();          // Check visible thumbnails for quality improvements
+    bool all_visible_thumbnails_optimal();   // Check if all visible thumbnails have optimal quality
+    void update_thumbnail_quality_info(int image_index, int req_w, int req_h,
+                                       int actual_w, int actual_h, bool upscaled);
+    static void refinement_timer_callback(void* data); // FLTK timer callback
+
     // FLTK widget overrides
     void draw() override;
     int handle(int event) override;
@@ -209,13 +218,13 @@ class Fl_JustifiedLayout : public Fl_Scroll {
 
     // Image decoding and caching
     Fl_RGB_Image* load_thumbnail_image(const ImageInfo& info, int target_width, int target_height);
-    
+
     /**
      * Downsamples an image to target dimensions while maintaining aspect ratio.
      * Uses FLTK's built-in copy() method first, falls back to stb_image_resize.
      */
     std::unique_ptr<Fl_RGB_Image> downsample_image(Fl_RGB_Image* source, int target_width, int target_height);
-    
+
     void clear_image_cache();
 
     // Database operations
@@ -275,12 +284,28 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     SelectionCallback selection_callback_;
     ThumbnailNotificationCallback thumbnail_notification_callback_;
 
+    // Thumbnail refinement tracking
+    struct ThumbnailQualityInfo {
+        int requested_width = 0;    // Requested display width
+        int requested_height = 0;   // Requested display height
+        int actual_width = 0;       // Actual thumbnail width used
+        int actual_height = 0;      // Actual thumbnail height used
+        bool is_upscaled = false;   // True if displayed thumbnail is upscaled from lower resolution
+        bool needs_refinement = false; // True if a better quality thumbnail might be available
+    };
+    std::unordered_map<int, ThumbnailQualityInfo> visible_thumbnail_quality_;
+    mutable std::mutex thumbnail_quality_mutex_;
+
+    // Refinement timer system
+    bool refinement_timer_active_ = false;
+    static constexpr double REFINEMENT_CHECK_INTERVAL = 2.0; // Check every 2 seconds
+
     // Image cache for decoded thumbnails
     std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> image_cache_;
     mutable std::mutex image_cache_mutex_;
-    
+
     // OPTIMIZATION: Per-rectangle thumbnail cache for visible/near-visible items
-    // Key: "index:width:height", Value: cached resized thumbnail 
+    // Key: "index:width:height", Value: cached resized thumbnail
     std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> rectangle_thumbnail_cache_;
     std::unordered_set<int> visible_or_near_indices_;  // Track which rectangles are near viewport
     mutable std::mutex rectangle_cache_mutex_;
