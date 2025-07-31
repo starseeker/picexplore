@@ -130,8 +130,9 @@ void Fl_JustifiedLayout::process_thread_manager_results() {
 
 
 Fl_JustifiedLayout::~Fl_JustifiedLayout() {
-    // Stop refinement timer
+    // Stop timers
     stop_refinement_timer();
+    stop_scroll_settling_timer();
 
     // Cancel any pending batch flush timers
     if (batch_flush_scheduled_.load()) {
@@ -1258,7 +1259,7 @@ void Fl_JustifiedLayout::thumbnail_notification_callback(void* data) {
     }
 }
 
-void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
+void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails(bool from_timer_callback) {
     if (layout_items_.empty() || images_.empty()) {
 	return;
     }
@@ -1266,6 +1267,23 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
     // OPTIMIZATION: Update visibility status for caching optimization
     update_image_visibility_status();
 
+    if (!thread_manager_) {
+	return;
+    }
+
+    // Scroll settling behavior: flush high priority queue and start timer unless called from timer
+    if (!from_timer_callback) {
+	// Immediately flush high priority queue to discard stale requests
+	thread_manager_->flush_high_priority_queue();
+	
+	// Start/reset scroll settling timer
+	start_scroll_settling_timer();
+	
+	// Don't queue new high priority tasks - wait for timer to fire
+	return;
+    }
+
+    // This is called from timer callback - proceed with queuing high priority tasks
     // Get current scroll position
     int scroll_y = yposition();
     int viewport_height = h();
@@ -1301,9 +1319,8 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
 	}
     }
 
-    // Queue high priority thumbnails first
-    if (!high_priority_indices.empty() && thread_manager_) {
-	// Use ThreadManager for thumbnail requests
+    // Queue high priority thumbnails first with current generation ID
+    if (!high_priority_indices.empty()) {
 	for (int idx : high_priority_indices) {
 	    if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
 		const auto& item = layout_items_[idx];
@@ -1314,7 +1331,8 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
 		    UIThumbnailTask::HIGH,
 		    static_cast<int>(item.w) - 2, // Account for border
 		    static_cast<int>(item.h) - 2, // Account for border
-		    img.hash
+		    img.hash,
+		    current_generation_id_  // Use current generation ID
 		);
 
 		thread_manager_->request_thumbnail(task);
@@ -1322,9 +1340,8 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
 	}
     }
 
-    // Queue lower priority thumbnails
-    if (!low_priority_indices.empty() && thread_manager_) {
-	// Use ThreadManager for thumbnail requests
+    // Queue lower priority thumbnails (without generation ID for backward compatibility)
+    if (!low_priority_indices.empty()) {
 	for (int idx : low_priority_indices) {
 	    if (idx >= 0 && idx < static_cast<int>(images_.size()) && idx < static_cast<int>(layout_items_.size())) {
 		const auto& item = layout_items_[idx];
@@ -1335,7 +1352,8 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails() {
 		    UIThumbnailTask::LOW,
 		    static_cast<int>(item.w) - 2, // Account for border
 		    static_cast<int>(item.h) - 2, // Account for border
-		    img.hash
+		    img.hash,
+		    0  // Low priority tasks don't use generation ID
 		);
 
 		thread_manager_->request_thumbnail(task);
@@ -1568,6 +1586,49 @@ void Fl_JustifiedLayout::update_thumbnail_quality_info(int image_index, int req_
     info.needs_refinement = upscaled ||
                            (actual_w < req_w * 0.8) ||
                            (actual_h < req_h * 0.8);
+}
+
+//==============================================================================
+// Scroll Settling Timer Implementation
+//==============================================================================
+
+void Fl_JustifiedLayout::start_scroll_settling_timer() {
+    // Stop any existing timer first
+    stop_scroll_settling_timer();
+    
+    // Start new timer
+    scroll_settling_timer_active_ = true;
+    Fl::add_timeout(SCROLL_SETTLING_TIMEOUT, scroll_settling_timer_callback, this);
+}
+
+void Fl_JustifiedLayout::stop_scroll_settling_timer() {
+    if (scroll_settling_timer_active_) {
+	scroll_settling_timer_active_ = false;
+	Fl::remove_timeout(scroll_settling_timer_callback, this);
+    }
+}
+
+void Fl_JustifiedLayout::scroll_settling_timer_callback(void* data) {
+    if (data) {
+	static_cast<Fl_JustifiedLayout*>(data)->handle_scroll_settling_timeout();
+    }
+}
+
+void Fl_JustifiedLayout::handle_scroll_settling_timeout() {
+    scroll_settling_timer_active_ = false;
+    
+    if (!thread_manager_) {
+	return;
+    }
+    
+    // Get new generation ID and re-evaluate visible thumbnails
+    current_generation_id_ = thread_manager_->get_next_generation_id();
+    
+    std::cout << "[DEBUG] Scroll settling timeout - re-evaluating visible thumbnails with generation ID: " 
+	      << current_generation_id_ << std::endl;
+    
+    // Re-queue high priority thumbnails for currently visible area
+    update_visibility_and_queue_thumbnails(true);  // from_timer_callback = true
 }
 
 

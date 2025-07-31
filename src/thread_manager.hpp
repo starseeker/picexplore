@@ -123,11 +123,12 @@ struct UIThumbnailTask {
     int target_width;
     int target_height;
     std::string hash;
+    uint64_t generation_id = 0;  // For invalidating old high priority requests
     bool is_shutdown_sentinel = false;  // Flag for shutdown coordination
 
     UIThumbnailTask() = default;
-    UIThumbnailTask(int idx, Priority prio, int w, int h, const std::string& hash_val)
-	: image_index(idx), priority(prio), target_width(w), target_height(h), hash(hash_val) {}
+    UIThumbnailTask(int idx, Priority prio, int w, int h, const std::string& hash_val, uint64_t gen_id = 0)
+	: image_index(idx), priority(prio), target_width(w), target_height(h), hash(hash_val), generation_id(gen_id) {}
 
     // Create shutdown sentinel
     static UIThumbnailTask create_shutdown_sentinel() {
@@ -328,6 +329,11 @@ public:
     void enqueue_low_priority(const UIThumbnailTask& task);
     bool try_dequeue_result(UIDrawTask& result);
 
+    // High priority queue invalidation for scroll settling
+    void flush_high_priority_queue();
+    uint64_t get_next_generation_id();
+    uint64_t get_current_generation_id() const { return current_generation_id_.load(); }
+
     void set_database(DatabaseManager *database) { database_ = database; }
 
     // UI notification widget management
@@ -377,6 +383,9 @@ private:
     // Thread-safe: Protected by mutex to prevent race conditions during concurrent access
     std::unordered_set<std::string> in_flight_requests_;
     std::mutex in_flight_mutex_;
+
+    // Generation ID for high priority queue invalidation during scroll settling
+    std::atomic<uint64_t> current_generation_id_{0};
 };
 
 /**
@@ -409,6 +418,10 @@ public:
     // Thumbnail generation for UI
     void request_thumbnail(const UIThumbnailTask& task);
     bool get_thumbnail_result(UIDrawTask& result);
+
+    // High priority queue management for scroll settling
+    void flush_high_priority_queue();
+    uint64_t get_next_generation_id();
 
     // Status
     bool is_scanning() const { return GlobalFlags::is_scanning(); }

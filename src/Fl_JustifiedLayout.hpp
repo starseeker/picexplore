@@ -183,7 +183,7 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     void set_thread_manager(ThreadManager* thread_manager) { thread_manager_ = thread_manager; }
 
     // UI thumbnail generation and result processing
-    void update_visibility_and_queue_thumbnails();  // Check visibility and queue high-priority tasks through ThreadManager
+    void update_visibility_and_queue_thumbnails(bool from_timer_callback = false);  // Check visibility and queue high-priority tasks through ThreadManager
     void process_thread_manager_results();  // Process results from ThreadManager
 
     // OPTIMIZATION: Viewport-based caching management for thumbnail optimization
@@ -198,6 +198,12 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     void update_thumbnail_quality_info(int image_index, int req_w, int req_h,
                                        int actual_w, int actual_h, bool upscaled);
     static void refinement_timer_callback(void* data); // FLTK timer callback
+
+    // Scroll settling timer system for high priority queue management
+    void start_scroll_settling_timer();      // Start/reset scroll settling timer
+    void stop_scroll_settling_timer();       // Stop scroll settling timer
+    void handle_scroll_settling_timeout();   // Re-evaluate visibility and queue high priority thumbnails
+    static void scroll_settling_timer_callback(void* data); // FLTK timer callback
 
     // FLTK widget overrides
     void draw() override;
@@ -299,6 +305,11 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     // Refinement timer system
     bool refinement_timer_active_ = false;
     static constexpr double REFINEMENT_CHECK_INTERVAL = 2.0; // Check every 2 seconds
+
+    // Scroll settling timer system for dynamic high priority queue management
+    bool scroll_settling_timer_active_ = false;
+    static constexpr double SCROLL_SETTLING_TIMEOUT = 0.120; // 120ms timeout after last scroll event
+    uint64_t current_generation_id_ = 0;
 
     // Image cache for decoded thumbnails
     std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> image_cache_;
