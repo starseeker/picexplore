@@ -417,57 +417,48 @@ int run_scan_only_mode(int argc, char* argv[]) {
 
 // Function to run GUI mode
 int run_gui_mode(int argc, char* argv[]) {
-    // Parse any initial arguments for GUI mode
     std::string initial_directory;
 
-    // Simple parsing for GUI mode - only look for -i/--directory now
-    std::string debug_output_dir;
-    std::string debug_output_format = "svg";
+    try {
+        cxxopts::Options options("picexplore", "Unified image scanner, database manager, and gallery viewer (GUI mode)");
+        options.add_options()
+            ("h,help", "Show this help message")
+            ("i,directory", "Open directory PATH (will scan/build database)", cxxopts::value<std::string>())
+        ;
 
-    for (int i = 1; i < argc; ++i) {
-	std::string arg = argv[i];
+        auto result = options.parse(argc, argv);
+        std::vector<std::string> nonopts = result.unmatched();
 
-	if (arg == "-h" || arg == "--help") {
-	    std::cout << "PicExplore - Unified Image Scanner, Database Manager, and Gallery Viewer\n";
-	    std::cout << "\nUsage: picexplore [OPTIONS]\n";
-	    std::cout << "\nOptions:\n";
-	    std::cout << "  -h, --help               Show this help message\n";
-	    std::cout << "  -i, --directory PATH     Open directory PATH (will scan/build database)\n";
-	    std::cout << "  --debug-output DIR       Enable debug output to DIR (creates SVG files)\n";
-	    std::cout << "  --debug-format FORMAT    Debug output format: svg or png (default: svg)\n";
-	    std::cout << "  --scan-only              Run in scan-only mode (no GUI) - see --help for scan options\n";
-	    std::cout << "\nNew Architecture:\n";
-	    std::cout << "  * LMDB database is automatically used for all directories\n";
-	    std::cout << "  * Defaults to current working directory if no directory specified\n";
-	    std::cout << "  * Unified threading architecture with separate scan/worker/writer threads\n";
-	    std::cout << "\nExamples:\n";
-	    std::cout << "  picexplore                           # Launch GUI with current directory\n";
-	    std::cout << "  picexplore --directory ~/Pictures    # Launch GUI and scan specific directory\n";
-	    std::cout << "  picexplore --directory ~/Pictures --debug-output /tmp/debug  # With debug output\n";
-	    std::cout << "  picexplore --scan-only --help        # Show scan-only mode options\n";
-	    return 0;
-	}
-	else if ((arg == "-i" || arg == "--directory") && i + 1 < argc) {
-	    initial_directory = argv[++i];
-	}
-	else if (arg == "--debug-output" && i + 1 < argc) {
-	    debug_output_dir = argv[++i];
-	}
-	else if (arg == "--debug-format" && i + 1 < argc) {
-	    debug_output_format = argv[++i];
-	}
-	else if (arg != "--scan-only") {  // Ignore --scan-only, handled elsewhere
-	    std::cerr << "Unknown argument in GUI mode: " << arg << std::endl;
-	    std::cerr << "Use --help for usage information" << std::endl;
-	    return 1;
-	}
+        if (result.count("help")) {
+            std::cout << "PicExplore - Get an Overview of Images in Filesystems\n";
+            std::cout << "\nUsage: picexplore [OPTIONS] [path]\n";
+            std::cout << options.help() << std::endl;
+            std::cout << "\nNew Architecture:\n";
+            std::cout << "  * LMDB database is automatically used for all directories\n";
+            std::cout << "  * Defaults to current working directory if no directory specified\n";
+            std::cout << "  * Unified threading architecture with separate scan/worker/writer threads\n";
+            std::cout << "\nExamples:\n";
+            std::cout << "  picexplore                           # Launch GUI with current directory\n";
+            std::cout << "  picexplore --directory ~/Pictures    # Launch GUI and scan specific directory\n";
+            std::cout << "  picexplore --directory ~/Pictures --debug-output /tmp/debug  # With debug output\n";
+            std::cout << "  picexplore --scan-only --help        # Show scan-only mode options\n";
+            return 0;
+        }
+        if (result.count("directory")) {
+            initial_directory = result["directory"].as<std::string>();
+        } else if (!nonopts.empty()) {
+            initial_directory = nonopts[0];
+        }
+    } catch (const cxxopts::exceptions::exception& e) {
+        std::cerr << "Error parsing options: " << e.what() << std::endl;
+        return 1;
     }
 
     // Default to current working directory if none specified
     if (initial_directory.empty()) {
-	initial_directory = std::filesystem::current_path().string();
-	std::cout << "[INFO] No directory specified, using current working directory: "
-		  << initial_directory << std::endl;
+        initial_directory = std::filesystem::current_path().string();
+        std::cout << "[INFO] No directory specified, using current working directory: "
+                  << initial_directory << std::endl;
     }
 
     // Create and show main window
@@ -475,7 +466,7 @@ int run_gui_mode(int argc, char* argv[]) {
 
     // Start scanning the directory
     if (!initial_directory.empty())
-	app.set_directory_path(initial_directory);
+        app.set_directory_path(initial_directory);
 
     app.show();
 
