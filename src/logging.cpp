@@ -22,6 +22,7 @@ Logger::Logger()
     , ui_level_(LogLevel::NONE)
     , thread_level_(LogLevel::NONE)
     , scan_level_(LogLevel::NONE)
+    , thumbnail_level_(LogLevel::NONE)
     , global_level_(LogLevel::NONE)
     , initialized_(false) {
 }
@@ -73,6 +74,14 @@ void Logger::initializeLevels() const {
         scan_level_ = global_level_;
     }
 
+    const char* thumbnail_env = std::getenv("THUMBNAIL_LOGGING");
+    if (thumbnail_env) {
+        int level = std::atoi(thumbnail_env);
+        thumbnail_level_ = static_cast<LogLevel>(std::max(0, std::min(2, level)));
+    } else {
+        thumbnail_level_ = global_level_;
+    }
+
     initialized_ = true;
 }
 
@@ -90,6 +99,8 @@ LogLevel Logger::getCategoryLevel(LogCategory category) const {
             return thread_level_;
         case LogCategory::SCAN:
             return scan_level_;
+        case LogCategory::THUMBNAIL:
+            return thumbnail_level_;
         default:
             return LogLevel::NONE;
     }
@@ -105,6 +116,8 @@ const char* Logger::getCategoryName(LogCategory category) const {
             return "THREAD";
         case LogCategory::SCAN:
             return "SCAN";
+        case LogCategory::THUMBNAIL:
+            return "THUMBNAIL";
         default:
             return "UNKNOWN";
     }
@@ -151,6 +164,10 @@ void Logger::logThread(LogLevel level, const std::string& message) const {
 
 void Logger::logScan(LogLevel level, const std::string& message) const {
     log(LogCategory::SCAN, level, message);
+}
+
+void Logger::logThumbnail(LogLevel level, const std::string& message) const {
+    log(LogCategory::THUMBNAIL, level, message);
 }
 
 } // namespace picexplore

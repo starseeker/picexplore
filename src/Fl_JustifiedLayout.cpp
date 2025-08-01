@@ -108,18 +108,19 @@ void Fl_JustifiedLayout::process_thread_manager_results() {
 	    }
 	    any_processed = true;
 
-	    log_ui_debug("Processed ThreadManager result for image " + std::to_string(result.image_index) +
-		" (cache_key: " + result.cache_key + ")");
+	    LOG_THUMBNAIL_BASIC("Processed ThreadManager result - replacing Loading... placeholder with real thumbnail for image " + 
+	                       std::to_string(result.image_index) + " (cache_key: " + result.cache_key + ")");
 	}
     }
 
-    log_batch_debug("Processed " + std::to_string(results_processed) + " ThreadManager thumbnail results, any_processed: " +
+    LOG_THUMBNAIL_VERBOSE("Processed " + std::to_string(results_processed) + " ThreadManager thumbnail results, any_processed: " +
 	    (any_processed ? "true" : "false"));
 
     // Trigger redraw if any thumbnails were processed
     if (any_processed) {
 	if (content_widget_) {
 	    content_widget_->redraw();
+	    LOG_THUMBNAIL_BASIC("Triggered UI update after receiving new thumbnails");
 	}
         // Start refinement timer after new thumbnails arrive
         start_refinement_timer();
@@ -392,8 +393,10 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
         auto rect_it = rectangle_thumbnail_cache_.find(rect_cache_key);
         if (rect_it != rectangle_thumbnail_cache_.end()) {
             // Found cached resized thumbnail - return it directly, no processing needed!
+            LOG_THUMBNAIL_VERBOSE("Rectangle cache hit - cache_key: " + rect_cache_key);
             return rect_it->second.get();
         }
+        LOG_THUMBNAIL_VERBOSE("Rectangle cache miss - cache_key: " + rect_cache_key);
     }
 
     // Get canonical size for cache lookup - this ensures we use consistent cache keys
@@ -410,9 +413,11 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
         auto cache_it = image_cache_.find(canonical_cache_key);
         if (cache_it == image_cache_.end()) {
             // Canonical size image not in cache - ThreadManager will generate it
+            LOG_THUMBNAIL_BASIC("Thumbnail cache miss - requesting from ThreadManager, cache_key: " + canonical_cache_key);
             return nullptr;
         }
 
+        LOG_THUMBNAIL_VERBOSE("Thumbnail cache hit - cache_key: " + canonical_cache_key);
         canonical_image = cache_it->second.get();
         if (!canonical_image) {
             return nullptr;
@@ -421,22 +426,28 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
         // If canonical image matches target size exactly, we can use it directly
         int target_size = std::max(target_width, target_height);
         if (canonical_size == target_size) {
+            LOG_THUMBNAIL_VERBOSE("Using canonical image directly - no scaling needed, size: " + std::to_string(canonical_size));
             result = canonical_image;
         } else {
             // Need downsampling - check if we already have a downsampled version cached in global cache
             std::string downsampled_cache_key = make_thumbnail_key(info.hash, target_width, target_height);
             auto downsampled_it = image_cache_.find(downsampled_cache_key);
             if (downsampled_it != image_cache_.end()) {
+                LOG_THUMBNAIL_VERBOSE("Found downsampled cache hit - cache_key: " + downsampled_cache_key);
                 result = downsampled_it->second.get();
             } else {
                 // Create downsampled version using FLTK or stb_image_resize fallback
+                LOG_THUMBNAIL_VERBOSE("Downsampling image from " + std::to_string(canonical_size) + 
+                                     " to " + std::to_string(target_width) + "x" + std::to_string(target_height));
                 std::unique_ptr<Fl_RGB_Image> downsampled_image = downsample_image(canonical_image, target_width, target_height);
                 if (downsampled_image) {
                     result = downsampled_image.get();
                     // Cache the downsampled version in global cache for future use
                     image_cache_[downsampled_cache_key] = std::move(downsampled_image);
+                    LOG_THUMBNAIL_VERBOSE("Cached downsampled image - cache_key: " + downsampled_cache_key);
                 } else {
                     // Fallback: return canonical image even if it's larger than requested
+                    LOG_THUMBNAIL_VERBOSE("Downsampling failed, using canonical image as fallback");
                     result = canonical_image;
                 }
             }
@@ -452,6 +463,7 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
             std::unique_ptr<Fl_RGB_Image> cached_copy = downsample_image(canonical_image, target_width, target_height);
             if (cached_copy) {
                 rectangle_thumbnail_cache_[rect_cache_key] = std::move(cached_copy);
+                LOG_THUMBNAIL_VERBOSE("Cached in rectangle cache - cache_key: " + rect_cache_key);
             }
         }
     }
@@ -557,6 +569,9 @@ void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const 
     Fl_RGB_Image* thumb_image = load_thumbnail_image(info, target_w, target_h);
 
     if (thumb_image) {
+        LOG_THUMBNAIL_BASIC("Drawing real thumbnail - path: " + info.path + 
+                           ", size: " + std::to_string(thumb_image->w()) + "x" + std::to_string(thumb_image->h()));
+        
         // Find the image index for quality tracking
         int image_index = -1;
         for (size_t i = 0; i < images_.size(); ++i) {
@@ -596,7 +611,7 @@ void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const 
         thumb_image->draw(img_x, img_y);
     } else {
         // Fallback to placeholder rendering
-        LOG_UI_VERBOSE("drawing placeholder for " + info.path);
+        LOG_THUMBNAIL_BASIC("Drawing placeholder (thumbnail not available) - path: " + info.path);
         draw_thumbnail_placeholder(x, y, w, h, info);
     }
 }
@@ -1184,7 +1199,7 @@ void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& 
 
     // Queue thumbnail requests for new images if ThreadManager is available
     if (thread_manager_) {
-	LOG_THREAD_BASIC("ThreadManager available, queuing thumbnail requests for " + std::to_string(batch.size()) + " new images");
+	LOG_THUMBNAIL_BASIC("ThreadManager available, queuing thumbnail requests for " + std::to_string(batch.size()) + " new images");
 	for (size_t i = 0; i < batch.size(); ++i) {
 	    const auto& info = batch[i];
 	    int image_index = old_size + i; // Image index in the main images_ vector
@@ -1198,7 +1213,7 @@ void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& 
 		info.hash
 	    );
 
-	    LOG_THREAD_VERBOSE("Queuing UIThumbnailTask for image " + std::to_string(image_index) +
+	    LOG_THUMBNAIL_VERBOSE("Queuing UIThumbnailTask for image " + std::to_string(image_index) +
 		" (cache_key: " + make_thumbnail_key(info.hash, task.target_width, task.target_height) + ")");
 
 	    thread_manager_->request_thumbnail(task);
@@ -1475,6 +1490,7 @@ void Fl_JustifiedLayout::start_refinement_timer() {
     if (!refinement_timer_active_) {
         refinement_timer_active_ = true;
         Fl::add_timeout(REFINEMENT_CHECK_INTERVAL, refinement_timer_callback, this);
+        LOG_THUMBNAIL_BASIC("Started refinement timer for higher-res thumbnail checks");
     }
 }
 
@@ -1482,6 +1498,7 @@ void Fl_JustifiedLayout::stop_refinement_timer() {
     if (refinement_timer_active_) {
         refinement_timer_active_ = false;
         Fl::remove_timeout(refinement_timer_callback, this);
+        LOG_THUMBNAIL_BASIC("Stopped refinement timer");
     }
 }
 
@@ -1490,6 +1507,7 @@ void Fl_JustifiedLayout::perform_refinement_pass() {
         return; // Timer was stopped
     }
 
+    LOG_THUMBNAIL_VERBOSE("Performing refinement pass - checking for higher-res thumbnails");
     bool any_refinement_needed = false;
 
     // Check all visible thumbnails for potential improvements
@@ -1533,6 +1551,8 @@ void Fl_JustifiedLayout::perform_refinement_pass() {
 
                     if (better_available) {
                         any_refinement_needed = true;
+                        LOG_THUMBNAIL_VERBOSE("Requesting higher-res thumbnail for refinement - image_index: " + 
+                                             std::to_string(i) + ", target: " + std::to_string(target_w) + "x" + std::to_string(target_h));
                         // Request thumbnail regeneration at higher quality
                         if (thread_manager_) {
                             UIThumbnailTask task(
@@ -1552,12 +1572,15 @@ void Fl_JustifiedLayout::perform_refinement_pass() {
     // Check if we should continue refinement or stop the timer
     if (any_refinement_needed) {
         // Schedule next refinement check
+        LOG_THUMBNAIL_VERBOSE("Refinement needed, scheduling next check");
         Fl::add_timeout(REFINEMENT_CHECK_INTERVAL, refinement_timer_callback, this);
     } else if (all_visible_thumbnails_optimal()) {
         // All visible thumbnails are optimal, stop refinement
+        LOG_THUMBNAIL_BASIC("All visible thumbnails optimal, stopping refinement timer");
         stop_refinement_timer();
     } else {
         // Continue checking in case new thumbnails become available
+        LOG_THUMBNAIL_VERBOSE("Continuing refinement checks");
         Fl::add_timeout(REFINEMENT_CHECK_INTERVAL, refinement_timer_callback, this);
     }
 }
@@ -1612,6 +1635,7 @@ void Fl_JustifiedLayout::start_scroll_settling_timer() {
     // Start new timer
     scroll_settling_timer_active_ = true;
     Fl::add_timeout(SCROLL_SETTLING_TIMEOUT, scroll_settling_timer_callback, this);
+    LOG_THUMBNAIL_VERBOSE("Started scroll settling timer");
 }
 
 void Fl_JustifiedLayout::stop_scroll_settling_timer() {
@@ -1637,8 +1661,8 @@ void Fl_JustifiedLayout::handle_scroll_settling_timeout() {
     // Get new generation ID and re-evaluate visible thumbnails
     current_generation_id_ = thread_manager_->get_next_generation_id();
     
-    LOG_THREAD_BASIC("Scroll settling timeout - re-evaluating visible thumbnails with generation ID: " + 
-                     std::to_string(current_generation_id_));
+    LOG_THUMBNAIL_BASIC("Scroll settling timeout - re-evaluating visible thumbnails with generation ID: " + 
+                        std::to_string(current_generation_id_));
     
     // Re-queue high priority thumbnails for currently visible area
     update_visibility_and_queue_thumbnails(true);  // from_timer_callback = true

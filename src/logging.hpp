@@ -33,10 +33,11 @@ namespace picexplore {
  * Debug logging categories
  */
 enum class LogCategory {
-    BATCH,    ///< Image batch and layout processing
-    UI,       ///< User interface and layout operations
-    THREAD,   ///< Thread management and thumbnail processing
-    SCAN      ///< Directory scanning and file discovery
+    BATCH,      ///< Image batch and layout processing
+    UI,         ///< User interface and layout operations
+    THREAD,     ///< Thread management and thumbnail processing
+    SCAN,       ///< Directory scanning and file discovery
+    THUMBNAIL   ///< Thumbnail operations (cache, loading, timers, UI updates)
 };
 
 /**
@@ -57,6 +58,7 @@ enum class LogLevel {
  * - UI_LOGGING: Controls UI and layout logging (0, 1, or 2)
  * - THREAD_LOGGING: Controls thread management logging (0, 1, or 2)
  * - SCAN_LOGGING: Controls scanning logging (0, 1, or 2)
+ * - THUMBNAIL_LOGGING: Controls thumbnail operations logging (0, 1, or 2)
  * - PICEXPLORE_LOGGING: Global logging level override (0, 1, or 2)
  */
 class Logger {
@@ -83,6 +85,7 @@ public:
     void logUI(LogLevel level, const std::string& message) const;
     void logThread(LogLevel level, const std::string& message) const;
     void logScan(LogLevel level, const std::string& message) const;
+    void logThumbnail(LogLevel level, const std::string& message) const;
 
 private:
     Logger();
@@ -107,6 +110,7 @@ private:
     mutable LogLevel ui_level_;
     mutable LogLevel thread_level_;
     mutable LogLevel scan_level_;
+    mutable LogLevel thumbnail_level_;
     mutable LogLevel global_level_;
     mutable bool initialized_;
 
@@ -144,3 +148,9 @@ private:
 
 #define LOG_SCAN_VERBOSE(msg) \
     picexplore::Logger::getInstance().logScan(picexplore::LogLevel::VERBOSE, msg)
+
+#define LOG_THUMBNAIL_BASIC(msg) \
+    picexplore::Logger::getInstance().logThumbnail(picexplore::LogLevel::BASIC, msg)
+
+#define LOG_THUMBNAIL_VERBOSE(msg) \
+    picexplore::Logger::getInstance().logThumbnail(picexplore::LogLevel::VERBOSE, msg)

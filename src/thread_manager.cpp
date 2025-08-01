@@ -465,16 +465,14 @@ void ThumbnailWorkers::enqueue_high_priority(const UIThumbnailTask& task) {
     
     // Deduplication: Check if a request for this thumbnail is already in progress
     if (is_request_in_flight(cache_key)) {
-	std::cout << "[DEBUG] ThumbnailWorkers: Skipping duplicate high priority request - cache_key: " << cache_key << " already in flight" << std::endl;
-	std::cout.flush();
+	LOG_THUMBNAIL_VERBOSE("Skipping duplicate high priority thumbnail request - cache_key: " + cache_key + " already in flight");
 	return;
     }
 
     // Mark request as in-flight before enqueuing to prevent race conditions
     mark_request_in_flight(cache_key);
     
-    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing high priority task to highPriorityQueue - image_index: " << task.image_index << ", hash: " << cache_key << std::endl;
-    std::cout.flush();
+    LOG_THUMBNAIL_VERBOSE("Enqueuing high priority thumbnail task - image_index: " + std::to_string(task.image_index) + ", cache_key: " + cache_key);
     high_priority_queue_.enqueue(task);
 }
 
@@ -483,16 +481,14 @@ void ThumbnailWorkers::enqueue_low_priority(const UIThumbnailTask& task) {
     
     // Deduplication: Check if a request for this thumbnail is already in progress
     if (is_request_in_flight(cache_key)) {
-	std::cout << "[DEBUG] ThumbnailWorkers: Skipping duplicate low priority request - cache_key: " << cache_key << " already in flight" << std::endl;
-	std::cout.flush();
+	LOG_THUMBNAIL_VERBOSE("Skipping duplicate low priority thumbnail request - cache_key: " + cache_key + " already in flight");
 	return;
     }
 
     // Mark request as in-flight before enqueuing to prevent race conditions
     mark_request_in_flight(cache_key);
     
-    std::cout << "[DEBUG] ThumbnailWorkers: Enqueuing low priority task to lowPriorityQueue - image_index: " << task.image_index << ", hash: " <<  cache_key << std::endl;
-    std::cout.flush();
+    LOG_THUMBNAIL_VERBOSE("Enqueuing low priority thumbnail task - image_index: " + std::to_string(task.image_index) + ", cache_key: " +  cache_key);
     low_priority_queue_.enqueue(task);
 }
 
@@ -501,11 +497,10 @@ bool ThumbnailWorkers::try_dequeue_result(UIDrawTask& result) {
     if (success) {
 	// Check for shutdown sentinel and handle accordingly
 	if (result.is_shutdown_sentinel) {
-	    std::cout << "[DEBUG] ThumbnailWorkers: Received shutdown sentinel on result queue" << std::endl;
+	    LOG_THUMBNAIL_VERBOSE("Received shutdown sentinel on result queue");
 	    return false;  // Don't return shutdown sentinels to the UI
 	}
-	std::cout << "[DEBUG] ThumbnailWorkers: Dequeued draw result from result_queue - image_index: " << result.image_index << ", cache_key: " << result.cache_key << std::endl;
-	std::cout.flush();
+	LOG_THUMBNAIL_VERBOSE("Dequeued thumbnail draw result - image_index: " + std::to_string(result.image_index) + ", cache_key: " + result.cache_key);
     }
     return success;
 }
@@ -545,20 +540,20 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	    
 	    // Check generation ID for high priority tasks - discard stale requests
 	    if (task.generation_id != 0 && task.generation_id < current_generation_id_.load()) {
-		std::cout << "[DEBUG] ThumbnailWorkers: Discarding stale high priority task - image_index: " << task.image_index 
-			  << ", task_gen: " << task.generation_id << ", current_gen: " << current_generation_id_.load() << std::endl;
+		LOG_THUMBNAIL_VERBOSE("Discarding stale high priority task - image_index: " + std::to_string(task.image_index) + 
+		                     ", task_gen: " + std::to_string(task.generation_id) + ", current_gen: " + std::to_string(current_generation_id_.load()));
 		continue;  // Skip this task and get next one
 	    }
 	    
-	    std::cout << "[DEBUG] ThumbnailWorkers: Dequeued task from highPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << ", gen_id: " << task.generation_id << std::endl;
+	    LOG_THUMBNAIL_VERBOSE("Dequeued task from highPriorityQueue - image_index: " + std::to_string(task.image_index) + ", hash: " + task.hash + ", gen_id: " + std::to_string(task.generation_id));
 	    found_task = true;
 	} else if (low_priority_queue_.wait_dequeue_timed(task, std::chrono::milliseconds(50))) {
 	    // Check for shutdown sentinel
 	    if (task.is_shutdown_sentinel) {
-		std::cout << "[DEBUG] ThumbnailWorkers: Received shutdown sentinel on low priority queue, exiting worker thread" << std::endl;
+		LOG_THUMBNAIL_VERBOSE("Received shutdown sentinel on low priority queue, exiting worker thread");
 		break;
 	    }
-	    std::cout << "[DEBUG] ThumbnailWorkers: Dequeued task from lowPriorityQueue - image_index: " << task.image_index << ", hash: " << task.hash << std::endl;
+	    LOG_THUMBNAIL_VERBOSE("Dequeued task from lowPriorityQueue - image_index: " + std::to_string(task.image_index) + ", hash: " + task.hash);
 	    found_task = true;
 	}
 	// If both wait_dequeue_timed calls returned false, it means timeout - continue loop to check shutdown flags
@@ -566,7 +561,7 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	if (found_task) {
 	    active_tasks_.fetch_add(1);
 	    tasks_processed++;
-	    std::cout << "[DEBUG] ThumbnailWorkers: Processing thumbnail task - image_index: " << task.image_index << ", target size: " << task.target_width << "x" << task.target_height << std::endl;
+	    LOG_THUMBNAIL_VERBOSE("Processing thumbnail task - image_index: " + std::to_string(task.image_index) + ", target size: " + std::to_string(task.target_width) + "x" + std::to_string(task.target_height));
 
 	    // Generate UI thumbnail
 	    std::unique_ptr<Fl_RGB_Image> thumbnail;
@@ -581,7 +576,7 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 
 	    // Only queue real thumbnails for UI - placeholders are generated dynamically in draw code
 	    if (thumbnail) {
-		std::cout << "[DEBUG] ThumbnailWorkers: Generated real thumbnail successfully, enqueuing to result_queue - image_index: " << task.image_index << ", cache_key: " << cache_key << std::endl;
+		LOG_THUMBNAIL_BASIC("Generated real thumbnail successfully, enqueuing to result_queue - image_index: " + std::to_string(task.image_index) + ", cache_key: " + cache_key);
 		UIDrawTask result(task.image_index, std::move(thumbnail), cache_key);
 		result_queue_.enqueue(std::move(result));
 
@@ -594,11 +589,10 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 		    }
 		};
 
-		std::cout << "[DEBUG] ThumbnailWorkers: Notifying UI via Fl::awake() for completed thumbnail - image_index: " << task.image_index << std::endl;
-		std::cout.flush();
+		LOG_THUMBNAIL_BASIC("Notifying UI via Fl::awake() for completed thumbnail - image_index: " + std::to_string(task.image_index));
 		Fl::awake(thumbnail_ready_callback, this);
 	    } else {
-		std::cout << "[DEBUG] ThumbnailWorkers: No real thumbnail available for task - image_index: " << task.image_index << ", hash: " << task.hash << " (placeholder will be generated in UI)" << std::endl;
+		LOG_THUMBNAIL_VERBOSE("No real thumbnail available for task - image_index: " + std::to_string(task.image_index) + ", hash: " + task.hash + " (placeholder will be generated in UI)");
 	    }
 
 	    active_tasks_.fetch_sub(1);
@@ -608,9 +602,7 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	// No explicit sleep needed - wait_dequeue_timed handles efficient blocking
     }
 
-    std::cout << "[DEBUG] ThumbnailWorkers: Thumbnail worker thread exiting, processed "
-	      << tasks_processed << " tasks" << std::endl;
-    std::cout.flush();
+    LOG_THUMBNAIL_VERBOSE("Thumbnail worker thread exiting, processed " + std::to_string(tasks_processed) + " tasks");
 }
 
 std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UIThumbnailTask& task) {
@@ -618,10 +610,10 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     // This function handles the complete pipeline from LMDB lookup to FLTK image creation
     // Returns nullptr if no real thumbnail is available - placeholders are handled in UI
 
-    std::cout << "[DEBUG] ThumbnailWorkers: Starting thumbnail generation from LMDB - hash: " << make_thumbnail_key(task.hash, task.target_width, task.target_height) << std::endl;
+    LOG_THUMBNAIL_VERBOSE("Starting thumbnail generation from LMDB - cache_key: " + make_thumbnail_key(task.hash, task.target_width, task.target_height));
 
     if (!database_) {
-	std::cout << "[DEBUG] ThumbnailWorkers: Database not available, no thumbnail to generate - hash: " << task.hash << std::endl;
+	LOG_THUMBNAIL_VERBOSE("Database not available, no thumbnail to generate - hash: " + task.hash);
 	std::cerr << "[WARNING] ThumbnailWorkers: No database available for hash " << task.hash << std::endl;
 	return nullptr;
     }
