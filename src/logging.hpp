@@ -60,6 +60,7 @@ enum class LogLevel {
  * - SCAN_LOGGING: Controls scanning logging (0, 1, or 2)
  * - THUMBNAIL_LOGGING: Controls thumbnail operations logging (0, 1, or 2)
  * - PICEXPLORE_LOGGING: Global logging level override (0, 1, or 2)
+ * - THUMBNAIL_LOG_IMAGE: Filename filter for image-specific logging
  */
 class Logger {
 public:
@@ -79,6 +80,11 @@ public:
     void log(LogCategory category, LogLevel level, const std::string& message) const;
 
     /**
+     * Log a message for a specific category and level with image path filtering
+     */
+    void log(LogCategory category, LogLevel level, const std::string& message, const std::string& image_path) const;
+
+    /**
      * Convenience methods for specific categories
      */
     void logBatch(LogLevel level, const std::string& message) const;
@@ -86,6 +92,15 @@ public:
     void logThread(LogLevel level, const std::string& message) const;
     void logScan(LogLevel level, const std::string& message) const;
     void logThumbnail(LogLevel level, const std::string& message) const;
+
+    /**
+     * Convenience methods for specific categories with image path filtering
+     */
+    void logBatch(LogLevel level, const std::string& message, const std::string& image_path) const;
+    void logUI(LogLevel level, const std::string& message, const std::string& image_path) const;
+    void logThread(LogLevel level, const std::string& message, const std::string& image_path) const;
+    void logScan(LogLevel level, const std::string& message, const std::string& image_path) const;
+    void logThumbnail(LogLevel level, const std::string& message, const std::string& image_path) const;
 
 private:
     Logger();
@@ -104,6 +119,16 @@ private:
     const char* getCategoryName(LogCategory category) const;
 
     /**
+     * Check if an image path matches the filter (if set)
+     */
+    bool matchesImageFilter(const std::string& image_path) const;
+
+    /**
+     * Extract filename from path
+     */
+    std::string extractFilename(const std::string& path) const;
+
+    /**
      * Cache for log levels (initialized once)
      */
     mutable LogLevel batch_level_;
@@ -112,6 +137,7 @@ private:
     mutable LogLevel scan_level_;
     mutable LogLevel thumbnail_level_;
     mutable LogLevel global_level_;
+    mutable std::string image_filter_;
     mutable bool initialized_;
 
     /**
@@ -154,3 +180,36 @@ private:
 
 #define LOG_THUMBNAIL_VERBOSE(msg) \
     picexplore::Logger::getInstance().logThumbnail(picexplore::LogLevel::VERBOSE, msg)
+
+/**
+ * Convenience macros for logging with image path filtering
+ */
+#define LOG_BATCH_BASIC_IMG(msg, img_path) \
+    picexplore::Logger::getInstance().logBatch(picexplore::LogLevel::BASIC, msg, img_path)
+
+#define LOG_BATCH_VERBOSE_IMG(msg, img_path) \
+    picexplore::Logger::getInstance().logBatch(picexplore::LogLevel::VERBOSE, msg, img_path)
+
+#define LOG_UI_BASIC_IMG(msg, img_path) \
+    picexplore::Logger::getInstance().logUI(picexplore::LogLevel::BASIC, msg, img_path)
+
+#define LOG_UI_VERBOSE_IMG(msg, img_path) \
+    picexplore::Logger::getInstance().logUI(picexplore::LogLevel::VERBOSE, msg, img_path)
+
+#define LOG_THREAD_BASIC_IMG(msg, img_path) \
+    picexplore::Logger::getInstance().logThread(picexplore::LogLevel::BASIC, msg, img_path)
+
+#define LOG_THREAD_VERBOSE_IMG(msg, img_path) \
+    picexplore::Logger::getInstance().logThread(picexplore::LogLevel::VERBOSE, msg, img_path)
+
+#define LOG_SCAN_BASIC_IMG(msg, img_path) \
+    picexplore::Logger::getInstance().logScan(picexplore::LogLevel::BASIC, msg, img_path)
+
+#define LOG_SCAN_VERBOSE_IMG(msg, img_path) \
+    picexplore::Logger::getInstance().logScan(picexplore::LogLevel::VERBOSE, msg, img_path)
+
+#define LOG_THUMBNAIL_BASIC_IMG(msg, img_path) \
+    picexplore::Logger::getInstance().logThumbnail(picexplore::LogLevel::BASIC, msg, img_path)
+
+#define LOG_THUMBNAIL_VERBOSE_IMG(msg, img_path) \
+    picexplore::Logger::getInstance().logThumbnail(picexplore::LogLevel::VERBOSE, msg, img_path)
