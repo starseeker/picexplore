@@ -24,6 +24,7 @@
 
 #include "database.hpp"
 #include "utils.hpp"
+#include "logging.hpp"
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
@@ -56,14 +57,14 @@ bool DatabaseManager::open(const std::string& db_path) {
 
     int rc = mdb_env_create(&env_);
     if (rc != 0) {
-	std::cerr << "[ERROR] DatabaseManager: Failed to create LMDB environment: " << mdb_strerror(rc) << std::endl;
+	LOG_SCAN_BASIC("DatabaseManager: Failed to create LMDB environment: " + std::string(mdb_strerror(rc)));
 	return false;
     }
 
     // Set map size to handle large databases (1GB)
     rc = mdb_env_set_mapsize(env_, MAX_DB_SIZE);
     if (rc != 0) {
-	std::cerr << "[ERROR] DatabaseManager: Failed to set LMDB map size: " << mdb_strerror(rc) << std::endl;
+	LOG_SCAN_BASIC("DatabaseManager: Failed to set LMDB map size: " + std::string(mdb_strerror(rc)));
 	mdb_env_close(env_);
 	env_ = nullptr;
 	return false;
@@ -79,8 +80,7 @@ bool DatabaseManager::open(const std::string& db_path) {
 
     rc = mdb_env_open(env_, db_path.c_str(), flags, 0664);
     if (rc != 0) {
-	std::cerr << "[ERROR] DatabaseManager: Failed to open LMDB database at " << db_path
-	    << ": " << mdb_strerror(rc) << std::endl;
+	LOG_SCAN_BASIC("DatabaseManager: Failed to open LMDB database at " + db_path + ": " + std::string(mdb_strerror(rc)));
 	mdb_env_close(env_);
 	env_ = nullptr;
 	return false;
@@ -90,7 +90,7 @@ bool DatabaseManager::open(const std::string& db_path) {
     MDB_txn* setup_txn;
     rc = mdb_txn_begin(env_, nullptr, 0, &setup_txn);
     if (rc != 0) {
-	std::cerr << "[ERROR] DatabaseManager: Failed to begin setup transaction: " << mdb_strerror(rc) << std::endl;
+	LOG_SCAN_BASIC("DatabaseManager: Failed to begin setup transaction: " + std::string(mdb_strerror(rc)));
 	mdb_env_close(env_);
 	env_ = nullptr;
 	return false;
@@ -98,7 +98,7 @@ bool DatabaseManager::open(const std::string& db_path) {
 
     rc = mdb_dbi_open(setup_txn, nullptr, MDB_CREATE, &dbi_);
     if (rc != 0) {
-	std::cerr << "[ERROR] DatabaseManager: Failed to open DBI: " << mdb_strerror(rc) << std::endl;
+	LOG_SCAN_BASIC("DatabaseManager: Failed to open DBI: " + std::string(mdb_strerror(rc)));
 	mdb_txn_abort(setup_txn);
 	mdb_env_close(env_);
 	env_ = nullptr;
@@ -107,7 +107,7 @@ bool DatabaseManager::open(const std::string& db_path) {
 
     rc = mdb_txn_commit(setup_txn);
     if (rc != 0) {
-	std::cerr << "[ERROR] DatabaseManager: Failed to commit setup transaction: " << mdb_strerror(rc) << std::endl;
+	LOG_SCAN_BASIC("DatabaseManager: Failed to commit setup transaction: " + std::string(mdb_strerror(rc)));
 	mdb_env_close(env_);
 	env_ = nullptr;
 	return false;
@@ -133,7 +133,7 @@ bool DatabaseManager::begin_write_transaction(MDB_txn*& txn) {
     int rc = mdb_txn_begin(env_, nullptr, 0, &txn);
     if (rc != 0) {
 	txn = nullptr;
-	std::cerr << "[ERROR] Failed to begin write transaction: " << mdb_strerror(rc) << std::endl;
+	LOG_SCAN_BASIC("DatabaseManager: Failed to begin write transaction: " + std::string(mdb_strerror(rc)));
 	return false;
     }
 
@@ -148,7 +148,7 @@ bool DatabaseManager::begin_read_transaction(MDB_txn*& txn) {
     int rc = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
     if (rc != 0) {
 	txn = nullptr;
-	std::cerr << "[ERROR] Failed to begin read transaction: " << mdb_strerror(rc) << std::endl;
+	LOG_SCAN_BASIC("DatabaseManager: Failed to begin read transaction: " + std::string(mdb_strerror(rc)));
 	return false;
     }
 
@@ -163,7 +163,7 @@ bool DatabaseManager::commit_transaction(MDB_txn* txn) {
     int rc = mdb_txn_commit(txn);
     bool success = (rc == 0);
     if (!success) {
-	std::cerr << "[ERROR] Transaction commit failed: " << mdb_strerror(rc) << std::endl;
+	LOG_SCAN_BASIC("DatabaseManager: Transaction commit failed: " + std::string(mdb_strerror(rc)));
     }
     return success;
 }
@@ -524,12 +524,12 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	Timer& timer, bool& should_skip) {
     should_skip = false;
 
-    std::cout << "[DEBUG] DatabaseManager: Processing image file: " << filepath << std::endl;
+    LOG_SCAN_VERBOSE("DatabaseManager: Processing image file: " + filepath);
 
     // First, try to extract metadata quickly without loading full image
     ImageInfo quick_info;
     if (extract_image_metadata(filepath, quick_info)) {
-	std::cout << "[DEBUG] DatabaseManager: Extracted metadata - hash: " << quick_info.hash << ", aspect_ratio: " << quick_info.aspect_ratio << std::endl;
+	LOG_SCAN_VERBOSE("DatabaseManager: Extracted metadata - hash: " + quick_info.hash + ", aspect_ratio: " + std::to_string(quick_info.aspect_ratio));
 	// Emit ImageInfo immediately for stage 1 UI population
 	if (image_info_callback_) {
 	    image_info_callback_(quick_info);
@@ -540,7 +540,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	write_tasks.emplace_back(WriteTask::STORE_PATH, path_key, filepath);
 	write_tasks.emplace_back(WriteTask::STORE_IMAGE_METADATA, quick_info.hash, filepath, quick_info.aspect_ratio);
     } else {
-	std::cout << "[DEBUG] DatabaseManager: Failed to extract metadata, skipping file: " << filepath << std::endl;
+	LOG_SCAN_VERBOSE("DatabaseManager: Failed to extract metadata, skipping file: " + filepath);
 	// Fallback to full image loading for problematic files
 	should_skip = true;
 	return false;
@@ -548,19 +548,19 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 
     // Load image with stb_image for thumbnail generation
     int width, height, channels;
-    std::cout << "[DEBUG] DatabaseManager: Loading image data for thumbnail generation: " << filepath << std::endl;
+    LOG_SCAN_VERBOSE("DatabaseManager: Loading image data for thumbnail generation: " + filepath);
     unsigned char* image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 0);
     if (!image_data) {
-	std::cout << "[DEBUG] DatabaseManager: Failed to load image data, returning with metadata only - file: " << filepath << ", reason: " << stbi_failure_reason() << std::endl;
-	fprintf(stderr, "Error: Failed to load image '%s': %s\n", filepath.c_str(), stbi_failure_reason());
+	LOG_SCAN_VERBOSE("DatabaseManager: Failed to load image data, returning with metadata only - file: " + filepath + ", reason: " + std::string(stbi_failure_reason()));
+	LOG_SCAN_BASIC("DatabaseManager: Failed to load image '" + filepath + "': " + std::string(stbi_failure_reason()));
 	// Don't mark as should_skip since we already have metadata
 	return true; // Return true since we have metadata stored
     }
 
     // Check for zero width or height
     if (width <= 0 || height <= 0) {
-	std::cout << "[DEBUG] DatabaseManager: Invalid image dimensions, returning with metadata only - file: " << filepath << ", dimensions: " << width << "x" << height << std::endl;
-	fprintf(stderr, "Error: Invalid image dimensions for '%s': %dx%d\n", filepath.c_str(), width, height);
+	LOG_SCAN_VERBOSE("DatabaseManager: Invalid image dimensions, returning with metadata only - file: " + filepath + ", dimensions: " + std::to_string(width) + "x" + std::to_string(height));
+	LOG_SCAN_BASIC("DatabaseManager: Invalid image dimensions for '" + filepath + "': " + std::to_string(width) + "x" + std::to_string(height));
 	stbi_image_free(image_data);
 	// Don't mark as should_skip since we already have metadata
 	return true;
@@ -765,8 +765,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	}
     }
 
-    std::cout << "[DEBUG] DatabaseManager: Completed thumbnail generation for file: " << filepath << ", success: " << (thumbnails_generated ? "true" : "false") << std::endl;
-    std::cout.flush();
+    LOG_SCAN_VERBOSE("DatabaseManager: Completed thumbnail generation for file: " + filepath + ", success: " + (thumbnails_generated ? "true" : "false"));
     stbi_image_free(image_data);
     return thumbnails_generated;
 }
@@ -776,15 +775,14 @@ void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_
 	Timer& timer, StatusReporter& reporter,
 	std::atomic<int>& processed_count, std::atomic<int>& skipped_count) {
 
-    std::cout << "[DEBUG] DatabaseManager: Worker thread started, processing files " << start_idx << " to " << (end_idx - 1) << " (total: " << (end_idx - start_idx) << " files)" << std::endl;
-    std::cout.flush();
+    LOG_SCAN_BASIC("DatabaseManager: Worker thread started, processing files " + std::to_string(start_idx) + " to " + std::to_string(end_idx - 1) + " (total: " + std::to_string(end_idx - start_idx) + " files)");
 
     size_t local_processed = 0;
     size_t local_skipped = 0;
 
     for (size_t i = start_idx; i < end_idx && !stop_processing_.load(); i++) {
 	const std::string& filepath = files[i];
-	std::cout << "[DEBUG] DatabaseManager: Worker processing file: " << filepath << std::endl;
+	LOG_SCAN_VERBOSE("DatabaseManager: Worker processing file: " + filepath);
 
 	std::vector<WriteTask> write_tasks;
 	bool should_skip = false;
@@ -792,20 +790,20 @@ void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_
 	bool success = process_image_file(filepath, write_tasks, timer, should_skip);
 
 	if (should_skip) {
-	    std::cout << "[DEBUG] DatabaseManager: Skipping file (already processed or error): " << filepath << std::endl;
+	    LOG_SCAN_VERBOSE("DatabaseManager: Skipping file (already processed or error): " + filepath);
 	    local_skipped++;
 	    skipped_count.fetch_add(1);
 	} else if (success) {
 	    // Enqueue all write tasks for this image
-	    std::cout << "[DEBUG] DatabaseManager: Enqueuing " << write_tasks.size() << " write tasks for file: " << filepath << std::endl;
+	    LOG_SCAN_VERBOSE("DatabaseManager: Enqueuing " + std::to_string(write_tasks.size()) + " write tasks for file: " + filepath);
 	    for (const auto& task : write_tasks) {
 		write_queue.enqueue(task);
-		std::cout << "[DEBUG] DatabaseManager: Enqueued write task to writeQueue - type: " << task.type << ", key: " << task.key << std::endl;
+		LOG_SCAN_VERBOSE("DatabaseManager: Enqueued write task to writeQueue - type: " + std::to_string(task.type) + ", key: " + task.key);
 	    }
 	    local_processed++;
 	    processed_count.fetch_add(1);
 	} else {
-	    std::cout << "[DEBUG] DatabaseManager: Failed to process file: " << filepath << std::endl;
+	    LOG_SCAN_VERBOSE("DatabaseManager: Failed to process file: " + filepath);
 	    local_skipped++;
 	    skipped_count.fetch_add(1);
 	}
@@ -816,8 +814,7 @@ void DatabaseManager::worker_thread(const std::vector<std::string>& files, size_
 	}
     }
 
-    std::cout << "[DEBUG] DatabaseManager: Worker thread exiting - processed: " << local_processed << ", skipped: " << local_skipped << std::endl;
-    std::cout.flush();
+    LOG_SCAN_BASIC("DatabaseManager: Worker thread exiting - processed: " + std::to_string(local_processed) + ", skipped: " + std::to_string(local_skipped));
 }
 
 void DatabaseManager::writer_thread(moodycamel::BlockingConcurrentQueue<WriteTask>& write_queue,
@@ -825,8 +822,7 @@ void DatabaseManager::writer_thread(moodycamel::BlockingConcurrentQueue<WriteTas
 	Timer& timer, StatusReporter& reporter,
 	std::atomic<int>& write_count) {
 
-    std::cout << "[DEBUG] DatabaseManager: Writer thread started for batched database writes" << std::endl;
-    std::cout.flush();
+    LOG_SCAN_BASIC("DatabaseManager: Writer thread started for batched database writes");
 
     constexpr int BATCH_SIZE = 100;
     std::vector<WriteTask> batch;
