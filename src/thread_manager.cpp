@@ -24,6 +24,7 @@
 
 #include "thread_manager.hpp"
 #include "utils.hpp"
+#include "logging.hpp"
 #include <FL/Fl.H>
 #include <iostream>
 #include <chrono>
@@ -79,10 +80,10 @@ bool DirectoryScanThread::start_scan(const std::string& directory_path, const st
 
     // Set up database callback for stage 1 metadata
     database_->set_image_info_callback([this](const ImageInfo& info) {
-	std::cout << "[DEBUG] DirectoryScanThread: Received image metadata callback - path: " << info.path << ", hash: " << info.hash << ", aspect_ratio: " << info.aspect_ratio << std::endl;
-	std::cout.flush();
+	LOG_SCAN_VERBOSE("DirectoryScanThread: Received image metadata callback - path: " + info.path + 
+	                ", hash: " + info.hash + ", aspect_ratio: " + std::to_string(info.aspect_ratio));
 	if (metadata_callback_) {
-	    std::cout << "[DEBUG] DirectoryScanThread: Invoking metadata callback for UI notification - path: " << info.path << std::endl;
+	    LOG_SCAN_VERBOSE("DirectoryScanThread: Invoking metadata callback for UI notification - path: " + info.path);
 	    metadata_callback_(info);
 	}
     });
@@ -183,7 +184,7 @@ void UpdateMonitorThread::join() {
 }
 
 void UpdateMonitorThread::monitor_thread_main() {
-    std::cout << "[DEBUG] UpdateMonitorThread: Starting monitoring thread" << std::endl;
+    LOG_SCAN_BASIC("UpdateMonitorThread: Starting monitoring thread");
     std::cout.flush();
 
     while (!should_stop_.load() && !GlobalFlags::is_shutdown_requested()) {
@@ -199,14 +200,14 @@ void UpdateMonitorThread::monitor_thread_main() {
 		}
 	    };
 
-	    std::cout << "[DEBUG] UpdateMonitorThread: Notifying UI via Fl::awake() for scan progress update" << std::endl;
+	    LOG_SCAN_BASIC("UpdateMonitorThread: Notifying UI via Fl::awake() for scan progress update");
 	    std::cout.flush();
 	    Fl::awake(ui_update_callback, this);
 	}
 
 	// Check for cancellation requests
 	if (GlobalFlags::is_cancel_requested()) {
-	    std::cout << "[DEBUG] UpdateMonitorThread: Cancel request detected, stopping scan thread" << std::endl;
+	    LOG_SCAN_BASIC("UpdateMonitorThread: Cancel request detected, stopping scan thread");
 	    if (scan_thread_) {
 		scan_thread_->stop_scan();
 	    }
@@ -217,7 +218,7 @@ void UpdateMonitorThread::monitor_thread_main() {
 	std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    std::cout << "[DEBUG] UpdateMonitorThread: Thread exiting" << std::endl;
+    LOG_SCAN_BASIC("UpdateMonitorThread: Thread exiting");
     std::cout.flush();
 }
 
@@ -268,7 +269,7 @@ void WorkerPool::join_all() {
 void WorkerPool::worker_thread_main() {
     active_workers_.fetch_add(1);
 
-    std::cout << "[DEBUG] WorkerPool: Worker thread started" << std::endl;
+    LOG_THREAD_BASIC("WorkerPool: Worker thread started");
     std::cout.flush();
 
     ThumbnailGenerationTask task;
@@ -282,18 +283,19 @@ void WorkerPool::worker_thread_main() {
 	    if (scan_thread_->thumbnail_gen_queue_.wait_dequeue_timed(task, std::chrono::milliseconds(100))) {
 		// Check for shutdown sentinel
 		if (task.is_shutdown_sentinel) {
-		    std::cout << "[DEBUG] WorkerPool: Received shutdown sentinel, exiting worker thread" << std::endl;
+		    LOG_THREAD_BASIC("WorkerPool: Received shutdown sentinel, exiting worker thread");
 		    break;
 		}
 
-		std::cout << "[DEBUG] WorkerPool: Dequeued thumbnail generation task from thumbnail_gen_queue - file: " << task.file_path << ", hash: " << task.hash << std::endl;
+		LOG_THREAD_VERBOSE("WorkerPool: Dequeued thumbnail generation task from thumbnail_gen_queue - file: " + 
+		                   task.file_path + ", hash: " + task.hash);
 		found_task = true;
 		processed_count_.fetch_add(1);
 
 		// Process the thumbnail generation task from directory scan
 		// This connects to the existing DatabaseManager thumbnail generation pipeline
 		if (scan_thread_->database_) {
-		    std::cout << "[DEBUG] WorkerPool: Generating thumbnails for file: " << task.file_path << std::endl;
+		    LOG_THREAD_BASIC("WorkerPool: Generating thumbnails for file: " + task.file_path);
 		    // Use the existing optimized thumbnail generation method that handles:
 		    // - JPEG DCT-domain downscaling for efficiency
 		    // - Multiple thumbnail sizes (32, 64, 128, 256, 512, 1024px)
