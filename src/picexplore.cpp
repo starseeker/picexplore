@@ -58,10 +58,7 @@ namespace fs = std::filesystem;
 // Forward declaration of GUI window class
 class PicExploreWindow {
     public:
-	PicExploreWindow() : window_(nullptr), layout_widget_(nullptr), thread_manager_(nullptr) {
-	    // Initialize the new thread manager
-	    thread_manager_ = std::make_unique<ThreadManager>();
-
+	PicExploreWindow() : window_(nullptr), layout_widget_(nullptr), thread_manager_(std::make_unique<ThreadManager>()) {
 	    create_window();
 	    setup_callbacks();
 	    setup_thread_callbacks();
@@ -81,57 +78,35 @@ class PicExploreWindow {
 
 	void run() {
 
-	    // Install debug handlers for various FLTK events
-	    setup_fltk_debug_handlers();
-
-	    // Run the main event loop with periodic debug status
+	    // Run the main event loop
 	    while (Fl::first_window()) {
-
 		// Wait for and process events with timeout for debug logging
 		double wait_result = Fl::wait(1.0); // Wait up to 1 second for events
-
-		if (wait_result > 0) {
-		} else if (wait_result == 0) {
-		} else {
+		if (wait_result < 0) {
 		    break;
 		}
 	    }
-
 	}
 
 	void set_directory_path(const std::string& path) {
-	    // New architecture: Start directory scan using ThreadManager
+	    // Start directory scan using ThreadManager
 	    std::cout << "[INFO] Starting directory scan: " << path << std::endl;
-
-	    if (thread_manager_) {
-		bool success = thread_manager_->start_directory_scan(path);
-		if (!success) {
-		    fl_alert("Failed to start directory scan: %s", path.c_str());
-		}
-	    } else {
+	    if (!thread_manager_) {
 		fl_alert("Thread manager not initialized");
+		return;
 	    }
+	    bool success = thread_manager_->start_directory_scan(path);
+	    if (!success)
+		fl_alert("Failed to start directory scan: %s", path.c_str());
 	}
 
     private:
-	void setup_fltk_debug_handlers() {
-
-	    // Add timeout for periodic status logging
-	    Fl::add_timeout(5.0, fltk_periodic_status_callback, this);
-	}
-
-	static void fltk_periodic_status_callback(void* data) {
-
-	    // Schedule next status update
-	    Fl::repeat_timeout(5.0, fltk_periodic_status_callback, data);
-	}
 
 	void create_window() {
 	    window_ = new Fl_Window(1200, 800, "PicExplore - Image Gallery and Scanner");
 
 	    // Create menu bar
 	    menu_bar_ = new Fl_Menu_Bar(0, 0, 1200, 25);
-	    // Remove explicit database selection - LMDB is used automatically for all directories
 	    menu_bar_->add("&File/Scan D&irectory...", FL_CTRL + 'i', menu_open_directory_cb, this);
 	    menu_bar_->add("&File/Cancel &Scan", FL_CTRL + 'c', menu_cancel_scan_cb, this);
 	    menu_bar_->add("&File/Generate &PDF...", FL_CTRL + 'p', menu_generate_pdf_cb, this);
@@ -271,7 +246,7 @@ class PicExploreWindow {
 	std::unique_ptr<ThreadManager> thread_manager_;
 };
 
-// Function to run scan-only mode (like original picscan)
+// Function to run command-line scan only mode
 int run_scan_only_mode(int argc, char* argv[]) {
     try {
 	cxxopts::Options options("picexplore", "Unified image scanner, database manager, and gallery viewer");
