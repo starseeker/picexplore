@@ -466,18 +466,25 @@ void ThumbnailWorkers::join_all() {
 void ThumbnailWorkers::enqueue_high_priority(const UIThumbnailTask& task) {
     std::string cache_key = make_thumbnail_key(task.hash, task.target_width, task.target_height);
     
+    // GENERATION ID DEDUPLICATION: Use generation ID in deduplication key for high priority tasks
+    std::string dedup_key = cache_key;
+    if (task.generation_id != 0) {
+	dedup_key += ":gen:" + std::to_string(task.generation_id);
+    }
+    
     // Deduplication: Check if a request for this thumbnail is already in progress
-    if (is_request_in_flight(cache_key)) {
+    if (is_request_in_flight(dedup_key)) {
 	// Use image-aware logging when path is available for targeted filtering
-	LOG_THUMBNAIL_VERBOSE_IMG("Skipping duplicate high priority thumbnail request - cache_key: " + cache_key + " already in flight", task.path);
+	LOG_THUMBNAIL_VERBOSE_IMG("Skipping duplicate high priority thumbnail request - dedup_key: " + dedup_key + " already in flight", task.path);
 	return;
     }
 
     // Mark request as in-flight before enqueuing to prevent race conditions
-    mark_request_in_flight(cache_key);
+    mark_request_in_flight(dedup_key);
     
     // Use image-aware logging when path is available for targeted filtering
-    LOG_THUMBNAIL_VERBOSE_IMG("Enqueuing high priority thumbnail task - image_index: " + std::to_string(task.image_index) + ", cache_key: " + cache_key, task.path);
+    LOG_THUMBNAIL_VERBOSE_IMG("Enqueuing high priority thumbnail task - image_index: " + std::to_string(task.image_index) + 
+                             ", cache_key: " + cache_key + ", gen_id: " + std::to_string(task.generation_id), task.path);
     high_priority_queue_.enqueue(task);
 }
 
@@ -580,13 +587,19 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	    // Generate UI thumbnail
 	    std::unique_ptr<Fl_RGB_Image> thumbnail;
 	    std::string cache_key = make_thumbnail_key(task.hash, task.target_width, task.target_height);
+	    
+	    // GENERATION ID DEDUPLICATION: Create the same deduplication key used during enqueue
+	    std::string dedup_key = cache_key;
+	    if (task.generation_id != 0) {
+		dedup_key += ":gen:" + std::to_string(task.generation_id);
+	    }
 
 	    // Generate UI thumbnail from database
 	    thumbnail = generate_ui_thumbnail(task);
 
 	    // Mark the request as completed in deduplication tracker
 	    // This allows future requests for the same hash:size to be processed
-	    mark_request_completed(cache_key);
+	    mark_request_completed(dedup_key);
 
 	    // Only queue real thumbnails for UI - placeholders are generated dynamically in draw code
 	    if (thumbnail) {

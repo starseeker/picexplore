@@ -85,22 +85,35 @@ void Fl_JustifiedLayout::process_thread_manager_results() {
 
     static std::atomic_flag processing = ATOMIC_FLAG_INIT;
     if (processing.test_and_set()) {
-	return;  // Avoid re-entry
+	return;  // Avoid re-entry - single dispatcher pattern
     }
 
     UIDrawTask result;
     bool any_processed = false;
     int results_processed = 0;
+    std::vector<std::string> images_to_invalidate; // Track images needing rectangle cache invalidation
 
     // Process all available results from ThreadManager
     while (thread_manager_->get_thumbnail_result(result)) {
 	results_processed++;
 
 	if (result.thumbnail) {
-	    std::lock_guard<std::mutex> lock(image_cache_mutex_);
+	    // ATOMIC CACHE UPDATE: Lock both image and rectangle caches together
+	    std::lock_guard<std::mutex> image_lock(image_cache_mutex_);
+	    std::lock_guard<std::mutex> rect_lock(rectangle_cache_mutex_);
+	    
 	    if (image_cache_.find(result.cache_key) != image_cache_.end()) {
 		continue; // Already in cache, skip duplicate job
 	    }
+	    
+	    // Extract image hash from cache key for rectangle cache invalidation
+	    std::string image_hash;
+	    size_t colon_pos = result.cache_key.find(':');
+	    if (colon_pos != std::string::npos) {
+		image_hash = result.cache_key.substr(0, colon_pos);
+		images_to_invalidate.push_back(image_hash);
+	    }
+	    
 	    image_cache_[result.cache_key] = std::move(result.thumbnail);
 	    if (result.image_index >= 0 && result.image_index < images_.size()) {
 		LOG_BATCH_BASIC_IMG("has_thumbnails set to true for image " + std::to_string(result.image_index), images_[result.image_index].path);
@@ -119,15 +132,31 @@ void Fl_JustifiedLayout::process_thread_manager_results() {
 	}
     }
 
+    // INVALIDATE STALE RECTANGLE CACHE: Remove all rectangle cache entries for updated image hashes
+    if (!images_to_invalidate.empty()) {
+	std::lock_guard<std::mutex> rect_lock(rectangle_cache_mutex_);
+	for (const std::string& hash : images_to_invalidate) {
+	    auto it = rectangle_thumbnail_cache_.begin();
+	    while (it != rectangle_thumbnail_cache_.end()) {
+		// Rectangle cache keys are "hash:width:height"
+		if (it->first.substr(0, hash.length()) == hash && 
+		    it->first.length() > hash.length() && 
+		    it->first[hash.length()] == ':') {
+		    LOG_THUMBNAIL_VERBOSE("Invalidating stale rectangle cache entry: " + it->first);
+		    it = rectangle_thumbnail_cache_.erase(it);
+		} else {
+		    ++it;
+		}
+	    }
+	}
+    }
+
     LOG_THUMBNAIL_VERBOSE("Processed " + std::to_string(results_processed) + " ThreadManager thumbnail results, any_processed: " +
 	    (any_processed ? "true" : "false"));
 
-    // Trigger redraw if any thumbnails were processed
+    // DEBOUNCED REDRAW: Schedule debounced redraw if any thumbnails were processed
     if (any_processed) {
-	if (content_widget_) {
-	    content_widget_->redraw();
-	    LOG_THUMBNAIL_BASIC("Triggered UI update after receiving new thumbnails");
-	}
+	schedule_debounced_redraw();
         // Start refinement timer after new thumbnails arrive
         start_refinement_timer();
     }
@@ -141,6 +170,12 @@ Fl_JustifiedLayout::~Fl_JustifiedLayout() {
     // Stop timers
     stop_refinement_timer();
     stop_scroll_settling_timer();
+
+    // Stop debounced redraw timer
+    if (debounced_redraw_timer_active_) {
+	Fl::remove_timeout(debounced_redraw_timer_callback, this);
+	debounced_redraw_timer_active_ = false;
+    }
 
     // Cancel any pending batch flush timers
     if (batch_flush_scheduled_.load()) {
@@ -569,10 +604,31 @@ std::unique_ptr<Fl_RGB_Image> Fl_JustifiedLayout::downsample_image(Fl_RGB_Image*
 }
 
 void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const ImageInfo& info) {
-    // Try to load the real thumbnail image
+    // ATOMIC CACHE CHECK: Lock caches to atomically check for valid thumbnail before drawing placeholder
     int target_w = w - 2 * THUMBNAIL_BORDER_WIDTH;
     int target_h = h - 2 * THUMBNAIL_BORDER_WIDTH;
-    Fl_RGB_Image* thumb_image = load_thumbnail_image(info, target_w, target_h);
+    
+    // Try to load the real thumbnail image with atomic cache checking
+    Fl_RGB_Image* thumb_image = nullptr;
+    
+    {
+        // Brief atomic check to see if we have a valid thumbnail available
+        std::lock_guard<std::mutex> cache_lock(image_cache_mutex_);
+        
+        // Check multiple potential cache keys for this image
+        int canonical_size = pick_thumbnail_size(target_w, target_h);
+        std::string canonical_cache_key = make_thumbnail_key(info.hash, canonical_size);
+        
+        auto cache_it = image_cache_.find(canonical_cache_key);
+        if (cache_it != image_cache_.end() && cache_it->second) {
+            thumb_image = cache_it->second.get();
+        }
+    }
+    
+    // If we found a cached thumbnail, proceed with full load (which may involve downsampling)
+    if (thumb_image) {
+        thumb_image = load_thumbnail_image(info, target_w, target_h);
+    }
 
     if (thumb_image) {
         LOG_THUMBNAIL_BASIC_IMG("Drawing real thumbnail - path: " + info.path + 
@@ -616,8 +672,8 @@ void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const 
         // Draw the image
         thumb_image->draw(img_x, img_y);
     } else {
-        // Fallback to placeholder rendering
-        LOG_THUMBNAIL_BASIC_IMG("Drawing placeholder (thumbnail not available) - path: " + info.path, info.path);
+        // Fallback to placeholder rendering only after atomic cache check confirms no thumbnail
+        LOG_THUMBNAIL_BASIC_IMG("Drawing placeholder (thumbnail not available after atomic cache check) - path: " + info.path, info.path);
         draw_thumbnail_placeholder(x, y, w, h, info);
     }
 }
@@ -1070,8 +1126,9 @@ void Fl_JustifiedLayout::add_images_incremental(const std::vector<ImageInfo>& ne
     // Restore scroll position after layout changes
     restore_scroll_position();
 
-    // Trigger redraw to show new placeholders
-    redraw();
+    // DEBOUNCED REDRAW: Use debounced redraw for batch processing to coalesce multiple updates
+    LOG_UI_VERBOSE("Scheduling debounced redraw for batch of " + std::to_string(new_images.size()) + " images");
+    schedule_debounced_redraw();
 
 }
 
@@ -1089,12 +1146,31 @@ void Fl_JustifiedLayout::queue_image_info_batch(const ImageInfo& info) {
 
     std::lock_guard<std::mutex> lock(batch_mutex_);
 
+    // BATCH UNIQUENESS: Check if this image hash is already in the pending batch
+    if (current_batch_.pending_hashes.find(info.hash) != current_batch_.pending_hashes.end()) {
+	current_batch_.duplicate_images_skipped++;
+	LOG_BATCH_VERBOSE_IMG("Skipping duplicate image in batch - hash: " + info.hash + 
+	                     " (duplicates skipped: " + std::to_string(current_batch_.duplicate_images_skipped) + ")", info.path);
+	return; // Skip duplicate addition to prevent excessive redraws
+    }
+
+    // BATCH UNIQUENESS: Check if this image hash is already in the main images list
+    if (hash_to_index_map_.find(info.hash) != hash_to_index_map_.end()) {
+	current_batch_.duplicate_images_skipped++;
+	LOG_BATCH_VERBOSE_IMG("Skipping image already in main list - hash: " + info.hash + 
+	                     " (duplicates skipped: " + std::to_string(current_batch_.duplicate_images_skipped) + ")", info.path);
+	return; // Skip if already processed
+    }
+
+    // Add to batch with uniqueness tracking
     current_batch_.pending_images.push_back(info);
+    current_batch_.pending_hashes.insert(info.hash);
     current_batch_.total_images_added++;
 
     size_t pending_count = current_batch_.pending_images.size();
-    LOG_BATCH_VERBOSE("Added image to batch, pending count: " + std::to_string(pending_count) +
-	    ", total added: " + std::to_string(current_batch_.total_images_added));
+    LOG_BATCH_VERBOSE("Added unique image to batch, pending count: " + std::to_string(pending_count) +
+	    ", total added: " + std::to_string(current_batch_.total_images_added) +
+	    ", duplicates skipped: " + std::to_string(current_batch_.duplicate_images_skipped));
 
     // Check if we should process immediately (small batch) or schedule for later
     if (pending_count <= batch_config_.small_batch_threshold) {
@@ -1105,6 +1181,7 @@ void Fl_JustifiedLayout::queue_image_info_batch(const ImageInfo& info) {
 	// Process immediately for small batches to maintain snappy UI
 	std::vector<ImageInfo> immediate_batch = std::move(current_batch_.pending_images);
 	current_batch_.pending_images.clear();
+	current_batch_.pending_hashes.clear(); // Clear uniqueness tracking
 	current_batch_.last_batch_time = std::chrono::steady_clock::now();
 
 	// Release lock before processing
@@ -1139,10 +1216,12 @@ void Fl_JustifiedLayout::flush_pending_image_batch(bool force) {
     if (force || pending_count >= batch_config_.large_batch_size || elapsed_ms >= batch_config_.batch_timeout_ms) {
 	LOG_BATCH_BASIC("Flushing batch: force=" + std::string(force ? "true" : "false") +
 		", pending=" + std::to_string(pending_count) +
-		", elapsed=" + std::to_string(elapsed_ms) + "ms");
+		", elapsed=" + std::to_string(elapsed_ms) + "ms" +
+		", duplicates_skipped=" + std::to_string(current_batch_.duplicate_images_skipped));
 
 	std::vector<ImageInfo> batch_to_process = std::move(current_batch_.pending_images);
 	current_batch_.pending_images.clear();
+	current_batch_.pending_hashes.clear(); // Clear uniqueness tracking
 	current_batch_.last_batch_time = now;
 	current_batch_.total_batches_processed++;
 
@@ -1199,9 +1278,9 @@ void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& 
     // Restore scroll position after layout changes
     restore_scroll_position();
 
-    // Trigger redraw to show new placeholders
-    LOG_UI_VERBOSE("Triggering redraw for batch of " + std::to_string(batch.size()) + " images");
-    redraw();
+    // DEBOUNCED REDRAW: Use debounced redraw for batch processing to coalesce multiple updates
+    LOG_UI_VERBOSE("Scheduling debounced redraw for batch of " + std::to_string(batch.size()) + " images");
+    schedule_debounced_redraw();
 
     // Queue thumbnail requests for new images if ThreadManager is available
     if (thread_manager_) {
@@ -1638,6 +1717,36 @@ void Fl_JustifiedLayout::update_thumbnail_quality_info(int image_index, int req_
     info.needs_refinement = upscaled ||
                            (actual_w < req_w * 0.8) ||
                            (actual_h < req_h * 0.8);
+}
+
+//==============================================================================
+// Debounced Redraw System Implementation
+//==============================================================================
+
+void Fl_JustifiedLayout::schedule_debounced_redraw() {
+    if (!debounced_redraw_timer_active_) {
+	debounced_redraw_timer_active_ = true;
+	Fl::add_timeout(DEBOUNCED_REDRAW_TIMEOUT, debounced_redraw_timer_callback, this);
+	LOG_THUMBNAIL_VERBOSE("Scheduled debounced redraw timer");
+    } else {
+	// Timer already active - the existing timer will handle the redraw
+	LOG_THUMBNAIL_VERBOSE("Debounced redraw timer already active, coalescing request");
+    }
+}
+
+void Fl_JustifiedLayout::perform_debounced_redraw() {
+    debounced_redraw_timer_active_ = false;
+    
+    if (content_widget_) {
+	content_widget_->redraw();
+	LOG_THUMBNAIL_BASIC("Triggered debounced UI update after coalescing redraw requests");
+    }
+}
+
+void Fl_JustifiedLayout::debounced_redraw_timer_callback(void* data) {
+    if (data) {
+	static_cast<Fl_JustifiedLayout*>(data)->perform_debounced_redraw();
+    }
 }
 
 //==============================================================================

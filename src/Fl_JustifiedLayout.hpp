@@ -88,9 +88,11 @@ struct BatchConfig {
 // Batch processing state for ImageInfo objects
 struct ImageInfoBatch {
     std::vector<ImageInfo> pending_images;
+    std::unordered_set<std::string> pending_hashes; // Track hashes to enforce uniqueness
     std::chrono::steady_clock::time_point last_batch_time;
     size_t total_images_added = 0;
     size_t total_batches_processed = 0;
+    size_t duplicate_images_skipped = 0; // Track duplicates for debugging
 
     ImageInfoBatch() : last_batch_time(std::chrono::steady_clock::now()) {}
 };
@@ -310,6 +312,13 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     bool scroll_settling_timer_active_ = false;
     static constexpr double SCROLL_SETTLING_TIMEOUT = 0.120; // 120ms timeout after last scroll event
     uint64_t current_generation_id_ = 0;
+
+    // Debounced redraw system to coalesce multiple redraw triggers and avoid race conditions
+    bool debounced_redraw_timer_active_ = false;
+    static constexpr double DEBOUNCED_REDRAW_TIMEOUT = 0.050; // 50ms timeout to coalesce redraws
+    void schedule_debounced_redraw();
+    void perform_debounced_redraw();
+    static void debounced_redraw_timer_callback(void* data);
 
     // Image cache for decoded thumbnails
     std::unordered_map<std::string, std::unique_ptr<Fl_RGB_Image>> image_cache_;
