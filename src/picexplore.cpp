@@ -99,17 +99,6 @@ class PicExploreWindow {
 
 	}
 
-	void set_database_path(const std::string& path) {
-	    // With new architecture, LMDB is always used for all directories
-	    // This method is kept for compatibility but will load from database path
-	    std::cout << "[INFO] Loading existing database: " << path << std::endl;
-	    if (layout_widget_) {
-		if (!layout_widget_->set_database_path(path)) {
-		    fl_alert("Failed to load database: %s", path.c_str());
-		}
-	    }
-	}
-
 	void set_directory_path(const std::string& path) {
 	    // New architecture: Start directory scan using ThreadManager
 	    std::cout << "[INFO] Starting directory scan: " << path << std::endl;
@@ -121,12 +110,6 @@ class PicExploreWindow {
 		}
 	    } else {
 		fl_alert("Thread manager not initialized");
-	    }
-	}
-
-	void enable_debug_output(const std::string& dir, const std::string& format = "svg") {
-	    if (layout_widget_) {
-		layout_widget_->enable_debug_output(dir, format);
 	    }
 	}
 
@@ -306,12 +289,11 @@ int run_scan_only_mode(int argc, char* argv[]) {
 	    ("layout-pad-bottom", "Layout padding bottom in pixels", cxxopts::value<int>())
 	    ("layout-pad-left", "Layout padding left in pixels", cxxopts::value<int>())
 	    ("layout-pad-right", "Layout padding right in pixels", cxxopts::value<int>())
-	    ("debug-output", "Enable debug output to directory (creates SVG files during scanning)", cxxopts::value<std::string>())
-	    ("debug-format", "Debug output format: svg or png", cxxopts::value<std::string>()->default_value("svg"))
 	    ("v,verbose", "Enable verbose output")
 	    ;
 
 	auto result = options.parse(argc, argv);
+	std::vector<std::string> nonopts = result.unmatched();
 
 	if (result.count("help")) {
 	    std::cout << options.help() << std::endl;
@@ -335,6 +317,10 @@ int run_scan_only_mode(int argc, char* argv[]) {
 	int row_height = result["row-height"].as<int>();
 	int margin = result["margin"].as<int>();
 	bool verbose = result.count("verbose") > 0;
+
+	if (directory.empty() && nonopts.size() > 0) {
+	    directory = nonopts[0];
+	}
 
 	// Default to current working directory if none specified and we need to scan
 	if (directory.empty() && pdf_path.empty()) {
@@ -374,76 +360,6 @@ int run_scan_only_mode(int argc, char* argv[]) {
 	    std::cerr << "Error: Failed to open database: " << db_path << std::endl;
 	    reporter.stop();
 	    return 1;
-	}
-
-	// Set up debug output callback if requested
-	if (!debug_output_dir.empty()) {
-	    std::filesystem::create_directories(debug_output_dir);
-	    std::cout << "Debug output enabled: " << debug_output_dir << " (format: " << debug_format << ")" << std::endl;
-
-	    // Create a debug callback similar to our test
-	    class ScanDebugCallback {
-		public:
-		    ScanDebugCallback(const std::string& dir, const std::string& format)
-			: debug_dir_(dir), format_(format), counter_(0) {}
-
-		    void operator()(const ImageInfo& info) {
-			images_.push_back(info);
-
-			// Write simple debug output showing progressive scanning
-			if (format_ == "svg") {
-			    write_debug_svg();
-			}
-			counter_++;
-		    }
-
-		private:
-		    void write_debug_svg() {
-			std::string filename = debug_dir_ + "/scan_progress_" + std::to_string(counter_) + ".svg";
-			std::ofstream file(filename);
-
-			file << "<?xml version=\"1.0\" standalone=\"no\" ?>\n";
-			file << "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n";
-			int height = std::max(100, static_cast<int>(images_.size() * 30 + 20));
-			file << "<svg width=\"500px\" height=\"" << height << "px\" xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" >\n";
-
-			// Background
-			file << "\t<rect x=\"0\" y=\"0\" width=\"500\" height=\"" << height << "\" fill=\"rgb(250,250,250)\" />\n";
-
-			// Title
-			file << "\t<text x=\"10\" y=\"15\" fill=\"rgb(0,0,0)\" font-size=\"12\" font-family=\"Arial\">Scanning Progress: " << images_.size() << " images</text>\n";
-
-			// Draw a small bar for each image
-			for (size_t i = 0; i < images_.size(); ++i) {
-			    const auto& img = images_[i];
-			    int y = 25 + i * 30;
-			    int width = static_cast<int>(img.aspect_ratio * 80);
-			    width = std::min(200, std::max(10, width));
-
-			    std::string color = img.has_thumbnails ? "rgb(100,255,100)" : "rgb(255,255,100)";
-
-			    file << "\t<rect x=\"10\" y=\"" << y << "\" width=\"" << width << "\" height=\"20\" fill=\"" << color << "\" stroke=\"rgb(0,0,0)\" />\n";
-
-			    // Extract filename from path for display
-			    std::string filename = std::filesystem::path(img.path).filename().string();
-			    if (filename.length() > 20) filename = filename.substr(0, 17) + "...";
-
-			    file << "\t<text x=\"15\" y=\"" << (y + 14) << "\" fill=\"rgb(0,0,0)\" font-size=\"9\" font-family=\"Arial\">"
-				<< filename << " (AR:" << std::fixed << std::setprecision(2) << img.aspect_ratio << ")</text>\n";
-			}
-
-			file << "</svg>\n";
-			file.close();
-		    }
-
-		    std::string debug_dir_;
-		    std::string format_;
-		    std::vector<ImageInfo> images_;
-		    int counter_;
-	    };
-
-	    static ScanDebugCallback debug_callback(debug_output_dir, debug_format);
-	    db.set_image_info_callback(debug_callback);
 	}
 
 	if (verbose) {
@@ -582,20 +498,13 @@ int run_gui_mode(int argc, char* argv[]) {
     // Create and show main window
     PicExploreWindow app;
 
-    // Enable debug output if requested
-    if (!debug_output_dir.empty()) {
-	app.enable_debug_output(debug_output_dir, debug_output_format);
-    }
-
-    // Start scanning the directory (LMDB will be used automatically)
-    if (!initial_directory.empty()) {
+    // Start scanning the directory
+    if (!initial_directory.empty())
 	app.set_directory_path(initial_directory);
-    }
 
     app.show();
 
-    std::cout << "PicExplore GUI started with new unified threading architecture." << std::endl;
-    std::cout << "LMDB database automatically used for: " << initial_directory << std::endl;
+    std::cout << "PicExplore GUI started." << std::endl;
     std::cout << "Click thumbnails to select, use mouse wheel to scroll." << std::endl;
 
     app.run();
@@ -609,7 +518,6 @@ int main(int argc, char* argv[]) {
 
     // Determine mode based on command line arguments
     bool scan_only_mode = false;
-
 
     // Check for --scan-only option
     for (int i = 1; i < argc; ++i) {
