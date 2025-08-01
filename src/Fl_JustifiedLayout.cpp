@@ -103,13 +103,19 @@ void Fl_JustifiedLayout::process_thread_manager_results() {
 	    }
 	    image_cache_[result.cache_key] = std::move(result.thumbnail);
 	    if (result.image_index >= 0 && result.image_index < images_.size()) {
-		LOG_BATCH_BASIC("has_thumbnails set to true for image " + std::to_string(result.image_index));
+		LOG_BATCH_BASIC_IMG("has_thumbnails set to true for image " + std::to_string(result.image_index), images_[result.image_index].path);
 		images_[result.image_index].has_thumbnails = true;
 	    }
 	    any_processed = true;
 
-	    LOG_THUMBNAIL_BASIC("Processed ThreadManager result - replacing Loading... placeholder with real thumbnail for image " + 
-	                       std::to_string(result.image_index) + " (cache_key: " + result.cache_key + ")");
+	    // Use image-aware logging when image_index is valid for targeted debugging
+	    if (result.image_index >= 0 && result.image_index < images_.size()) {
+		LOG_THUMBNAIL_BASIC_IMG("Processed ThreadManager result - replacing Loading... placeholder with real thumbnail for image " + 
+		                       std::to_string(result.image_index) + " (cache_key: " + result.cache_key + ")", images_[result.image_index].path);
+	    } else {
+		LOG_THUMBNAIL_BASIC("Processed ThreadManager result - replacing Loading... placeholder with real thumbnail for image " + 
+		                   std::to_string(result.image_index) + " (cache_key: " + result.cache_key + ")");
+	    }
 	}
     }
 
@@ -393,10 +399,10 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
         auto rect_it = rectangle_thumbnail_cache_.find(rect_cache_key);
         if (rect_it != rectangle_thumbnail_cache_.end()) {
             // Found cached resized thumbnail - return it directly, no processing needed!
-            LOG_THUMBNAIL_VERBOSE("Rectangle cache hit - cache_key: " + rect_cache_key);
+            LOG_THUMBNAIL_VERBOSE_IMG("Rectangle cache hit - cache_key: " + rect_cache_key, info.path);
             return rect_it->second.get();
         }
-        LOG_THUMBNAIL_VERBOSE("Rectangle cache miss - cache_key: " + rect_cache_key);
+        LOG_THUMBNAIL_VERBOSE_IMG("Rectangle cache miss - cache_key: " + rect_cache_key, info.path);
     }
 
     // Get canonical size for cache lookup - this ensures we use consistent cache keys
@@ -413,11 +419,11 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
         auto cache_it = image_cache_.find(canonical_cache_key);
         if (cache_it == image_cache_.end()) {
             // Canonical size image not in cache - ThreadManager will generate it
-            LOG_THUMBNAIL_BASIC("Thumbnail cache miss - requesting from ThreadManager, cache_key: " + canonical_cache_key);
+            LOG_THUMBNAIL_BASIC_IMG("Thumbnail cache miss - requesting from ThreadManager, cache_key: " + canonical_cache_key, info.path);
             return nullptr;
         }
 
-        LOG_THUMBNAIL_VERBOSE("Thumbnail cache hit - cache_key: " + canonical_cache_key);
+        LOG_THUMBNAIL_VERBOSE_IMG("Thumbnail cache hit - cache_key: " + canonical_cache_key, info.path);
         canonical_image = cache_it->second.get();
         if (!canonical_image) {
             return nullptr;
@@ -426,28 +432,28 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
         // If canonical image matches target size exactly, we can use it directly
         int target_size = std::max(target_width, target_height);
         if (canonical_size == target_size) {
-            LOG_THUMBNAIL_VERBOSE("Using canonical image directly - no scaling needed, size: " + std::to_string(canonical_size));
+            LOG_THUMBNAIL_VERBOSE_IMG("Using canonical image directly - no scaling needed, size: " + std::to_string(canonical_size), info.path);
             result = canonical_image;
         } else {
             // Need downsampling - check if we already have a downsampled version cached in global cache
             std::string downsampled_cache_key = make_thumbnail_key(info.hash, target_width, target_height);
             auto downsampled_it = image_cache_.find(downsampled_cache_key);
             if (downsampled_it != image_cache_.end()) {
-                LOG_THUMBNAIL_VERBOSE("Found downsampled cache hit - cache_key: " + downsampled_cache_key);
+                LOG_THUMBNAIL_VERBOSE_IMG("Found downsampled cache hit - cache_key: " + downsampled_cache_key, info.path);
                 result = downsampled_it->second.get();
             } else {
                 // Create downsampled version using FLTK or stb_image_resize fallback
-                LOG_THUMBNAIL_VERBOSE("Downsampling image from " + std::to_string(canonical_size) + 
-                                     " to " + std::to_string(target_width) + "x" + std::to_string(target_height));
+                LOG_THUMBNAIL_VERBOSE_IMG("Downsampling image from " + std::to_string(canonical_size) + 
+                                     " to " + std::to_string(target_width) + "x" + std::to_string(target_height), info.path);
                 std::unique_ptr<Fl_RGB_Image> downsampled_image = downsample_image(canonical_image, target_width, target_height);
                 if (downsampled_image) {
                     result = downsampled_image.get();
                     // Cache the downsampled version in global cache for future use
                     image_cache_[downsampled_cache_key] = std::move(downsampled_image);
-                    LOG_THUMBNAIL_VERBOSE("Cached downsampled image - cache_key: " + downsampled_cache_key);
+                    LOG_THUMBNAIL_VERBOSE_IMG("Cached downsampled image - cache_key: " + downsampled_cache_key, info.path);
                 } else {
                     // Fallback: return canonical image even if it's larger than requested
-                    LOG_THUMBNAIL_VERBOSE("Downsampling failed, using canonical image as fallback");
+                    LOG_THUMBNAIL_VERBOSE_IMG("Downsampling failed, using canonical image as fallback", info.path);
                     result = canonical_image;
                 }
             }
@@ -463,7 +469,7 @@ Fl_RGB_Image* Fl_JustifiedLayout::load_thumbnail_image(const ImageInfo& info, in
             std::unique_ptr<Fl_RGB_Image> cached_copy = downsample_image(canonical_image, target_width, target_height);
             if (cached_copy) {
                 rectangle_thumbnail_cache_[rect_cache_key] = std::move(cached_copy);
-                LOG_THUMBNAIL_VERBOSE("Cached in rectangle cache - cache_key: " + rect_cache_key);
+                LOG_THUMBNAIL_VERBOSE_IMG("Cached in rectangle cache - cache_key: " + rect_cache_key, info.path);
             }
         }
     }
@@ -1213,8 +1219,8 @@ void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& 
 		info.hash
 	    );
 
-	    LOG_THUMBNAIL_VERBOSE("Queuing UIThumbnailTask for image " + std::to_string(image_index) +
-		" (cache_key: " + make_thumbnail_key(info.hash, task.target_width, task.target_height) + ")");
+	    LOG_THUMBNAIL_VERBOSE_IMG("Queuing UIThumbnailTask for image " + std::to_string(image_index) +
+		" (cache_key: " + make_thumbnail_key(info.hash, task.target_width, task.target_height) + ")", info.path);
 
 	    thread_manager_->request_thumbnail(task);
 	}
@@ -1551,8 +1557,8 @@ void Fl_JustifiedLayout::perform_refinement_pass() {
 
                     if (better_available) {
                         any_refinement_needed = true;
-                        LOG_THUMBNAIL_VERBOSE("Requesting higher-res thumbnail for refinement - image_index: " + 
-                                             std::to_string(i) + ", target: " + std::to_string(target_w) + "x" + std::to_string(target_h));
+                        LOG_THUMBNAIL_VERBOSE_IMG("Requesting higher-res thumbnail for refinement - image_index: " + 
+                                             std::to_string(i) + ", target: " + std::to_string(target_w) + "x" + std::to_string(target_h), img.path);
                         // Request thumbnail regeneration at higher quality
                         if (thread_manager_) {
                             UIThumbnailTask task(

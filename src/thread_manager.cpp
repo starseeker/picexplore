@@ -283,8 +283,9 @@ void WorkerPool::worker_thread_main() {
 		    break;
 		}
 
-		LOG_THREAD_VERBOSE("WorkerPool: Dequeued thumbnail generation task from thumbnail_gen_queue - file: " + 
-		                   task.file_path + ", hash: " + task.hash);
+		// Use image-aware logging for thumbnail generation tasks since file_path is available
+		LOG_THREAD_VERBOSE_IMG("WorkerPool: Dequeued thumbnail generation task from thumbnail_gen_queue - file: " + 
+		                   task.file_path + ", hash: " + task.hash, task.file_path);
 		found_task = true;
 		processed_count_.fetch_add(1);
 
