@@ -108,7 +108,7 @@ void Fl_JustifiedLayout::process_thread_manager_results() {
 	    }
 	    any_processed = true;
 
-	    // Use image-aware logging when image_index is valid
+	    // Use image-aware logging when image_index is valid for targeted debugging
 	    if (result.image_index >= 0 && result.image_index < images_.size()) {
 		LOG_THUMBNAIL_BASIC_IMG("Processed ThreadManager result - replacing Loading... placeholder with real thumbnail for image " + 
 		                       std::to_string(result.image_index) + " (cache_key: " + result.cache_key + ")", images_[result.image_index].path);
