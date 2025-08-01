@@ -301,14 +301,16 @@ void WorkerPool::worker_thread_main() {
 		    bool success = scan_thread_->database_->generate_thumbnails_for_hash(task.hash, task.file_path);
 
 		    if (success) {
-			std::cout << "[DEBUG] WorkerPool: Successfully generated thumbnails, enqueuing write task to writeQueue - hash: " << task.hash << std::endl;
+			// Use image-aware logging for thumbnail generation tasks since file_path is available
+			LOG_THREAD_BASIC_IMG("WorkerPool: Successfully generated thumbnails, enqueuing write task to writeQueue - hash: " + task.hash, task.file_path);
 			// Create a completion task for the writer thread
 			// Note: generate_thumbnails_for_hash handles its own database writes,
 			// so this is mainly for progress tracking
 			WriteTask write_task(WriteTask::STORE_THUMBNAIL, task.hash, std::vector<uint8_t>());
 			write_queue_.enqueue(std::move(write_task));
 		    } else {
-			std::cout << "[DEBUG] WorkerPool: Failed to generate thumbnails for file: " << task.file_path << " (hash: " << task.hash << ")" << std::endl;
+			// Use image-aware logging for thumbnail generation tasks since file_path is available
+			LOG_THREAD_BASIC_IMG("WorkerPool: Failed to generate thumbnails for file: " + task.file_path + " (hash: " + task.hash + ")", task.file_path);
 			std::cerr << "[WARNING] WorkerPool: Failed to generate thumbnails for "
 				  << task.file_path << " (hash: " << task.hash << ")" << std::endl;
 		    }
@@ -466,14 +468,16 @@ void ThumbnailWorkers::enqueue_high_priority(const UIThumbnailTask& task) {
     
     // Deduplication: Check if a request for this thumbnail is already in progress
     if (is_request_in_flight(cache_key)) {
-	LOG_THUMBNAIL_VERBOSE("Skipping duplicate high priority thumbnail request - cache_key: " + cache_key + " already in flight");
+	// Use image-aware logging when path is available for targeted filtering
+	LOG_THUMBNAIL_VERBOSE_IMG("Skipping duplicate high priority thumbnail request - cache_key: " + cache_key + " already in flight", task.path);
 	return;
     }
 
     // Mark request as in-flight before enqueuing to prevent race conditions
     mark_request_in_flight(cache_key);
     
-    LOG_THUMBNAIL_VERBOSE("Enqueuing high priority thumbnail task - image_index: " + std::to_string(task.image_index) + ", cache_key: " + cache_key);
+    // Use image-aware logging when path is available for targeted filtering
+    LOG_THUMBNAIL_VERBOSE_IMG("Enqueuing high priority thumbnail task - image_index: " + std::to_string(task.image_index) + ", cache_key: " + cache_key, task.path);
     high_priority_queue_.enqueue(task);
 }
 
@@ -482,14 +486,16 @@ void ThumbnailWorkers::enqueue_low_priority(const UIThumbnailTask& task) {
     
     // Deduplication: Check if a request for this thumbnail is already in progress
     if (is_request_in_flight(cache_key)) {
-	LOG_THUMBNAIL_VERBOSE("Skipping duplicate low priority thumbnail request - cache_key: " + cache_key + " already in flight");
+	// Use image-aware logging when path is available for targeted filtering
+	LOG_THUMBNAIL_VERBOSE_IMG("Skipping duplicate low priority thumbnail request - cache_key: " + cache_key + " already in flight", task.path);
 	return;
     }
 
     // Mark request as in-flight before enqueuing to prevent race conditions
     mark_request_in_flight(cache_key);
     
-    LOG_THUMBNAIL_VERBOSE("Enqueuing low priority thumbnail task - image_index: " + std::to_string(task.image_index) + ", cache_key: " +  cache_key);
+    // Use image-aware logging when path is available for targeted filtering
+    LOG_THUMBNAIL_VERBOSE_IMG("Enqueuing low priority thumbnail task - image_index: " + std::to_string(task.image_index) + ", cache_key: " +  cache_key, task.path);
     low_priority_queue_.enqueue(task);
 }
 
@@ -546,7 +552,8 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 		continue;  // Skip this task and get next one
 	    }
 	    
-	    LOG_THUMBNAIL_VERBOSE("Dequeued task from highPriorityQueue - image_index: " + std::to_string(task.image_index) + ", hash: " + task.hash + ", gen_id: " + std::to_string(task.generation_id));
+	    // Use image-aware logging for thumbnail generation tasks since file_path is available
+	    LOG_THREAD_VERBOSE_IMG("WorkerPool: Dequeued task from highPriorityQueue - image_index: " + std::to_string(task.image_index) + ", hash: " + task.hash + ", gen_id: " + std::to_string(task.generation_id), task.path);
 	    found_task = true;
 	} else if (low_priority_queue_.wait_dequeue_timed(task, std::chrono::milliseconds(50))) {
 	    // Check for shutdown sentinel
@@ -554,7 +561,8 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 		LOG_THUMBNAIL_VERBOSE("Received shutdown sentinel on low priority queue, exiting worker thread");
 		break;
 	    }
-	    LOG_THUMBNAIL_VERBOSE("Dequeued task from lowPriorityQueue - image_index: " + std::to_string(task.image_index) + ", hash: " + task.hash);
+	    // Use image-aware logging for thumbnail generation tasks since path is available
+	    LOG_THREAD_VERBOSE_IMG("WorkerPool: Dequeued task from lowPriorityQueue - image_index: " + std::to_string(task.image_index) + ", hash: " + task.hash, task.path);
 	    found_task = true;
 	}
 	// If both wait_dequeue_timed calls returned false, it means timeout - continue loop to check shutdown flags
@@ -577,7 +585,8 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 
 	    // Only queue real thumbnails for UI - placeholders are generated dynamically in draw code
 	    if (thumbnail) {
-		LOG_THUMBNAIL_BASIC("Generated real thumbnail successfully, enqueuing to result_queue - image_index: " + std::to_string(task.image_index) + ", cache_key: " + cache_key);
+		// Use image-aware logging when path is available for targeted filtering
+		LOG_THUMBNAIL_BASIC_IMG("Generated real thumbnail successfully, enqueuing to result_queue - image_index: " + std::to_string(task.image_index) + ", cache_key: " + cache_key, task.path);
 		UIDrawTask result(task.image_index, std::move(thumbnail), cache_key, task.path);
 		result_queue_.enqueue(std::move(result));
 
@@ -590,10 +599,12 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 		    }
 		};
 
-		LOG_THUMBNAIL_BASIC("Notifying UI via Fl::awake() for completed thumbnail - image_index: " + std::to_string(task.image_index));
+		// Use image-aware logging when path is available for targeted filtering
+		LOG_THUMBNAIL_BASIC_IMG("Notifying UI via Fl::awake() for completed thumbnail - image_index: " + std::to_string(task.image_index), task.path);
 		Fl::awake(thumbnail_ready_callback, this);
 	    } else {
-		LOG_THUMBNAIL_VERBOSE("No real thumbnail available for task - image_index: " + std::to_string(task.image_index) + ", hash: " + task.hash + " (placeholder will be generated in UI)");
+		// Use image-aware logging when path is available for targeted filtering
+		LOG_THUMBNAIL_VERBOSE_IMG("No real thumbnail available for task - image_index: " + std::to_string(task.image_index) + ", hash: " + task.hash + " (placeholder will be generated in UI)", task.path);
 	    }
 
 	    active_tasks_.fetch_sub(1);
@@ -611,10 +622,12 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     // This function handles the complete pipeline from LMDB lookup to FLTK image creation
     // Returns nullptr if no real thumbnail is available - placeholders are handled in UI
 
-    LOG_THUMBNAIL_VERBOSE("Starting thumbnail generation from LMDB - cache_key: " + make_thumbnail_key(task.hash, task.target_width, task.target_height));
+    // Use image-aware logging when path is available for targeted filtering
+    LOG_THUMBNAIL_VERBOSE_IMG("Starting thumbnail generation from LMDB - cache_key: " + make_thumbnail_key(task.hash, task.target_width, task.target_height), task.path);
 
     if (!database_) {
-	LOG_THUMBNAIL_VERBOSE("Database not available, no thumbnail to generate - hash: " + task.hash);
+	// Use image-aware logging when path is available for targeted filtering
+	LOG_THUMBNAIL_VERBOSE_IMG("Database not available, no thumbnail to generate - hash: " + task.hash, task.path);
 	std::cerr << "[WARNING] ThumbnailWorkers: No database available for hash " << task.hash << std::endl;
 	return nullptr;
     }
@@ -623,12 +636,14 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     // This ensures consistency with the UI cache lookup system
     int best_size = pick_thumbnail_size(task.target_width, task.target_height);
 
-    std::cout << "[DEBUG] ThumbnailWorkers: Selected best thumbnail size " << best_size << "px for hash: " << task.hash << std::endl;
+    // Use image-aware logging when path is available for targeted filtering
+    LOG_THUMBNAIL_VERBOSE_IMG("Selected best thumbnail size " + std::to_string(best_size) + "px for hash: " + task.hash, task.path);
 
     // Try to load thumbnail from database using LMDB transaction
     MDB_txn* read_txn = nullptr;
     if (!database_->begin_read_transaction(read_txn)) {
-	std::cout << "[DEBUG] ThumbnailWorkers: Failed to begin LMDB transaction, no thumbnail available - hash: " << task.hash << std::endl;
+	// Use image-aware logging when path is available for targeted filtering
+	LOG_THUMBNAIL_VERBOSE_IMG("Failed to begin LMDB transaction, no thumbnail available - hash: " + task.hash, task.path);
 	std::cerr << "[ERROR] ThumbnailWorkers: Failed to begin read transaction for hash " << task.hash << std::endl;
 	return nullptr;
     }
@@ -637,20 +652,23 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
     std::string thumb_key = make_thumbnail_key(task.hash, best_size);
     std::vector<uint8_t> thumb_data;
 
-    std::cout << "[DEBUG] ThumbnailWorkers: Looking up thumbnail in LMDB - key: " << thumb_key << std::endl;
+    // Use image-aware logging when path is available for targeted filtering
+    LOG_THUMBNAIL_VERBOSE_IMG("Looking up thumbnail in LMDB - key: " + thumb_key, task.path);
     bool success = database_->get_key_data(read_txn, thumb_key, thumb_data);
 
     database_->commit_transaction(read_txn);
 
     if (!success || thumb_data.empty()) {
-	std::cout << "[DEBUG] ThumbnailWorkers: Primary thumbnail size not found, trying fallback sizes - hash: " << task.hash << std::endl;
+	// Use image-aware logging when path is available for targeted filtering
+	LOG_THUMBNAIL_VERBOSE_IMG("Primary thumbnail size not found, trying fallback sizes - hash: " + task.hash, task.path);
 	// Try fallback sizes if the preferred size isn't available
 	// This handles cases where thumbnail generation was incomplete
 	static const std::vector<int> available_sizes = {32, 64, 128, 256, 512, 1024};
 	for (int fallback_size : available_sizes) {
 	    if (fallback_size == best_size) continue; // Already tried this one
 
-	    std::cout << "[DEBUG] ThumbnailWorkers: Trying fallback size " << fallback_size << "px - hash: " << task.hash << std::endl;
+	    // Use image-aware logging when path is available for targeted filtering
+	    LOG_THUMBNAIL_VERBOSE_IMG("Trying fallback size " + std::to_string(fallback_size) + "px - hash: " + task.hash, task.path);
 	    if (!database_->begin_read_transaction(read_txn)) {
 		break;
 	    }
@@ -660,38 +678,44 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 	    database_->commit_transaction(read_txn);
 
 	    if (success && !thumb_data.empty()) {
-		std::cout << "[DEBUG] ThumbnailWorkers: Found thumbnail at fallback size " << fallback_size << "px - hash: " << task.hash << std::endl;
+		// Use image-aware logging when path is available for targeted filtering
+		LOG_THUMBNAIL_VERBOSE_IMG("Found thumbnail at fallback size " + std::to_string(fallback_size) + "px - hash: " + task.hash, task.path);
 		best_size = fallback_size; // Update for correct decoding
 		break;
 	    }
 	}
 
 	if (!success || thumb_data.empty()) {
-	    std::cout << "[DEBUG] ThumbnailWorkers: No thumbnail found in LMDB, no real thumbnail available - hash: " << task.hash << std::endl;
+	    // Use image-aware logging when path is available for targeted filtering
+	    LOG_THUMBNAIL_VERBOSE_IMG("No thumbnail found in LMDB, no real thumbnail available - hash: " + task.hash, task.path);
 	    std::cerr << "[WARNING] ThumbnailWorkers: No thumbnail found for hash " << task.hash << std::endl;
 	    return nullptr;
 	}
     }
 
-    std::cout << "[DEBUG] ThumbnailWorkers: Found thumbnail data in LMDB - hash: " << task.hash << ", size: " << thumb_data.size() << " bytes" << std::endl;
+    // Use image-aware logging when path is available for targeted filtering
+    LOG_THUMBNAIL_VERBOSE_IMG("Found thumbnail data in LMDB - hash: " + task.hash + ", size: " + std::to_string(thumb_data.size()) + " bytes", task.path);
 
     // Decode JPEG thumbnail data using stb_image
     // All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
     int thumb_width, thumb_height, thumb_channels;
-    std::cout << "[DEBUG] ThumbnailWorkers: Decoding JPEG thumbnail data - hash: " << task.hash << std::endl;
+    // Use image-aware logging when path is available for targeted filtering
+    LOG_THUMBNAIL_VERBOSE_IMG("Decoding JPEG thumbnail data - hash: " + task.hash, task.path);
     unsigned char* rgb_data = stbi_load_from_memory(
 	thumb_data.data(), thumb_data.size(),
 	&thumb_width, &thumb_height, &thumb_channels, 3  // Force RGB output
     );
 
     if (!rgb_data) {
-	std::cout << "[DEBUG] ThumbnailWorkers: Failed to decode JPEG, no thumbnail available - hash: " << task.hash << ", reason: " << stbi_failure_reason() << std::endl;
+	// Use image-aware logging when path is available for targeted filtering
+	LOG_THUMBNAIL_VERBOSE_IMG("Failed to decode JPEG, no thumbnail available - hash: " + task.hash + ", reason: " + std::string(stbi_failure_reason()), task.path);
 	std::cerr << "[ERROR] ThumbnailWorkers: Failed to decode thumbnail for hash " << task.hash
 		  << ": " << stbi_failure_reason() << std::endl;
 	return nullptr;
     }
 
-    std::cout << "[DEBUG] ThumbnailWorkers: Successfully decoded thumbnail - hash: " << task.hash << ", decoded size: " << thumb_width << "x" << thumb_height << std::endl;
+    // Use image-aware logging when path is available for targeted filtering
+    LOG_THUMBNAIL_VERBOSE_IMG("Successfully decoded thumbnail - hash: " + task.hash + ", decoded size: " + std::to_string(thumb_width) + "x" + std::to_string(thumb_height), task.path);
 
     // Resize thumbnail to match UI requirements while preserving aspect ratio
     int final_width = thumb_width;
@@ -699,7 +723,8 @@ std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UITh
 
     unsigned char* final_data = rgb_data;
     if (thumb_width != task.target_width || thumb_height != task.target_height) {
-	std::cout << "[DEBUG] ThumbnailWorkers: Resizing thumbnail to target size - hash: " << task.hash << ", from: " << thumb_width << "x" << thumb_height << " to target: " << task.target_width << "x" << task.target_height << std::endl;
+	// Use image-aware logging when path is available for targeted filtering
+	LOG_THUMBNAIL_VERBOSE_IMG("Resizing thumbnail to target size - hash: " + task.hash + ", from: " + std::to_string(thumb_width) + "x" + std::to_string(thumb_height) + " to target: " + std::to_string(task.target_width) + "x" + std::to_string(task.target_height), task.path);
 	// Calculate aspect-preserving dimensions
 	double aspect = (double)thumb_width / thumb_height;
 	double target_aspect = (double)task.target_width / task.target_height;
@@ -985,8 +1010,9 @@ void ThreadManager::set_metadata_callback(DirectoryScanThread::ImageMetadataCall
 }
 
 void ThreadManager::request_thumbnail(const UIThumbnailTask& task) {
-    std::cout << "[DEBUG] ThreadManager: Received thumbnail request - image_index: " << task.image_index << ", priority: " << (task.priority == UIThumbnailTask::HIGH ? "HIGH" : "LOW") << ", hash: " << task.hash << std::endl;
-    std::cout.flush();
+    // Use image-aware logging when path is available for targeted filtering
+    LOG_THREAD_BASIC_IMG("ThreadManager: Received thumbnail request - image_index: " + std::to_string(task.image_index) + 
+                         ", priority: " + (task.priority == UIThumbnailTask::HIGH ? "HIGH" : "LOW") + ", hash: " + task.hash, task.path);
     if (thumbnail_workers_) {
 	if (task.priority == UIThumbnailTask::HIGH) {
 	    thumbnail_workers_->enqueue_high_priority(task);
@@ -1000,8 +1026,9 @@ bool ThreadManager::get_thumbnail_result(UIDrawTask& result) {
     if (thumbnail_workers_) {
 	bool success = thumbnail_workers_->try_dequeue_result(result);
 	if (success) {
-	    std::cout << "[DEBUG] ThreadManager: Retrieved thumbnail result - image_index: " << result.image_index << ", cache_key: " << result.cache_key << std::endl;
-	    std::cout.flush();
+	    // Use image-aware logging when path is available for targeted filtering
+	    LOG_THREAD_BASIC_IMG("ThreadManager: Retrieved thumbnail result - image_index: " + std::to_string(result.image_index) + 
+	                         ", cache_key: " + result.cache_key, result.path);
 	}
 	return success;
     }
