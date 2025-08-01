@@ -528,9 +528,29 @@ void ThumbnailWorkers::flush_high_priority_queue() {
     // Drain all items from the high priority queue
     UIThumbnailTask dummy_task;
     size_t flushed_count = 0;
+    std::vector<std::string> flushed_dedup_keys; // Track deduplication keys that need cleanup
+    
     while (high_priority_queue_.try_dequeue(dummy_task)) {
 	flushed_count++;
+	
+	// CLEANUP FLUSHED IN-FLIGHT REQUESTS: Track deduplication keys for cleanup
+	std::string cache_key = make_thumbnail_key(dummy_task.hash, dummy_task.target_width, dummy_task.target_height);
+	std::string dedup_key = cache_key;
+	if (dummy_task.generation_id != 0) {
+	    dedup_key += ":gen:" + std::to_string(dummy_task.generation_id);
+	}
+	flushed_dedup_keys.push_back(dedup_key);
     }
+    
+    // Clean up in-flight tracking for flushed requests to prevent memory leaks
+    if (!flushed_dedup_keys.empty()) {
+	std::lock_guard<std::mutex> lock(in_flight_mutex_);
+	for (const std::string& dedup_key : flushed_dedup_keys) {
+	    in_flight_requests_.erase(dedup_key);
+	}
+	LOG_THUMBNAIL_VERBOSE("ThumbnailWorkers: Cleaned up " + std::to_string(flushed_dedup_keys.size()) + " in-flight tracking entries for flushed requests");
+    }
+    
     LOG_THUMBNAIL_VERBOSE("ThumbnailWorkers: Flushed " + std::to_string(flushed_count) + " items from high priority queue");
 }
 
