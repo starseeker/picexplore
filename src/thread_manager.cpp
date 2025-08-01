@@ -74,7 +74,7 @@ bool DirectoryScanThread::start_scan(const std::string& directory_path, const st
     // Initialize database
     database_ = std::make_unique<DatabaseManager>();
     if (!database_->open(db_path_)) {
-	std::cerr << "[ERROR] DirectoryScanThread: Failed to open database: " << db_path_ << std::endl;
+	LOG_SCAN_BASIC("DirectoryScanThread: Failed to open database: " + db_path_);
 	return false;
     }
 
@@ -109,7 +109,7 @@ void DirectoryScanThread::join() {
 }
 
 void DirectoryScanThread::scan_thread_main() {
-    std::cout << "[INFO] DirectoryScanThread: Starting scan of " << directory_path_ << std::endl;
+    LOG_SCAN_BASIC("DirectoryScanThread: Starting scan of " + directory_path_);
 
     if (progress_reporter_) {
 	progress_reporter_->report_progress(0, 0, "Starting directory scan...");
@@ -131,10 +131,10 @@ void DirectoryScanThread::scan_thread_main() {
 	    }
 	}
 
-	std::cout << "[INFO] DirectoryScanThread: Scan completed with result " << result << std::endl;
+	LOG_SCAN_BASIC("DirectoryScanThread: Scan completed with result " + std::to_string(result));
 
     } catch (const std::exception& e) {
-	std::cerr << "[ERROR] DirectoryScanThread: Exception during scan: " << e.what() << std::endl;
+	LOG_SCAN_BASIC("DirectoryScanThread: Exception during scan: " + std::string(e.what()));
 	if (progress_reporter_) {
 	    progress_reporter_->report_progress(0, 0, "Scan failed with exception");
 	}
@@ -143,7 +143,7 @@ void DirectoryScanThread::scan_thread_main() {
     reporter.stop();
     GlobalFlags::set_scanning(false);
 
-    std::cout << "[INFO] DirectoryScanThread: Thread exiting" << std::endl;
+    LOG_SCAN_BASIC("DirectoryScanThread: Thread exiting");
 }
 
 void DirectoryScanThread::scan_directory_recursive(const std::string& directory) {
@@ -185,7 +185,6 @@ void UpdateMonitorThread::join() {
 
 void UpdateMonitorThread::monitor_thread_main() {
     LOG_SCAN_BASIC("UpdateMonitorThread: Starting monitoring thread");
-    std::cout.flush();
 
     while (!should_stop_.load() && !GlobalFlags::is_shutdown_requested()) {
 	// Monitor scan progress and handle UI updates
@@ -201,7 +200,6 @@ void UpdateMonitorThread::monitor_thread_main() {
 	    };
 
 	    LOG_SCAN_BASIC("UpdateMonitorThread: Notifying UI via Fl::awake() for scan progress update");
-	    std::cout.flush();
 	    Fl::awake(ui_update_callback, this);
 	}
 
@@ -219,7 +217,6 @@ void UpdateMonitorThread::monitor_thread_main() {
     }
 
     LOG_SCAN_BASIC("UpdateMonitorThread: Thread exiting");
-    std::cout.flush();
 }
 
 //==============================================================================
@@ -250,7 +247,7 @@ void WorkerPool::start_workers(int num_workers) {
 	worker_threads_.emplace_back(&WorkerPool::worker_thread_main, this);
     }
 
-    std::cout << "[INFO] WorkerPool: Started " << num_workers << " worker threads" << std::endl;
+    LOG_THREAD_BASIC("WorkerPool: Started " + std::to_string(num_workers) + " worker threads");
 }
 
 void WorkerPool::stop_workers() {
@@ -270,7 +267,6 @@ void WorkerPool::worker_thread_main() {
     active_workers_.fetch_add(1);
 
     LOG_THREAD_BASIC("WorkerPool: Worker thread started");
-    std::cout.flush();
 
     ThumbnailGenerationTask task;
 

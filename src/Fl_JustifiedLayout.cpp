@@ -227,10 +227,14 @@ int Fl_JustifiedLayout::handle(int event) {
 }
 
 void Fl_JustifiedLayout::resize(int X, int Y, int W, int H) {
+    LOG_UI_BASIC("Widget resize: " + std::to_string(W) + "x" + std::to_string(H));
+    
     Fl_Scroll::resize(X, Y, W, H);
 
     // Update layout width accounting for scrollbar
     layout_config_.w = W - 20;
+
+    LOG_UI_VERBOSE("Layout width updated to: " + std::to_string(layout_config_.w));
 
     // Relayout will trigger new thumbnail generation if needed
     relayout();
@@ -305,6 +309,8 @@ void Fl_JustifiedLayout::restore_scroll_position() {
 void Fl_JustifiedLayout::calculate_layout() {
     if (images_.empty()) return;
 
+    LOG_UI_BASIC("Calculating layout for " + std::to_string(images_.size()) + " images");
+
     // Always recalculate layout when called - this ensures correctness
     // for incremental updates. For better performance, we could optimize
     // this later to only recalculate changed portions.
@@ -322,6 +328,9 @@ void Fl_JustifiedLayout::calculate_layout() {
     JustifiedLayout layout(input_items, layout_config_);
     layout_items_ = layout.boxes();
     total_height_ = layout.height();
+
+    LOG_UI_VERBOSE("Layout calculated: " + std::to_string(layout_items_.size()) + 
+                   " items, total height: " + std::to_string(total_height_));
 
     // Calculate visible range based on Fl_Scroll's current position
     visible_start_idx_ = 0;
@@ -350,6 +359,9 @@ void Fl_JustifiedLayout::calculate_layout() {
 	    visible_end_idx_ = static_cast<int>(i);
 	}
     }
+
+    LOG_UI_VERBOSE("Visible range: " + std::to_string(visible_start_idx_) + 
+                   " to " + std::to_string(visible_end_idx_));
 
     // Trigger prefetching when visible region is calculated through ThreadManager
     if (thread_manager_) {
