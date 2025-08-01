@@ -507,7 +507,12 @@ bool ThumbnailWorkers::try_dequeue_result(UIDrawTask& result) {
 	    LOG_THUMBNAIL_VERBOSE("Received shutdown sentinel on result queue");
 	    return false;  // Don't return shutdown sentinels to the UI
 	}
-	LOG_THUMBNAIL_VERBOSE("Dequeued thumbnail draw result - image_index: " + std::to_string(result.image_index) + ", cache_key: " + result.cache_key);
+	// Use image-aware logging for UIDrawTask results when path is available for targeted filtering
+	if (!result.path.empty()) {
+	    LOG_THUMBNAIL_VERBOSE_IMG("Dequeued thumbnail draw result - image_index: " + std::to_string(result.image_index) + ", cache_key: " + result.cache_key, result.path);
+	} else {
+	    LOG_THUMBNAIL_VERBOSE("Dequeued thumbnail draw result - image_index: " + std::to_string(result.image_index) + ", cache_key: " + result.cache_key);
+	}
     }
     return success;
 }
@@ -547,8 +552,9 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	    
 	    // Check generation ID for high priority tasks - discard stale requests
 	    if (task.generation_id != 0 && task.generation_id < current_generation_id_.load()) {
-		LOG_THUMBNAIL_VERBOSE("Discarding stale high priority task - image_index: " + std::to_string(task.image_index) + 
-		                     ", task_gen: " + std::to_string(task.generation_id) + ", current_gen: " + std::to_string(current_generation_id_.load()));
+		// Use image-aware logging for UIThumbnailTask when path is available for targeted filtering
+		LOG_THUMBNAIL_VERBOSE_IMG("Discarding stale high priority task - image_index: " + std::to_string(task.image_index) + 
+		                         ", task_gen: " + std::to_string(task.generation_id) + ", current_gen: " + std::to_string(current_generation_id_.load()), task.path);
 		continue;  // Skip this task and get next one
 	    }
 	    
@@ -570,7 +576,8 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	if (found_task) {
 	    active_tasks_.fetch_add(1);
 	    tasks_processed++;
-	    LOG_THUMBNAIL_VERBOSE("Processing thumbnail task - image_index: " + std::to_string(task.image_index) + ", target size: " + std::to_string(task.target_width) + "x" + std::to_string(task.target_height));
+	    // Use image-aware logging for UIThumbnailTask when path is available for targeted filtering
+	    LOG_THUMBNAIL_VERBOSE_IMG("Processing thumbnail task - image_index: " + std::to_string(task.image_index) + ", target size: " + std::to_string(task.target_width) + "x" + std::to_string(task.target_height), task.path);
 
 	    // Generate UI thumbnail
 	    std::unique_ptr<Fl_RGB_Image> thumbnail;

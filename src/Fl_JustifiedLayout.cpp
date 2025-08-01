@@ -108,10 +108,10 @@ void Fl_JustifiedLayout::process_thread_manager_results() {
 	    }
 	    any_processed = true;
 
-	    // Use image-aware logging when image_index is valid for targeted debugging
-	    if (result.image_index >= 0 && result.image_index < images_.size()) {
+	    // Use image-aware logging with UIDrawTask path member for targeted debugging
+	    if (!result.path.empty()) {
 		LOG_THUMBNAIL_BASIC_IMG("Processed ThreadManager result - replacing Loading... placeholder with real thumbnail for image " + 
-		                       std::to_string(result.image_index) + " (cache_key: " + result.cache_key + ")", images_[result.image_index].path);
+		                       std::to_string(result.image_index) + " (cache_key: " + result.cache_key + ")", result.path);
 	    } else {
 		LOG_THUMBNAIL_BASIC("Processed ThreadManager result - replacing Loading... placeholder with real thumbnail for image " + 
 		                   std::to_string(result.image_index) + " (cache_key: " + result.cache_key + ")");
@@ -1371,6 +1371,9 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails(bool from_timer_
 		    current_generation_id_  // Use current generation ID
 		);
 
+		// Use image-aware logging for UIThumbnailTask requests with path for targeted filtering
+		LOG_THUMBNAIL_VERBOSE_IMG("Queuing high priority UIThumbnailTask for visible image " + std::to_string(idx) + 
+		                         " (size: " + std::to_string(static_cast<int>(item.w) - 2) + "x" + std::to_string(static_cast<int>(item.h) - 2) + ")", task.path);
 		thread_manager_->request_thumbnail(task);
 	    }
 	}
@@ -1393,6 +1396,9 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails(bool from_timer_
 		    0  // Low priority tasks don't use generation ID
 		);
 
+		// Use image-aware logging for UIThumbnailTask requests with path for targeted filtering
+		LOG_THUMBNAIL_VERBOSE_IMG("Queuing low priority UIThumbnailTask for background image " + std::to_string(idx) + 
+		                         " (size: " + std::to_string(static_cast<int>(item.w) - 2) + "x" + std::to_string(static_cast<int>(item.h) - 2) + ")", task.path);
 		thread_manager_->request_thumbnail(task);
 	    }
 	}
