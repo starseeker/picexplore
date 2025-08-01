@@ -69,6 +69,25 @@ Controls logging for directory scanning and file discovery.
 - Metadata extraction details
 - Incremental scan updates
 
+### THUMBNAIL
+Controls logging for thumbnail operations (cache, loading, timers, UI updates).
+
+**Level 1 (Basic)**:
+- Thumbnail requested from cache/ThreadManager
+- Cache miss (requesting from ThreadManager)
+- Thumbnail loaded and UI update triggered  
+- Timer triggers for refinement and scroll settling
+- ThreadManager thumbnail processing completion
+- UI placeholder replacement with real thumbnails
+
+**Level 2 (Verbose)**:
+- Cache hit details (rectangle cache, canonical cache)
+- Image scaling and downsampling operations
+- Thumbnail quality tracking and refinement checks
+- Individual thumbnail task queueing and processing
+- ThreadWorker task dequeuing and completion
+- Detailed timer and generation ID operations
+
 ## Environment Variables
 
 ### Global Control
@@ -86,6 +105,7 @@ Individual categories can be controlled independently:
 - **`UI_LOGGING`**: Controls UI and layout logging (0, 1, or 2)
 - **`THREAD_LOGGING`**: Controls thread management logging (0, 1, or 2)
 - **`SCAN_LOGGING`**: Controls scanning logging (0, 1, or 2)
+- **`THUMBNAIL_LOGGING`**: Controls thumbnail operations logging (0, 1, or 2)
 
 **Note**: Category-specific variables override the global setting for that category.
 
@@ -97,9 +117,16 @@ export PICEXPLORE_LOGGING=1
 ./picexplore /path/to/images
 ```
 
-### Enable verbose batch processing only:
+### Enable verbose thumbnail logging only:
 ```bash
-export BATCH_LOGGING=2
+export THUMBNAIL_LOGGING=2
+./picexplore /path/to/images
+```
+
+### Enable basic thumbnail and UI logging:
+```bash
+export THUMBNAIL_LOGGING=1
+export UI_LOGGING=1
 ./picexplore /path/to/images
 ```
 
@@ -111,9 +138,17 @@ export THREAD_LOGGING=1
 ./picexplore /path/to/images
 ```
 
+### Enable comprehensive thumbnail debugging:
+```bash
+export THUMBNAIL_LOGGING=2
+export THREAD_LOGGING=1
+export UI_LOGGING=1
+./picexplore /path/to/images
+```
+
 ### Disable all logging (default):
 ```bash
-unset PICEXPLORE_LOGGING BATCH_LOGGING UI_LOGGING THREAD_LOGGING SCAN_LOGGING
+unset PICEXPLORE_LOGGING BATCH_LOGGING UI_LOGGING THREAD_LOGGING SCAN_LOGGING THUMBNAIL_LOGGING
 ./picexplore /path/to/images
 ```
 
@@ -130,6 +165,10 @@ All log messages follow this format:
 [14:32:15.145] [BATCH:2] Added image to batch, pending count: 1, total added: 26
 [14:32:15.156] [UI:1] Recalculating layout for batch of 25 images
 [14:32:15.201] [THREAD:1] ThreadManager available, queuing thumbnail requests for 25 new images
+[14:32:15.234] [THUMBNAIL:1] Thumbnail cache miss - requesting from ThreadManager, cache_key: abc123:256
+[14:32:15.267] [THUMBNAIL:2] Enqueuing high priority thumbnail task - image_index: 5, cache_key: abc123:256x256
+[14:32:15.289] [THUMBNAIL:1] Generated real thumbnail successfully, enqueuing to result_queue - image_index: 5
+[14:32:15.312] [THUMBNAIL:1] Drawing real thumbnail - path: /path/image.jpg, size: 256x256
 ```
 
 ## Programming Interface
@@ -156,6 +195,8 @@ LOG_UI_BASIC("Recalculating layout");
 LOG_UI_VERBOSE("Resizing content widget, new height: " + std::to_string(height));
 LOG_THREAD_BASIC("ThreadManager available");
 LOG_SCAN_BASIC("Directory scan completed");
+LOG_THUMBNAIL_BASIC("Thumbnail loaded");
+LOG_THUMBNAIL_VERBOSE("Rectangle cache hit - cache_key: abc123:256x256");
 ```
 
 ## Migration from Legacy Debug Code
@@ -201,3 +242,68 @@ LOG_UI_VERBOSE("drawing placeholder for " + info.path);
    ```bash
    ./picexplore /path/to/images 2>&1 | grep "BATCH:"
    ```
+
+## Thumbnail Debugging Guide
+
+The THUMBNAIL logging category is specifically designed to help diagnose thumbnail loading and display issues. Here are common scenarios and recommended logging levels:
+
+### Debugging Thumbnail Loading Issues
+
+**Problem**: Thumbnails not appearing or taking too long to load
+```bash
+export THUMBNAIL_LOGGING=1
+export THREAD_LOGGING=1
+./picexplore /path/to/images
+```
+Look for:
+- `Thumbnail cache miss` messages (indicates ThreadManager requests)
+- `Generated real thumbnail successfully` (confirms worker completion)
+- `Drawing real thumbnail` vs `Drawing placeholder` (shows UI state)
+
+### Debugging Cache Performance
+
+**Problem**: Suspected cache inefficiency or repeated processing
+```bash
+export THUMBNAIL_LOGGING=2
+./picexplore /path/to/images
+```
+Look for:
+- `Rectangle cache hit/miss` (per-display-size cache)
+- `Thumbnail cache hit` (canonical size cache)  
+- `Cached in rectangle cache` (new cache entries)
+
+### Debugging Scroll Performance
+
+**Problem**: Thumbnails reloading during scroll or poor scroll performance
+```bash
+export THUMBNAIL_LOGGING=1
+./picexplore /path/to/images
+```
+Look for:
+- `Started scroll settling timer` (scroll detection)
+- `Scroll settling timeout - re-evaluating` (post-scroll thumbnail requests)
+- `Discarding stale high priority task` (outdated requests being dropped)
+
+### Debugging Thumbnail Quality/Refinement
+
+**Problem**: Blurry thumbnails or refinement not working
+```bash
+export THUMBNAIL_LOGGING=2
+./picexplore /path/to/images
+```
+Look for:
+- `Performing refinement pass` (timer-driven quality checks)
+- `Requesting higher-res thumbnail for refinement` (quality improvements)
+- `All visible thumbnails optimal` (refinement completion)
+
+### Complete Thumbnail Pipeline Debugging
+
+For comprehensive analysis of the entire thumbnail system:
+```bash
+export THUMBNAIL_LOGGING=2
+export THREAD_LOGGING=1
+export UI_LOGGING=1
+./picexplore /path/to/images 2> thumbnail_debug.log
+```
+
+This captures the complete flow from user interaction through thumbnail generation to UI display.
