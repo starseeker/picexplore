@@ -24,6 +24,7 @@
 
 #include "thread_manager.hpp"
 #include "utils.hpp"
+#include "logging.hpp"
 #include <FL/Fl.H>
 #include <iostream>
 #include <chrono>
@@ -73,16 +74,16 @@ bool DirectoryScanThread::start_scan(const std::string& directory_path, const st
     // Initialize database
     database_ = std::make_unique<DatabaseManager>();
     if (!database_->open(db_path_)) {
-	std::cerr << "[ERROR] DirectoryScanThread: Failed to open database: " << db_path_ << std::endl;
+	LOG_SCAN_BASIC("DirectoryScanThread: Failed to open database: " + db_path_);
 	return false;
     }
 
     // Set up database callback for stage 1 metadata
     database_->set_image_info_callback([this](const ImageInfo& info) {
-	std::cout << "[DEBUG] DirectoryScanThread: Received image metadata callback - path: " << info.path << ", hash: " << info.hash << ", aspect_ratio: " << info.aspect_ratio << std::endl;
-	std::cout.flush();
+	LOG_SCAN_VERBOSE("DirectoryScanThread: Received image metadata callback - path: " + info.path + 
+	                ", hash: " + info.hash + ", aspect_ratio: " + std::to_string(info.aspect_ratio));
 	if (metadata_callback_) {
-	    std::cout << "[DEBUG] DirectoryScanThread: Invoking metadata callback for UI notification - path: " << info.path << std::endl;
+	    LOG_SCAN_VERBOSE("DirectoryScanThread: Invoking metadata callback for UI notification - path: " + info.path);
 	    metadata_callback_(info);
 	}
     });
@@ -108,7 +109,7 @@ void DirectoryScanThread::join() {
 }
 
 void DirectoryScanThread::scan_thread_main() {
-    std::cout << "[INFO] DirectoryScanThread: Starting scan of " << directory_path_ << std::endl;
+    LOG_SCAN_BASIC("DirectoryScanThread: Starting scan of " + directory_path_);
 
     if (progress_reporter_) {
 	progress_reporter_->report_progress(0, 0, "Starting directory scan...");
@@ -130,10 +131,10 @@ void DirectoryScanThread::scan_thread_main() {
 	    }
 	}
 
-	std::cout << "[INFO] DirectoryScanThread: Scan completed with result " << result << std::endl;
+	LOG_SCAN_BASIC("DirectoryScanThread: Scan completed with result " + std::to_string(result));
 
     } catch (const std::exception& e) {
-	std::cerr << "[ERROR] DirectoryScanThread: Exception during scan: " << e.what() << std::endl;
+	LOG_SCAN_BASIC("DirectoryScanThread: Exception during scan: " + std::string(e.what()));
 	if (progress_reporter_) {
 	    progress_reporter_->report_progress(0, 0, "Scan failed with exception");
 	}
@@ -142,7 +143,7 @@ void DirectoryScanThread::scan_thread_main() {
     reporter.stop();
     GlobalFlags::set_scanning(false);
 
-    std::cout << "[INFO] DirectoryScanThread: Thread exiting" << std::endl;
+    LOG_SCAN_BASIC("DirectoryScanThread: Thread exiting");
 }
 
 void DirectoryScanThread::scan_directory_recursive(const std::string& directory) {
@@ -183,8 +184,7 @@ void UpdateMonitorThread::join() {
 }
 
 void UpdateMonitorThread::monitor_thread_main() {
-    std::cout << "[DEBUG] UpdateMonitorThread: Starting monitoring thread" << std::endl;
-    std::cout.flush();
+    LOG_SCAN_BASIC("UpdateMonitorThread: Starting monitoring thread");
 
     while (!should_stop_.load() && !GlobalFlags::is_shutdown_requested()) {
 	// Monitor scan progress and handle UI updates
@@ -199,14 +199,13 @@ void UpdateMonitorThread::monitor_thread_main() {
 		}
 	    };
 
-	    std::cout << "[DEBUG] UpdateMonitorThread: Notifying UI via Fl::awake() for scan progress update" << std::endl;
-	    std::cout.flush();
+	    LOG_SCAN_BASIC("UpdateMonitorThread: Notifying UI via Fl::awake() for scan progress update");
 	    Fl::awake(ui_update_callback, this);
 	}
 
 	// Check for cancellation requests
 	if (GlobalFlags::is_cancel_requested()) {
-	    std::cout << "[DEBUG] UpdateMonitorThread: Cancel request detected, stopping scan thread" << std::endl;
+	    LOG_SCAN_BASIC("UpdateMonitorThread: Cancel request detected, stopping scan thread");
 	    if (scan_thread_) {
 		scan_thread_->stop_scan();
 	    }
@@ -217,8 +216,7 @@ void UpdateMonitorThread::monitor_thread_main() {
 	std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    std::cout << "[DEBUG] UpdateMonitorThread: Thread exiting" << std::endl;
-    std::cout.flush();
+    LOG_SCAN_BASIC("UpdateMonitorThread: Thread exiting");
 }
 
 //==============================================================================
@@ -249,7 +247,7 @@ void WorkerPool::start_workers(int num_workers) {
 	worker_threads_.emplace_back(&WorkerPool::worker_thread_main, this);
     }
 
-    std::cout << "[INFO] WorkerPool: Started " << num_workers << " worker threads" << std::endl;
+    LOG_THREAD_BASIC("WorkerPool: Started " + std::to_string(num_workers) + " worker threads");
 }
 
 void WorkerPool::stop_workers() {
@@ -268,8 +266,7 @@ void WorkerPool::join_all() {
 void WorkerPool::worker_thread_main() {
     active_workers_.fetch_add(1);
 
-    std::cout << "[DEBUG] WorkerPool: Worker thread started" << std::endl;
-    std::cout.flush();
+    LOG_THREAD_BASIC("WorkerPool: Worker thread started");
 
     ThumbnailGenerationTask task;
 
@@ -282,18 +279,19 @@ void WorkerPool::worker_thread_main() {
 	    if (scan_thread_->thumbnail_gen_queue_.wait_dequeue_timed(task, std::chrono::milliseconds(100))) {
 		// Check for shutdown sentinel
 		if (task.is_shutdown_sentinel) {
-		    std::cout << "[DEBUG] WorkerPool: Received shutdown sentinel, exiting worker thread" << std::endl;
+		    LOG_THREAD_BASIC("WorkerPool: Received shutdown sentinel, exiting worker thread");
 		    break;
 		}
 
-		std::cout << "[DEBUG] WorkerPool: Dequeued thumbnail generation task from thumbnail_gen_queue - file: " << task.file_path << ", hash: " << task.hash << std::endl;
+		LOG_THREAD_VERBOSE("WorkerPool: Dequeued thumbnail generation task from thumbnail_gen_queue - file: " + 
+		                   task.file_path + ", hash: " + task.hash);
 		found_task = true;
 		processed_count_.fetch_add(1);
 
 		// Process the thumbnail generation task from directory scan
 		// This connects to the existing DatabaseManager thumbnail generation pipeline
 		if (scan_thread_->database_) {
-		    std::cout << "[DEBUG] WorkerPool: Generating thumbnails for file: " << task.file_path << std::endl;
+		    LOG_THREAD_BASIC("WorkerPool: Generating thumbnails for file: " + task.file_path);
 		    // Use the existing optimized thumbnail generation method that handles:
 		    // - JPEG DCT-domain downscaling for efficiency
 		    // - Multiple thumbnail sizes (32, 64, 128, 256, 512, 1024px)

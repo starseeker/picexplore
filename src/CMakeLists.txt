@@ -1,6 +1,6 @@
 # picexplore executable
 if(JPEG_FOUND)
-    add_executable(picexplore picexplore.cpp Fl_JustifiedLayout.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp thread_manager.cpp ../third_party/TinyEXIF.cpp)
+    add_executable(picexplore picexplore.cpp Fl_JustifiedLayout.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp thread_manager.cpp logging.cpp ../third_party/TinyEXIF.cpp)
     target_include_directories(picexplore PRIVATE
         ${XXHASH_DIR}
         ${STB_DIR}
