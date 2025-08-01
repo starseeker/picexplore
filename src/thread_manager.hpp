@@ -123,12 +123,13 @@ struct UIThumbnailTask {
     int target_width;
     int target_height;
     std::string hash;
+    std::string path;
     uint64_t generation_id = 0;  // For invalidating old high priority requests
     bool is_shutdown_sentinel = false;  // Flag for shutdown coordination
 
     UIThumbnailTask() = default;
-    UIThumbnailTask(int idx, Priority prio, int w, int h, const std::string& hash_val, uint64_t gen_id = 0)
-	: image_index(idx), priority(prio), target_width(w), target_height(h), hash(hash_val), generation_id(gen_id) {}
+    UIThumbnailTask(int idx, Priority prio, int w, int h, const std::string& hash_val, const std::string &img_path, uint64_t gen_id = 0)
+	: image_index(idx), priority(prio), target_width(w), target_height(h), hash(hash_val), path(img_path), generation_id(gen_id) {}
 
     // Create shutdown sentinel
     static UIThumbnailTask create_shutdown_sentinel() {
@@ -142,11 +143,12 @@ struct UIDrawTask {
     int image_index;
     std::unique_ptr<Fl_RGB_Image> thumbnail;
     std::string cache_key;
+    std::string path;
     bool is_shutdown_sentinel = false;  // Flag for shutdown coordination
 
     UIDrawTask() = default;
-    UIDrawTask(int idx, std::unique_ptr<Fl_RGB_Image> thumb, const std::string& key)
-	: image_index(idx), thumbnail(std::move(thumb)), cache_key(key) {}
+    UIDrawTask(int idx, std::unique_ptr<Fl_RGB_Image> thumb, const std::string& key, const std::string &img_path)
+	: image_index(idx), thumbnail(std::move(thumb)), cache_key(key), path(img_path) {}
 
     // Create shutdown sentinel
     static UIDrawTask create_shutdown_sentinel() {

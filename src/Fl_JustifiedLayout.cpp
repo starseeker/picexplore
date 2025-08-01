@@ -1216,7 +1216,8 @@ void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& 
 		UIThumbnailTask::HIGH, // High priority for newly added images
 		static_cast<int>(layout_config_.rh * info.aspect_ratio), // target_width
 		static_cast<int>(layout_config_.rh), // target_height
-		info.hash
+		info.hash,
+		info.path
 	    );
 
 	    LOG_THUMBNAIL_VERBOSE_IMG("Queuing UIThumbnailTask for image " + std::to_string(image_index) +
@@ -1366,6 +1367,7 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails(bool from_timer_
 		    static_cast<int>(item.w) - 2, // Account for border
 		    static_cast<int>(item.h) - 2, // Account for border
 		    img.hash,
+		    img.path,
 		    current_generation_id_  // Use current generation ID
 		);
 
@@ -1387,6 +1389,7 @@ void Fl_JustifiedLayout::update_visibility_and_queue_thumbnails(bool from_timer_
 		    static_cast<int>(item.w) - 2, // Account for border
 		    static_cast<int>(item.h) - 2, // Account for border
 		    img.hash,
+		    img.path,
 		    0  // Low priority tasks don't use generation ID
 		);
 
@@ -1565,7 +1568,8 @@ void Fl_JustifiedLayout::perform_refinement_pass() {
                                 static_cast<int>(i),
                                 UIThumbnailTask::HIGH,
                                 target_w, target_h,
-                                img.hash
+                                img.hash,
+                                img.path
                             );
                             thread_manager_->request_thumbnail(task);
                         }

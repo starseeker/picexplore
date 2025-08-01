@@ -578,7 +578,7 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	    // Only queue real thumbnails for UI - placeholders are generated dynamically in draw code
 	    if (thumbnail) {
 		LOG_THUMBNAIL_BASIC("Generated real thumbnail successfully, enqueuing to result_queue - image_index: " + std::to_string(task.image_index) + ", cache_key: " + cache_key);
-		UIDrawTask result(task.image_index, std::move(thumbnail), cache_key);
+		UIDrawTask result(task.image_index, std::move(thumbnail), cache_key, task.path);
 		result_queue_.enqueue(std::move(result));
 
 		// Notify UI that thumbnail is ready
