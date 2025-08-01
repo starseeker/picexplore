@@ -107,6 +107,10 @@ Individual categories can be controlled independently:
 - **`SCAN_LOGGING`**: Controls scanning logging (0, 1, or 2)
 - **`THUMBNAIL_LOGGING`**: Controls thumbnail operations logging (0, 1, or 2)
 
+### Image Filename Filtering
+
+- **`THUMBNAIL_LOG_IMAGE`**: Filters logging output to show only messages related to a specific image filename. When set, logging calls that include image path information will only emit output if the image's filename matches this filter. Regular logging calls without image path information are not affected.
+
 **Note**: Category-specific variables override the global setting for that category.
 
 ## Usage Examples
@@ -149,6 +153,22 @@ export UI_LOGGING=1
 ### Disable all logging (default):
 ```bash
 unset PICEXPLORE_LOGGING BATCH_LOGGING UI_LOGGING THREAD_LOGGING SCAN_LOGGING THUMBNAIL_LOGGING
+./picexplore /path/to/images
+```
+
+### Filter logging for specific image file:
+```bash
+export THUMBNAIL_LOGGING=2
+export THUMBNAIL_LOG_IMAGE=problematic_image.jpg
+./picexplore /path/to/images
+```
+
+### Debug specific image with comprehensive logging:
+```bash
+export THUMBNAIL_LOGGING=2
+export BATCH_LOGGING=1
+export UI_LOGGING=1
+export THUMBNAIL_LOG_IMAGE=image_name.png
 ./picexplore /path/to/images
 ```
 
@@ -197,6 +217,11 @@ LOG_THREAD_BASIC("ThreadManager available");
 LOG_SCAN_BASIC("Directory scan completed");
 LOG_THUMBNAIL_BASIC("Thumbnail loaded");
 LOG_THUMBNAIL_VERBOSE("Rectangle cache hit - cache_key: abc123:256x256");
+
+// Image-aware macros (with filename filtering support)
+LOG_THUMBNAIL_BASIC_IMG("Drawing thumbnail for: " + path, path);
+LOG_BATCH_VERBOSE_IMG("Processing image: " + info.path, info.path);
+LOG_SCAN_VERBOSE_IMG("Found image: " + file_path, file_path);
 ```
 
 ## Migration from Legacy Debug Code
@@ -241,6 +266,12 @@ LOG_UI_VERBOSE("drawing placeholder for " + info.path);
 5. **Filter output**: Use tools like `grep` to filter specific log categories:
    ```bash
    ./picexplore /path/to/images 2>&1 | grep "BATCH:"
+   ```
+6. **Debug specific images**: Use `THUMBNAIL_LOG_IMAGE` to focus on problematic files:
+   ```bash
+   export THUMBNAIL_LOGGING=2
+   export THUMBNAIL_LOG_IMAGE=problem.jpg
+   ./picexplore /path/to/images 2> debug.log
    ```
 
 ## Thumbnail Debugging Guide
@@ -307,3 +338,49 @@ export UI_LOGGING=1
 ```
 
 This captures the complete flow from user interaction through thumbnail generation to UI display.
+
+## Image Filename Filtering
+
+The logging system supports filtering log output based on specific image filenames using the `THUMBNAIL_LOG_IMAGE` environment variable. This feature is particularly useful for debugging issues with specific problematic images without being overwhelmed by logging output from all images.
+
+### How It Works
+
+When `THUMBNAIL_LOG_IMAGE` is set to a filename (e.g., "problematic_image.jpg"), the logging system will:
+
+1. **Image-aware logging calls**: Only emit log messages from logging calls that include image path information AND where the image filename matches the filter
+2. **Regular logging calls**: Continue to emit all messages from logging calls that don't include image path information (these are not affected by the filter)
+3. **Empty filter**: When the environment variable is not set or is empty, all logging behaves normally (no filtering)
+
+### Usage Examples
+
+#### Debug a specific image with thumbnail issues:
+```bash
+export THUMBNAIL_LOGGING=2
+export THUMBNAIL_LOG_IMAGE=corrupted_image.jpg
+./picexplore /path/to/photos
+```
+
+#### Focus on batch processing for one file:
+```bash
+export BATCH_LOGGING=2
+export THUMBNAIL_LOG_IMAGE=large_file.tiff
+./picexplore /path/to/photos
+```
+
+#### Comprehensive debugging for a specific image:
+```bash
+export THUMBNAIL_LOGGING=2
+export BATCH_LOGGING=1
+export UI_LOGGING=1
+export SCAN_LOGGING=1
+export THUMBNAIL_LOG_IMAGE=problem.png
+./picexplore /path/to/photos 2> specific_image_debug.log
+```
+
+### Important Notes
+
+- **Filename matching**: The filter matches against the filename portion of the path only (e.g., "image.jpg" matches "/path/to/image.jpg", "C:\photos\image.jpg", and "image.jpg")
+- **Exact matching**: The filename must match exactly (case-sensitive)
+- **Path-independent**: Works with Unix, Windows, or relative paths
+- **Non-disruptive**: Regular logging without image paths continues to work normally
+- **Runtime setting**: The filter must be set before the application starts (environment variables are read on first logging call)

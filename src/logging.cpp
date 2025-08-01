@@ -9,6 +9,7 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <filesystem>
 
 namespace picexplore {
 
@@ -24,6 +25,7 @@ Logger::Logger()
     , scan_level_(LogLevel::NONE)
     , thumbnail_level_(LogLevel::NONE)
     , global_level_(LogLevel::NONE)
+    , image_filter_("")
     , initialized_(false) {
 }
 
@@ -80,6 +82,14 @@ void Logger::initializeLevels() const {
         thumbnail_level_ = static_cast<LogLevel>(std::max(0, std::min(2, level)));
     } else {
         thumbnail_level_ = global_level_;
+    }
+
+    // Check image filter
+    const char* image_filter_env = std::getenv("THUMBNAIL_LOG_IMAGE");
+    if (image_filter_env) {
+        image_filter_ = std::string(image_filter_env);
+    } else {
+        image_filter_ = "";
     }
 
     initialized_ = true;
@@ -150,6 +160,33 @@ void Logger::log(LogCategory category, LogLevel level, const std::string& messag
               << message << std::endl;
 }
 
+void Logger::log(LogCategory category, LogLevel level, const std::string& message, const std::string& image_path) const {
+    if (!isEnabled(category, level)) {
+        return;
+    }
+
+    // Check image filter if set
+    if (!matchesImageFilter(image_path)) {
+        return;
+    }
+
+    // Get current timestamp
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+
+    std::ostringstream timestamp;
+    timestamp << std::put_time(std::localtime(&time_t_now), "%H:%M:%S");
+    timestamp << "." << std::setfill('0') << std::setw(3) << ms.count();
+
+    // Format: [HH:MM:SS.mmm] [CATEGORY:LEVEL] message
+    const char* level_str = (level == LogLevel::BASIC) ? "1" : "2";
+    std::cerr << "[" << timestamp.str() << "] [" 
+              << getCategoryName(category) << ":" << level_str << "] " 
+              << message << std::endl;
+}
+
 void Logger::logBatch(LogLevel level, const std::string& message) const {
     log(LogCategory::BATCH, level, message);
 }
@@ -168,6 +205,64 @@ void Logger::logScan(LogLevel level, const std::string& message) const {
 
 void Logger::logThumbnail(LogLevel level, const std::string& message) const {
     log(LogCategory::THUMBNAIL, level, message);
+}
+
+void Logger::logBatch(LogLevel level, const std::string& message, const std::string& image_path) const {
+    log(LogCategory::BATCH, level, message, image_path);
+}
+
+void Logger::logUI(LogLevel level, const std::string& message, const std::string& image_path) const {
+    log(LogCategory::UI, level, message, image_path);
+}
+
+void Logger::logThread(LogLevel level, const std::string& message, const std::string& image_path) const {
+    log(LogCategory::THREAD, level, message, image_path);
+}
+
+void Logger::logScan(LogLevel level, const std::string& message, const std::string& image_path) const {
+    log(LogCategory::SCAN, level, message, image_path);
+}
+
+void Logger::logThumbnail(LogLevel level, const std::string& message, const std::string& image_path) const {
+    log(LogCategory::THUMBNAIL, level, message, image_path);
+}
+
+bool Logger::matchesImageFilter(const std::string& image_path) const {
+    if (!initialized_) {
+        initializeLevels();
+    }
+
+    // If no filter is set, always match
+    if (image_filter_.empty()) {
+        return true;
+    }
+
+    // If no image path provided, always match (fallback to normal logging)
+    if (image_path.empty()) {
+        return true;
+    }
+
+    // Extract filename and check if it matches the filter
+    std::string filename = extractFilename(image_path);
+    return filename == image_filter_;
+}
+
+std::string Logger::extractFilename(const std::string& path) const {
+    if (path.empty()) {
+        return "";
+    }
+
+    try {
+        std::filesystem::path fs_path(path);
+        return fs_path.filename().string();
+    } catch (...) {
+        // Fallback to simple string parsing if filesystem fails
+        size_t last_slash = path.find_last_of("/\\");
+        if (last_slash != std::string::npos && last_slash + 1 < path.length()) {
+            return path.substr(last_slash + 1);
+        }
+        return path;
+    }
 }
 
 } // namespace picexplore

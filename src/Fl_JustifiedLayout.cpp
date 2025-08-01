@@ -569,8 +569,8 @@ void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const 
     Fl_RGB_Image* thumb_image = load_thumbnail_image(info, target_w, target_h);
 
     if (thumb_image) {
-        LOG_THUMBNAIL_BASIC("Drawing real thumbnail - path: " + info.path + 
-                           ", size: " + std::to_string(thumb_image->w()) + "x" + std::to_string(thumb_image->h()));
+        LOG_THUMBNAIL_BASIC_IMG("Drawing real thumbnail - path: " + info.path + 
+                           ", size: " + std::to_string(thumb_image->w()) + "x" + std::to_string(thumb_image->h()), info.path);
         
         // Find the image index for quality tracking
         int image_index = -1;
@@ -611,7 +611,7 @@ void Fl_JustifiedLayout::draw_thumbnail_image(int x, int y, int w, int h, const 
         thumb_image->draw(img_x, img_y);
     } else {
         // Fallback to placeholder rendering
-        LOG_THUMBNAIL_BASIC("Drawing placeholder (thumbnail not available) - path: " + info.path);
+        LOG_THUMBNAIL_BASIC_IMG("Drawing placeholder (thumbnail not available) - path: " + info.path, info.path);
         draw_thumbnail_placeholder(x, y, w, h, info);
     }
 }
@@ -1079,7 +1079,7 @@ void Fl_JustifiedLayout::log_ui_debug(const std::string& message) const {
 }
 
 void Fl_JustifiedLayout::queue_image_info_batch(const ImageInfo& info) {
-    LOG_BATCH_VERBOSE("queue_image_info_batch called for: " + info.path + " (hash: " + info.hash + ")");
+    LOG_BATCH_VERBOSE_IMG("queue_image_info_batch called for: " + info.path + " (hash: " + info.hash + ")", info.path);
 
     std::lock_guard<std::mutex> lock(batch_mutex_);
 
@@ -1169,9 +1169,9 @@ void Fl_JustifiedLayout::process_image_info_batch(const std::vector<ImageInfo>& 
 	    images_.push_back(info);
 	    hash_to_index_map_[info.hash] = images_.size() - 1;
 
-	    LOG_BATCH_VERBOSE("Added image to main list: " + info.path +
+	    LOG_BATCH_VERBOSE_IMG("Added image to main list: " + info.path +
 		    " (index: " + std::to_string(images_.size() - 1) +
-		    ", has_thumbnails: " + (info.has_thumbnails ? "true" : "false") + ")");
+		    ", has_thumbnails: " + (info.has_thumbnails ? "true" : "false") + ")", info.path);
 	}
     }
 
@@ -1238,9 +1238,9 @@ void Fl_JustifiedLayout::batch_flush_callback(void* data) {
 
 // Two-stage population support methods
 void Fl_JustifiedLayout::handle_image_info_ready(const ImageInfo& info) {
-    LOG_UI_VERBOSE("handle_image_info_ready called for: " + info.path +
+    LOG_UI_VERBOSE_IMG("handle_image_info_ready called for: " + info.path +
 	    " (hash: " + info.hash + ", has_thumbnails: " +
-	    (info.has_thumbnails ? "true" : "false") + ")");
+	    (info.has_thumbnails ? "true" : "false") + ")", info.path);
 
     // Instead of processing immediately, queue for batch processing
     queue_image_info_batch(info);

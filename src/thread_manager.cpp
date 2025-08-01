@@ -80,10 +80,10 @@ bool DirectoryScanThread::start_scan(const std::string& directory_path, const st
 
     // Set up database callback for stage 1 metadata
     database_->set_image_info_callback([this](const ImageInfo& info) {
-	LOG_SCAN_VERBOSE("DirectoryScanThread: Received image metadata callback - path: " + info.path + 
-	                ", hash: " + info.hash + ", aspect_ratio: " + std::to_string(info.aspect_ratio));
+	LOG_SCAN_VERBOSE_IMG("DirectoryScanThread: Received image metadata callback - path: " + info.path + 
+	                ", hash: " + info.hash + ", aspect_ratio: " + std::to_string(info.aspect_ratio), info.path);
 	if (metadata_callback_) {
-	    LOG_SCAN_VERBOSE("DirectoryScanThread: Invoking metadata callback for UI notification - path: " + info.path);
+	    LOG_SCAN_VERBOSE_IMG("DirectoryScanThread: Invoking metadata callback for UI notification - path: " + info.path, info.path);
 	    metadata_callback_(info);
 	}
     });
@@ -291,7 +291,7 @@ void WorkerPool::worker_thread_main() {
 		// Process the thumbnail generation task from directory scan
 		// This connects to the existing DatabaseManager thumbnail generation pipeline
 		if (scan_thread_->database_) {
-		    LOG_THREAD_BASIC("WorkerPool: Generating thumbnails for file: " + task.file_path);
+		    LOG_THREAD_BASIC_IMG("WorkerPool: Generating thumbnails for file: " + task.file_path, task.file_path);
 		    // Use the existing optimized thumbnail generation method that handles:
 		    // - JPEG DCT-domain downscaling for efficiency
 		    // - Multiple thumbnail sizes (32, 64, 128, 256, 512, 1024px)
