@@ -259,7 +259,7 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
     // Load file into memory
     std::ifstream file(filepath, std::ios::binary);
     if (!file) {
-	fprintf(stderr, "Error: Failed to open file for JPEG decoding: '%s'\n", filepath.c_str());
+	LOG_SCAN_BASIC("DatabaseManager: Failed to open file for JPEG decoding: '" + filepath + "'");
 	return {};
     }
 
@@ -282,7 +282,7 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
 
     // Read JPEG header
     if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
-	fprintf(stderr, "Error: Failed to read JPEG header for '%s'\n", filepath.c_str());
+	LOG_SCAN_BASIC("DatabaseManager: Failed to read JPEG header for '" + filepath + "'");
 	jpeg_destroy_decompress(&cinfo);
 	return {};
     }
@@ -317,7 +317,7 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
 
     // Start decompression
     if (!jpeg_start_decompress(&cinfo)) {
-	fprintf(stderr, "Error: Failed to start JPEG decompression for '%s'\n", filepath.c_str());
+	LOG_SCAN_BASIC("DatabaseManager: Failed to start JPEG decompression for '" + filepath + "'");
 	jpeg_destroy_decompress(&cinfo);
 	return {};
     }
@@ -331,7 +331,7 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
 
     // Ensure we have RGB output (3 components)
     if (output_components != 3) {
-	fprintf(stderr, "Error: Expected RGB output but got %d components for '%s'\n", output_components, filepath.c_str());
+	LOG_SCAN_BASIC("DatabaseManager: Expected RGB output but got " + std::to_string(output_components) + " components for '" + filepath + "'");
 	jpeg_finish_decompress(&cinfo);
 	jpeg_destroy_decompress(&cinfo);
 	return {};
@@ -839,22 +839,22 @@ void DatabaseManager::writer_thread(moodycamel::BlockingConcurrentQueue<WriteTas
 	if (write_queue.wait_dequeue_timed(task, std::chrono::milliseconds(100))) {
 	    // Check for shutdown sentinel
 	    if (task.type == WriteTask::SHUTDOWN) {
-		std::cout << "[DEBUG] DatabaseManager: Received shutdown sentinel in writer thread, exiting" << std::endl;
+		LOG_SCAN_BASIC("DatabaseManager: Received shutdown sentinel in writer thread, exiting");
 		break;
 	    }
 	    
-	    std::cout << "[DEBUG] DatabaseManager: Dequeued write task from writeQueue - type: " << task.type << ", key: " << task.key << std::endl;
+	    LOG_SCAN_VERBOSE("DatabaseManager: Dequeued write task from writeQueue - type: " + std::to_string(task.type) + ", key: " + task.key);
 	    batch.push_back(std::move(task));
 	    
 	    // Try to dequeue additional items for batching (non-blocking)
 	    for (int i = 1; i < BATCH_SIZE && write_queue.try_dequeue(task); i++) {
 		// Check for shutdown sentinel in batch
 		if (task.type == WriteTask::SHUTDOWN) {
-		    std::cout << "[DEBUG] DatabaseManager: Received shutdown sentinel during batching, processing current batch then exiting" << std::endl;
+		    LOG_SCAN_BASIC("DatabaseManager: Received shutdown sentinel during batching, processing current batch then exiting");
 		    workers_done.store(true);  // Signal to exit after this batch
 		    break;
 		}
-		std::cout << "[DEBUG] DatabaseManager: Batched additional write task - type: " << task.type << ", key: " << task.key << std::endl;
+		LOG_SCAN_VERBOSE("DatabaseManager: Batched additional write task - type: " + std::to_string(task.type) + ", key: " + task.key);
 		batch.push_back(std::move(task));
 	    }
 	} else {
