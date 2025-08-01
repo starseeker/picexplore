@@ -56,18 +56,38 @@ Controls logging for thread management and thumbnail processing.
 - Synchronization operations
 
 ### SCAN
-Controls logging for directory scanning and file discovery.
+Controls logging for directory scanning, file discovery, and database operations.
 
 **Level 1 (Basic)**:
 - Scan start/completion events
 - Progress summaries
 - Error conditions
+- Database connection and transaction errors
+- Major file processing errors
 
 **Level 2 (Verbose)**:
 - Individual file processing
 - Database operations
 - Metadata extraction details
 - Incremental scan updates
+- Detailed worker thread operations
+- Database write task queueing
+
+### THREAD
+Controls logging for thread management, worker pools, and background processing.
+
+**Level 1 (Basic)**:
+- Thread pool operations
+- Worker thread lifecycle events
+- Major thread state changes
+- Thumbnail generation failures
+
+**Level 2 (Verbose)**:
+- Detailed thread scheduling
+- Individual worker tasks
+- Task queue operations
+- Write thread batching operations
+- Synchronization operations
 
 ### THUMBNAIL
 Controls logging for thumbnail operations (cache, loading, timers, UI updates).
@@ -79,6 +99,8 @@ Controls logging for thumbnail operations (cache, loading, timers, UI updates).
 - Timer triggers for refinement and scroll settling
 - ThreadManager thumbnail processing completion
 - UI placeholder replacement with real thumbnails
+- ThumbnailWorker thread lifecycle events
+- Thumbnail generation errors
 
 **Level 2 (Verbose)**:
 - Cache hit details (rectangle cache, canonical cache)
@@ -87,6 +109,8 @@ Controls logging for thumbnail operations (cache, loading, timers, UI updates).
 - Individual thumbnail task queueing and processing
 - ThreadWorker task dequeuing and completion
 - Detailed timer and generation ID operations
+- Database thumbnail lookup operations
+- In-flight request tracking
 
 ## Environment Variables
 
@@ -150,6 +174,21 @@ export UI_LOGGING=1
 ./picexplore /path/to/images
 ```
 
+### Enable database and scanning debugging:
+```bash
+export SCAN_LOGGING=2
+export THREAD_LOGGING=1
+./picexplore /path/to/images
+```
+
+### Enable comprehensive worker debugging:
+```bash
+export SCAN_LOGGING=1
+export THREAD_LOGGING=2
+export THUMBNAIL_LOGGING=2
+./picexplore /path/to/images
+```
+
 ### Disable all logging (default):
 ```bash
 unset PICEXPLORE_LOGGING BATCH_LOGGING UI_LOGGING THREAD_LOGGING SCAN_LOGGING THUMBNAIL_LOGGING
@@ -189,6 +228,14 @@ All log messages follow this format:
 [14:32:15.267] [THUMBNAIL:2] Enqueuing high priority thumbnail task - image_index: 5, cache_key: abc123:256x256
 [14:32:15.289] [THUMBNAIL:1] Generated real thumbnail successfully, enqueuing to result_queue - image_index: 5
 [14:32:15.312] [THUMBNAIL:1] Drawing real thumbnail - path: /path/image.jpg, size: 256x256
+[14:32:15.345] [SCAN:1] DatabaseManager: Starting scan of /home/user/photos
+[14:32:15.367] [SCAN:2] DatabaseManager: Processing image file: /home/user/photos/IMG_001.jpg
+[14:32:15.389] [SCAN:2] DatabaseManager: Extracted metadata - hash: abc123def, aspect_ratio: 1.33
+[14:32:15.421] [THREAD:1] WorkerPool: Worker thread started, processing files 0 to 99
+[14:32:15.445] [THREAD:2] WorkerPool: Successfully generated thumbnails, enqueuing write task - hash: abc123def
+[14:32:15.467] [THUMBNAIL:1] ThumbnailWorkers: Started 4 thumbnail worker threads
+[14:32:15.489] [THUMBNAIL:2] ThumbnailWorkers: Selected best thumbnail size 256px for hash: abc123def
+```
 ```
 
 ## Programming Interface

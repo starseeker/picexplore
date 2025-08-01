@@ -303,16 +303,18 @@ void WorkerPool::worker_thread_main() {
 		    if (success) {
 			// Use image-aware logging for thumbnail generation tasks since file_path is available
 			LOG_THREAD_BASIC_IMG("WorkerPool: Successfully generated thumbnails, enqueuing write task to writeQueue - hash: " + task.hash, task.file_path);
+
 			// Create a completion task for the writer thread
 			// Note: generate_thumbnails_for_hash handles its own database writes,
 			// so this is mainly for progress tracking
 			WriteTask write_task(WriteTask::STORE_THUMBNAIL, task.hash, std::vector<uint8_t>());
 			write_queue_.enqueue(std::move(write_task));
 		    } else {
+
 			// Use image-aware logging for thumbnail generation tasks since file_path is available
 			LOG_THREAD_BASIC_IMG("WorkerPool: Failed to generate thumbnails for file: " + task.file_path + " (hash: " + task.hash + ")", task.file_path);
-			std::cerr << "[WARNING] WorkerPool: Failed to generate thumbnails for "
-				  << task.file_path << " (hash: " << task.hash << ")" << std::endl;
+			LOG_THREAD_BASIC("WorkerPool: Failed to generate thumbnails for " + task.file_path + " (hash: " + task.hash + ")");
+
 		    }
 		}
 	    }
@@ -323,8 +325,7 @@ void WorkerPool::worker_thread_main() {
     }
 
     active_workers_.fetch_sub(1);
-    std::cout << "[DEBUG] WorkerPool: Worker thread exiting" << std::endl;
-    std::cout.flush();
+    LOG_THREAD_BASIC("WorkerPool: Worker thread exiting");
 }
 
 //==============================================================================
@@ -360,8 +361,7 @@ void WriterThread::join() {
 }
 
 void WriterThread::writer_thread_main() {
-    std::cout << "[DEBUG] WriterThread: Starting writer thread" << std::endl;
-    std::cout.flush();
+    LOG_THREAD_BASIC("WriterThread: Starting writer thread");
 
     WriteTask task;
     std::vector<WriteTask> batch;
@@ -373,11 +373,11 @@ void WriterThread::writer_thread_main() {
 	    if (worker_pool_->get_write_queue().wait_dequeue_timed(task, std::chrono::milliseconds(100))) {
 		// Check for shutdown sentinel
 		if (task.type == WriteTask::SHUTDOWN) {
-		    std::cout << "[DEBUG] WriterThread: Received shutdown sentinel, exiting writer thread" << std::endl;
+		    LOG_THREAD_BASIC("WriterThread: Received shutdown sentinel, exiting writer thread");
 		    break;
 		}
 
-		std::cout << "[DEBUG] WriterThread: Dequeued write task from writeQueue - type: " << task.type << ", key: " << task.key << std::endl;
+		LOG_THREAD_VERBOSE("WriterThread: Dequeued write task from writeQueue - type: " + std::to_string(task.type) + ", key: " + task.key);
 		batch.push_back(std::move(task));
 	    }
 	    // If wait_dequeue_timed returned false, it means timeout - continue to check batch processing
@@ -438,7 +438,7 @@ void ThumbnailWorkers::start_workers(int num_workers) {
 	worker_threads_.emplace_back(&ThumbnailWorkers::thumbnail_worker_thread_main, this);
     }
 
-    std::cout << "[INFO] ThumbnailWorkers: Started " << num_workers << " thumbnail worker threads" << std::endl;
+    LOG_THUMBNAIL_BASIC("ThumbnailWorkers: Started " + std::to_string(num_workers) + " thumbnail worker threads");
 }
 
 void ThumbnailWorkers::stop_workers() {
@@ -448,7 +448,7 @@ void ThumbnailWorkers::stop_workers() {
     {
 	std::lock_guard<std::mutex> lock(in_flight_mutex_);
 	if (!in_flight_requests_.empty()) {
-	    std::cout << "[DEBUG] ThumbnailWorkers: Clearing " << in_flight_requests_.size() << " in-flight requests during shutdown" << std::endl;
+	    LOG_THUMBNAIL_VERBOSE("ThumbnailWorkers: Clearing " + std::to_string(in_flight_requests_.size()) + " in-flight requests during shutdown");
 	    in_flight_requests_.clear();
 	}
     }
@@ -524,8 +524,7 @@ void ThumbnailWorkers::flush_high_priority_queue() {
     while (high_priority_queue_.try_dequeue(dummy_task)) {
 	flushed_count++;
     }
-    std::cout << "[DEBUG] ThumbnailWorkers: Flushed " << flushed_count << " items from high priority queue" << std::endl;
-    std::cout.flush();
+    LOG_THUMBNAIL_VERBOSE("ThumbnailWorkers: Flushed " + std::to_string(flushed_count) + " items from high priority queue");
 }
 
 uint64_t ThumbnailWorkers::get_next_generation_id() {
@@ -533,8 +532,7 @@ uint64_t ThumbnailWorkers::get_next_generation_id() {
 }
 
 void ThumbnailWorkers::thumbnail_worker_thread_main() {
-    std::cout << "[DEBUG] ThumbnailWorkers: Thumbnail worker thread started" << std::endl;
-    std::cout.flush();
+    LOG_THUMBNAIL_BASIC("ThumbnailWorkers: Thumbnail worker thread started");
 
     UIThumbnailTask task;
     int tasks_processed = 0;
