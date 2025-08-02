@@ -37,6 +37,7 @@
 #include <FL/Fl_RGB_Image.H>
 #include "database.hpp"
 #include "task_scheduler.hpp"
+#include "state_store.hpp"
 #include "concurrentqueue.h"
 #include "blockingconcurrentqueue.h"
 
@@ -437,6 +438,10 @@ public:
     bool is_scanning() const { return GlobalFlags::is_scanning(); }
     bool is_shutdown() const { return GlobalFlags::is_shutdown_requested(); }
 
+    // StateStore access for UI and other components
+    StateStore& get_state_store() { return *state_store_; }
+    const StateStore& get_state_store() const { return *state_store_; }
+
 private:
     void initialize_threads();
     void cleanup_threads();
@@ -449,6 +454,7 @@ private:
     std::shared_ptr<ThumbnailWorkers> thumbnail_workers_;
 
     std::shared_ptr<ProgressReporter> progress_reporter_;
+    std::shared_ptr<StateStore> state_store_;  // Central state management
 
     bool initialized_;
 };

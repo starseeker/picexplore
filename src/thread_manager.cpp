@@ -33,6 +33,20 @@
 #include "stb_image.h"
 #include "stb_image_resize2.h"
 
+// Utility function to convert database ImageInfo to StateStore StateImageInfo
+StateImageInfo convert_to_state_store_image_info(const ::ImageInfo& db_info) {
+    StateImageInfo state_info;
+    state_info.path = db_info.path;
+    state_info.hash = db_info.hash;
+    state_info.aspect_ratio = db_info.aspect_ratio;
+    state_info.best_thumb_size = db_info.best_thumb_size;
+    state_info.thumb_data = db_info.thumb_data;
+    state_info.thumb_width = db_info.thumb_width;
+    state_info.thumb_height = db_info.thumb_height;
+    state_info.has_thumbnails = db_info.has_thumbnails;
+    return state_info;
+}
+
 // Global flags initialization
 std::atomic<bool> GlobalFlags::should_shutdown{false};
 std::atomic<bool> GlobalFlags::should_cancel_scan{false};
@@ -969,6 +983,7 @@ void ThreadManager::initialize_threads() {
 
     // Create shared components
     progress_reporter_ = std::make_shared<ProgressReporter>();
+    state_store_ = std::make_shared<StateStore>();
 
     // Create thread components
     scan_thread_ = std::make_shared<DirectoryScanThread>();
@@ -982,9 +997,46 @@ void ThreadManager::initialize_threads() {
     monitor_thread_->set_progress_reporter(progress_reporter_);
     worker_pool_->set_scan_thread(scan_thread_);
 
+    // Set up StateStore integration - forward database metadata events to StateStore
+    scan_thread_->set_metadata_callback([this](const ::ImageInfo& db_info) {
+        // Convert database ImageInfo to StateStore StateImageInfo and update StateStore
+        StateImageInfo state_info = convert_to_state_store_image_info(db_info);
+        state_store_->add_image_metadata(state_info);
+        LOG_SCAN_VERBOSE_IMG("ThreadManager: Added image metadata to StateStore - hash: " + state_info.hash, state_info.path);
+    });
+
+    // Set up StateStore event subscriptions for progress updates
+    state_store_->get_event_bus().subscribe(StateEventType::SCAN_STARTED,
+        [this](const StateEvent& event) {
+            const auto& scan_event = static_cast<const ScanEvent&>(event);
+            if (progress_reporter_) {
+                progress_reporter_->report_progress(0, 0, "Scan started: " + scan_event.status_message);
+            }
+        });
+
+    state_store_->get_event_bus().subscribe(StateEventType::SCAN_PROGRESS,
+        [this](const StateEvent& event) {
+            const auto& scan_event = static_cast<const ScanEvent&>(event);
+            if (progress_reporter_) {
+                progress_reporter_->report_progress(scan_event.current_count, 
+                                                  scan_event.total_count, 
+                                                  scan_event.status_message);
+            }
+        });
+
+    state_store_->get_event_bus().subscribe(StateEventType::SCAN_COMPLETED,
+        [this](const StateEvent& event) {
+            const auto& scan_event = static_cast<const ScanEvent&>(event);
+            if (progress_reporter_) {
+                progress_reporter_->report_progress(scan_event.current_count, 
+                                                  scan_event.total_count, 
+                                                  "Scan completed");
+            }
+        });
+
     initialized_ = true;
 
-    std::cout << "[INFO] ThreadManager: Thread system initialized" << std::endl;
+    std::cout << "[INFO] ThreadManager: Thread system initialized with StateStore integration" << std::endl;
 }
 
 void ThreadManager::cleanup_threads() {
@@ -999,6 +1051,7 @@ void ThreadManager::cleanup_threads() {
     monitor_thread_.reset();
     scan_thread_.reset();
     progress_reporter_.reset();
+    state_store_.reset();  // Clean up StateStore last
 
     initialized_ = false;
 
@@ -1009,6 +1062,9 @@ bool ThreadManager::start_directory_scan(const std::string& directory_path, cons
     if (!initialized_) {
 	return false;
     }
+
+    // Notify StateStore that scan is starting
+    state_store_->start_scan(directory_path);
 
     // Start all supporting threads first
     worker_pool_->start_workers();
@@ -1027,6 +1083,8 @@ bool ThreadManager::start_directory_scan(const std::string& directory_path, cons
 	std::cout << "[INFO] ThreadManager: Started directory scan for " << directory_path << std::endl;
     } else {
 	std::cerr << "[ERROR] ThreadManager: Failed to start directory scan" << std::endl;
+        // If scan failed, cancel the StateStore scan as well
+        state_store_->cancel_scan();
     }
 
     return result;
@@ -1034,6 +1092,10 @@ bool ThreadManager::start_directory_scan(const std::string& directory_path, cons
 
 void ThreadManager::cancel_scan() {
     GlobalFlags::request_cancel();
+    // Also notify StateStore of cancellation
+    if (state_store_) {
+        state_store_->cancel_scan();
+    }
     std::cout << "[INFO] ThreadManager: Scan cancellation requested" << std::endl;
 }
 
