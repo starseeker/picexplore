@@ -41,6 +41,11 @@ add_executable(task_scheduler_test task_scheduler.cpp logging.cpp ../test/task_s
 target_include_directories(task_scheduler_test PRIVATE .)
 target_compile_options(task_scheduler_test PRIVATE -g)
 
+# Integration test (TaskScheduler + queue communication)
+add_executable(integration_test task_scheduler.cpp logging.cpp ../test/integration_test.cpp)
+target_include_directories(integration_test PRIVATE .)
+target_compile_options(integration_test PRIVATE -g)
+
 # Local Variables:
 # tab-width: 8
 # mode: cmake
