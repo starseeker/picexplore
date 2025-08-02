@@ -33,6 +33,21 @@
 #include <optional>
 #include <shared_mutex>
 #include "event_bus.hpp"
+#include "cache_provider.hpp"
+
+/**
+ * Cache configuration structure
+ */
+struct CacheConfig {
+    size_t max_memory_mb = 50;      // Maximum memory in MB (0 = unlimited)
+    size_t max_items = 1000;        // Maximum number of items (0 = unlimited)
+    bool enable_stats = true;       // Enable statistics collection
+    
+    // Convert to bytes for internal use
+    size_t max_memory_bytes() const { 
+        return max_memory_mb * 1024 * 1024; 
+    }
+};
 
 // Forward declarations
 class DatabaseManager;
@@ -52,7 +67,7 @@ struct StateImageInfo {
 };
 
 /**
- * Cached thumbnail data structure
+ * Cached thumbnail data structure (compatible with CacheProvider)
  */
 struct CachedThumbnail {
     std::vector<uint8_t> data;     // JPEG thumbnail data
@@ -60,12 +75,24 @@ struct CachedThumbnail {
     int height = 0;
     int size = 0;                  // Size category (32, 64, 128, etc.)
     std::string cache_key;         // "hash:size" format
-    std::chrono::steady_clock::time_point last_accessed;
     
-    CachedThumbnail() : last_accessed(std::chrono::steady_clock::now()) {}
+    CachedThumbnail() = default;
     CachedThumbnail(const std::vector<uint8_t>& d, int w, int h, int s, const std::string& key)
-        : data(d), width(w), height(h), size(s), cache_key(key)
-        , last_accessed(std::chrono::steady_clock::now()) {}
+        : data(d), width(w), height(h), size(s), cache_key(key) {}
+};
+
+/**
+ * Wrapper for thumbnail data that includes metadata for caching
+ */
+struct ThumbnailCacheData {
+    std::vector<uint8_t> jpeg_data;
+    int width;
+    int height;
+    int size_category;
+    
+    ThumbnailCacheData() = default;
+    ThumbnailCacheData(const std::vector<uint8_t>& data, int w, int h, int size)
+        : jpeg_data(data), width(w), height(h), size_category(size) {}
 };
 
 /**
@@ -109,6 +136,7 @@ struct ScanState {
 class StateStore {
 public:
     StateStore();
+    explicit StateStore(const CacheConfig& cache_config);
     ~StateStore();
 
     /**
@@ -148,6 +176,12 @@ public:
      * Check if image exists
      */
     bool has_image(const std::string& hash) const;
+
+    /**
+     * Remove an image and all its thumbnails from state
+     * Publishes IMAGE_REMOVED and THUMBNAIL_INVALIDATED events
+     */
+    void remove_image(const std::string& hash);
 
     //==========================================================================
     // Thumbnail Management
@@ -229,12 +263,37 @@ public:
     void clear_thumbnail_cache();
     
     /**
+     * Set cache memory limit
+     * @param max_memory_mb Maximum memory usage in megabytes (0 = unlimited)
+     */
+    void set_cache_memory_limit(size_t max_memory_mb);
+    
+    /**
+     * Set cache item limit
+     * @param max_items Maximum number of cached items (0 = unlimited)
+     */
+    void set_cache_item_limit(size_t max_items);
+    
+    /**
+     * Get current cache configuration
+     */
+    CacheConfig get_cache_config() const;
+    
+    /**
+     * Update cache configuration
+     */
+    void update_cache_config(const CacheConfig& config);
+    
+    /**
      * Get cache statistics
      */
     struct CacheStats {
         size_t image_count = 0;
         size_t thumbnail_count = 0;
-        size_t cache_memory_usage = 0; // Approximate bytes
+        size_t cache_memory_usage = 0; // Bytes
+        size_t cache_hit_count = 0;
+        size_t cache_miss_count = 0;
+        double cache_hit_ratio = 0.0;
     };
     CacheStats get_cache_stats() const;
 
@@ -247,7 +306,7 @@ private:
     
     // State storage
     std::unordered_map<std::string, std::shared_ptr<ImageState>> images_by_hash_;
-    std::unordered_map<std::string, std::shared_ptr<CachedThumbnail>> thumbnail_cache_;
+    mutable CacheProvider<ThumbnailCacheData> thumbnail_cache_;
     ScanState scan_state_;
     
     // Helper methods
@@ -255,7 +314,10 @@ private:
     void publish_thumbnail_event(StateEventType type, const std::string& hash, 
                                 const CachedThumbnail& thumbnail);
     void publish_scan_event(StateEventType type);
+    void publish_cache_event(StateEventType type, const std::string& cache_key = "", 
+                           size_t memory_freed = 0, size_t items_affected = 0);
     std::string make_thumbnail_cache_key(const std::string& hash, int size) const;
+    void setup_cache_eviction_callback();
 };
 
 // Local Variables:

@@ -46,12 +46,16 @@ struct ScanEvent;
 enum class StateEventType {
     IMAGE_METADATA_ADDED,    // New image metadata available
     IMAGE_METADATA_UPDATED,  // Existing image metadata changed
+    IMAGE_REMOVED,           // Image removed from state
     THUMBNAIL_READY,         // Thumbnail generated and available
     THUMBNAIL_UPDATED,       // Existing thumbnail updated
+    THUMBNAIL_INVALIDATED,   // Thumbnail invalidated and removed from cache
     SCAN_STARTED,           // Directory scan started
     SCAN_PROGRESS,          // Scan progress update
     SCAN_COMPLETED,         // Directory scan completed
-    SCAN_CANCELLED          // Directory scan cancelled
+    SCAN_CANCELLED,         // Directory scan cancelled
+    CACHE_EVICTED,          // Cache item evicted due to memory/size limits
+    CACHE_CLEARED           // Cache cleared manually
 };
 
 /**
@@ -104,6 +108,18 @@ struct ScanEvent : public StateEvent {
     
     ScanEvent(StateEventType t, int current = 0, int total = 0, const std::string& msg = "")
         : StateEvent(t), current_count(current), total_count(total), status_message(msg) {}
+};
+
+/**
+ * Cache-related event data
+ */
+struct CacheEvent : public StateEvent {
+    std::string cache_key;
+    size_t memory_freed = 0;
+    size_t items_affected = 0;
+    
+    CacheEvent(StateEventType t, const std::string& key = "", size_t memory = 0, size_t items = 0)
+        : StateEvent(t), cache_key(key), memory_freed(memory), items_affected(items) {}
 };
 
 /**
