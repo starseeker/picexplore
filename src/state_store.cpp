@@ -8,7 +8,10 @@
 #include <algorithm>
 #include <shared_mutex>
 
-StateStore::StateStore() {
+StateStore::StateStore() 
+    : thumbnail_cache_(50 * 1024 * 1024, 1000) // Default: 50MB, 1000 items max
+{
+    setup_cache_eviction_callback();
 }
 
 StateStore::~StateStore() {
@@ -93,20 +96,17 @@ void StateStore::add_thumbnail(const std::string& hash, int size, const std::vec
     {
         std::unique_lock<std::shared_mutex> lock(state_mutex_);
         
-        auto it = thumbnail_cache_.find(cache_key);
-        if (it == thumbnail_cache_.end()) {
-            // New thumbnail
-            auto thumbnail = std::make_shared<CachedThumbnail>(data, width, height, size, cache_key);
-            thumbnail_cache_[cache_key] = thumbnail;
+        // Check if thumbnail already exists
+        if (!thumbnail_cache_.contains(cache_key)) {
             is_new_thumbnail = true;
             event_type = StateEventType::THUMBNAIL_READY;
-        } else {
-            // Update existing thumbnail
-            it->second->data = data;
-            it->second->width = width;
-            it->second->height = height;
-            it->second->last_accessed = std::chrono::steady_clock::now();
         }
+        
+        // Create thumbnail cache data
+        ThumbnailCacheData cache_data(data, width, height, size);
+        
+        // Add to cache with data size
+        thumbnail_cache_.put(cache_key, std::move(cache_data), data.size());
         
         // Update image state to track available thumbnail sizes
         auto img_it = images_by_hash_.find(hash);
@@ -120,6 +120,9 @@ void StateStore::add_thumbnail(const std::string& hash, int size, const std::vec
         }
     }
     
+    // Create a CachedThumbnail for the event (compatibility)
+    CachedThumbnail thumbnail(data, width, height, size, cache_key);
+    
     // Publish event outside of lock
     ThumbnailEvent thumbnail_event(event_type, hash, width, height, size);
     event_bus_.publish(thumbnail_event);
@@ -129,13 +132,20 @@ std::shared_ptr<const CachedThumbnail> StateStore::get_thumbnail(const std::stri
     std::shared_lock<std::shared_mutex> lock(state_mutex_);
     
     std::string cache_key = make_thumbnail_cache_key(hash, size);
-    auto it = thumbnail_cache_.find(cache_key);
-    if (it != thumbnail_cache_.end()) {
-        // Update last accessed time (const_cast is safe here for cache management)
-        const_cast<CachedThumbnail*>(it->second.get())->last_accessed = 
-            std::chrono::steady_clock::now();
-        return it->second;
+    auto cache_item = thumbnail_cache_.get(cache_key);
+    
+    if (cache_item) {
+        // Convert from cache format to legacy format for compatibility
+        auto cached_thumbnail = std::make_shared<CachedThumbnail>(
+            cache_item->data.jpeg_data,
+            cache_item->data.width,
+            cache_item->data.height,
+            cache_item->data.size_category,
+            cache_key
+        );
+        return cached_thumbnail;
     }
+    
     return nullptr;
 }
 
@@ -143,7 +153,7 @@ bool StateStore::has_thumbnail(const std::string& hash, int size) const {
     std::shared_lock<std::shared_mutex> lock(state_mutex_);
     
     std::string cache_key = make_thumbnail_cache_key(hash, size);
-    return thumbnail_cache_.find(cache_key) != thumbnail_cache_.end();
+    return thumbnail_cache_.contains(cache_key);
 }
 
 void StateStore::mark_thumbnails_generated(const std::string& hash, const std::vector<int>& sizes) {
@@ -243,6 +253,19 @@ ScanState StateStore::get_scan_state() const {
 void StateStore::clear_thumbnail_cache() {
     std::unique_lock<std::shared_mutex> lock(state_mutex_);
     thumbnail_cache_.clear();
+    
+    // Publish cache cleared event
+    publish_cache_event(StateEventType::CACHE_CLEARED);
+}
+
+void StateStore::set_cache_memory_limit(size_t max_memory_mb) {
+    std::unique_lock<std::shared_mutex> lock(state_mutex_);
+    thumbnail_cache_.set_max_memory(max_memory_mb * 1024 * 1024); // Convert MB to bytes
+}
+
+void StateStore::set_cache_item_limit(size_t max_items) {
+    std::unique_lock<std::shared_mutex> lock(state_mutex_);
+    thumbnail_cache_.set_max_items(max_items);
 }
 
 StateStore::CacheStats StateStore::get_cache_stats() const {
@@ -250,12 +273,14 @@ StateStore::CacheStats StateStore::get_cache_stats() const {
     
     CacheStats stats;
     stats.image_count = images_by_hash_.size();
-    stats.thumbnail_count = thumbnail_cache_.size();
     
-    // Calculate approximate memory usage
-    for (const auto& pair : thumbnail_cache_) {
-        stats.cache_memory_usage += pair.second->data.size();
-    }
+    // Get cache provider stats
+    auto cache_stats = thumbnail_cache_.get_stats();
+    stats.thumbnail_count = cache_stats.total_items;
+    stats.cache_memory_usage = cache_stats.total_memory_bytes;
+    stats.cache_hit_count = cache_stats.hit_count;
+    stats.cache_miss_count = cache_stats.miss_count;
+    stats.cache_hit_ratio = cache_stats.hit_ratio;
     
     return stats;
 }
@@ -280,8 +305,23 @@ void StateStore::publish_scan_event(StateEventType type) {
     event_bus_.publish(event);
 }
 
+void StateStore::publish_cache_event(StateEventType type, const std::string& cache_key, 
+                                   size_t memory_freed, size_t items_affected) {
+    CacheEvent event(type, cache_key, memory_freed, items_affected);
+    event_bus_.publish(event);
+}
+
 std::string StateStore::make_thumbnail_cache_key(const std::string& hash, int size) const {
     return hash + ":" + std::to_string(size);
+}
+
+void StateStore::setup_cache_eviction_callback() {
+    // Set up callback to publish cache eviction events
+    thumbnail_cache_.set_eviction_callback([this](const std::string& key, const ThumbnailCacheData& data) {
+        // Calculate memory freed (approximate)
+        size_t memory_freed = data.jpeg_data.size();
+        publish_cache_event(StateEventType::CACHE_EVICTED, key, memory_freed, 1);
+    });
 }
 
 // Local Variables:
