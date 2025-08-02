@@ -36,6 +36,7 @@
 #include <unordered_set>
 #include <FL/Fl_RGB_Image.H>
 #include "database.hpp"
+#include "task_scheduler.hpp"
 #include "concurrentqueue.h"
 #include "blockingconcurrentqueue.h"
 
@@ -175,6 +176,7 @@ private:
 
 /**
  * Directory Scan Thread - coordinates scanning, manages DatabaseManager
+ * Now uses centralized TaskScheduler instead of managing its own thread
  */
 class DirectoryScanThread {
 public:
@@ -203,10 +205,10 @@ public:
     }
 
 private:
-    void scan_thread_main();
+    void scan_task_main();
     void scan_directory_recursive(const std::string& directory);
 
-    std::thread scan_thread_;
+    std::shared_ptr<TaskScheduler> task_scheduler_;
     std::atomic<bool> should_stop_;
 
     std::string directory_path_;
@@ -225,6 +227,7 @@ private:
 
 /**
  * Update Monitor Thread - receives progress events from scan thread; notifies UI
+ * Now uses centralized TaskScheduler instead of managing its own thread
  */
 class UpdateMonitorThread {
 public:
@@ -245,9 +248,9 @@ public:
     }
 
 private:
-    void monitor_thread_main();
+    void monitor_task_main();
 
-    std::thread monitor_thread_;
+    std::shared_ptr<TaskScheduler> task_scheduler_;
     std::atomic<bool> should_stop_;
 
     std::shared_ptr<DirectoryScanThread> scan_thread_;
@@ -259,6 +262,7 @@ private:
 
 /**
  * Worker Pool - loading/generating thumbnails, with handoff to Writer Thread
+ * Now uses centralized TaskScheduler instead of managing threads directly
  */
 class WorkerPool {
 public:
@@ -277,13 +281,14 @@ public:
     moodycamel::BlockingConcurrentQueue<WriteTask>& get_write_queue() { return write_queue_; }
 
     // Get worker count for shutdown coordination
-    size_t get_worker_count() const { return worker_threads_.size(); }
+    size_t get_worker_count() const;
 
 private:
-    void worker_thread_main();
+    void worker_task_main();
 
-    std::vector<std::thread> worker_threads_;
+    std::shared_ptr<TaskScheduler> task_scheduler_;
     std::atomic<bool> should_stop_;
+    std::atomic<size_t> num_workers_;
 
     std::shared_ptr<DirectoryScanThread> scan_thread_;
     moodycamel::BlockingConcurrentQueue<WriteTask> write_queue_;  // BlockingConcurrentQueue for efficient blocking
@@ -294,6 +299,7 @@ private:
 
 /**
  * Writer Thread - batched database writes, LMDB transactions
+ * Now uses centralized TaskScheduler instead of managing its own thread
  */
 class WriterThread {
 public:
@@ -305,9 +311,9 @@ public:
     void join();
 
 private:
-    void writer_thread_main();
+    void writer_task_main();
 
-    std::thread writer_thread_;
+    std::shared_ptr<TaskScheduler> task_scheduler_;
     std::atomic<bool> should_stop_;
 
     std::shared_ptr<WorkerPool> worker_pool_;
@@ -316,6 +322,7 @@ private:
 
 /**
  * Thumbnail Workers - UI display generation with priority queues
+ * Now uses centralized TaskScheduler instead of managing threads directly
  */
 class ThumbnailWorkers {
 public:
@@ -344,7 +351,7 @@ public:
     }
 
     // Get worker count for shutdown coordination
-    size_t get_worker_count() const { return worker_threads_.size(); }
+    size_t get_worker_count() const;
 
     // Public methods to enqueue shutdown sentinels for clean shutdown
     void enqueue_shutdown_tasks() {
@@ -357,7 +364,7 @@ public:
     }
 
 private:
-    void thumbnail_worker_thread_main();
+    void thumbnail_worker_task_main();
     std::unique_ptr<Fl_RGB_Image> generate_ui_thumbnail(const UIThumbnailTask& task);
     std::unique_ptr<Fl_RGB_Image> create_placeholder_thumbnail(int width, int height, const std::string& message = "Error");
 
@@ -366,8 +373,9 @@ private:
     void mark_request_in_flight(const std::string& cache_key);
     void mark_request_completed(const std::string& cache_key);
 
-    std::vector<std::thread> worker_threads_;
+    std::shared_ptr<TaskScheduler> task_scheduler_;
     std::atomic<bool> should_stop_;
+    std::atomic<size_t> num_workers_;
 
     // Priority queues - using BlockingConcurrentQueue for efficient blocking
     moodycamel::BlockingConcurrentQueue<UIThumbnailTask> high_priority_queue_;
