@@ -41,6 +41,9 @@ Fl_JustifiedLayout::Fl_JustifiedLayout(int X, int Y, int W, int H, const char* l
     , thread_manager_(nullptr)
     , thumbnail_notification_callback_(nullptr)
     , batch_flush_scheduled_(false)
+    , image_metadata_subscription_id_(0)
+    , thumbnail_ready_subscription_id_(0)
+    , scan_progress_subscription_id_(0)
 {
     // Initialize layout configuration with reasonable defaults
     layout_config_.w = W - 20; // Leave some margin for scrollbar
@@ -185,6 +188,9 @@ Fl_JustifiedLayout::~Fl_JustifiedLayout() {
 
     // Flush any remaining batch before shutdown
     flush_pending_image_batch(true);
+
+    // Unsubscribe from StateStore events
+    unsubscribe_from_state_events();
 
     cancel_directory_scan();
     clear_image_cache();
@@ -1791,6 +1797,90 @@ void Fl_JustifiedLayout::handle_scroll_settling_timeout() {
     
     // Re-queue high priority thumbnails for currently visible area
     update_visibility_and_queue_thumbnails(true);  // from_timer_callback = true
+}
+
+//==============================================================================
+// StateStore Event Management
+//==============================================================================
+
+void Fl_JustifiedLayout::subscribe_to_state_events() {
+    if (!thread_manager_) {
+        return;
+    }
+    
+    auto& event_bus = thread_manager_->get_state_store().get_event_bus();
+    
+    // Subscribe to image metadata events
+    image_metadata_subscription_id_ = event_bus.subscribe(StateEventType::IMAGE_METADATA_ADDED,
+        [this](const StateEvent& event) {
+            const auto& img_event = static_cast<const ImageEvent&>(event);
+            
+            // Schedule UI update via FLTK's main thread
+            Fl::awake([](void* data) {
+                Fl_JustifiedLayout* self = static_cast<Fl_JustifiedLayout*>(data);
+                if (self) {
+                    // For now, just trigger a redraw - in future we'll convert 
+                    // StateStore ImageState to UI ImageInfo
+                    self->redraw();
+                }
+            }, this);
+        });
+    
+    // Subscribe to thumbnail ready events  
+    thumbnail_ready_subscription_id_ = event_bus.subscribe(StateEventType::THUMBNAIL_READY,
+        [this](const StateEvent& event) {
+            const auto& thumb_event = static_cast<const ThumbnailEvent&>(event);
+            
+            // Schedule UI update via FLTK's main thread
+            Fl::awake([](void* data) {
+                Fl_JustifiedLayout* self = static_cast<Fl_JustifiedLayout*>(data);
+                if (self && self->content_widget_) {
+                    // Redraw to show newly available thumbnails
+                    self->content_widget_->redraw();
+                }
+            }, this);
+        });
+    
+    // Subscribe to scan progress events
+    scan_progress_subscription_id_ = event_bus.subscribe(StateEventType::SCAN_PROGRESS,
+        [this](const StateEvent& event) {
+            // Schedule UI update via FLTK's main thread
+            Fl::awake([](void* data) {
+                Fl_JustifiedLayout* self = static_cast<Fl_JustifiedLayout*>(data);
+                if (self && self->progress_callback_) {
+                    // Get current scan state from StateStore for progress info
+                    if (self->thread_manager_) {
+                        auto scan_state = self->thread_manager_->get_state_store().get_scan_state();
+                        self->progress_callback_(scan_state.current_count, 
+                                               scan_state.total_count, 
+                                               scan_state.status_message);
+                    }
+                }
+            }, this);
+        });
+}
+
+void Fl_JustifiedLayout::unsubscribe_from_state_events() {
+    if (!thread_manager_) {
+        return;
+    }
+    
+    auto& event_bus = thread_manager_->get_state_store().get_event_bus();
+    
+    if (image_metadata_subscription_id_ != 0) {
+        event_bus.unsubscribe(image_metadata_subscription_id_);
+        image_metadata_subscription_id_ = 0;
+    }
+    
+    if (thumbnail_ready_subscription_id_ != 0) {
+        event_bus.unsubscribe(thumbnail_ready_subscription_id_);
+        thumbnail_ready_subscription_id_ = 0;
+    }
+    
+    if (scan_progress_subscription_id_ != 0) {
+        event_bus.unsubscribe(scan_progress_subscription_id_);
+        scan_progress_subscription_id_ = 0;
+    }
 }
 
 

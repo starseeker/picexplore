@@ -182,7 +182,21 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     void set_selection_callback(SelectionCallback callback) { selection_callback_ = callback; }
 
     // ThreadManager integration
-    void set_thread_manager(ThreadManager* thread_manager) { thread_manager_ = thread_manager; }
+    void set_thread_manager(ThreadManager* manager) {
+        if (thread_manager_ != manager) {
+            // Unsubscribe from old ThreadManager's StateStore events if any
+            if (thread_manager_) {
+                unsubscribe_from_state_events();
+            }
+            
+            thread_manager_ = manager;
+            
+            // Subscribe to new ThreadManager's StateStore events
+            if (thread_manager_) {
+                subscribe_to_state_events();
+            }
+        }
+    }
 
     // UI thumbnail generation and result processing
     void update_visibility_and_queue_thumbnails(bool from_timer_callback = false);  // Check visibility and queue high-priority tasks through ThreadManager
@@ -255,6 +269,10 @@ class Fl_JustifiedLayout : public Fl_Scroll {
     // Scroll position preservation helpers
     void save_scroll_position();
     void restore_scroll_position();
+    
+    // StateStore event management
+    void subscribe_to_state_events();
+    void unsubscribe_from_state_events();
 
     private:
     // Content widget for scrollable area
@@ -286,6 +304,11 @@ class Fl_JustifiedLayout : public Fl_Scroll {
 
     // ThreadManager integration
     ThreadManager* thread_manager_;
+    
+    // StateStore integration for receiving state events
+    uint64_t image_metadata_subscription_id_;
+    uint64_t thumbnail_ready_subscription_id_;
+    uint64_t scan_progress_subscription_id_;
 
     // Callbacks
     ProgressCallback progress_callback_;

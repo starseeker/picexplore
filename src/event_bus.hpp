@@ -35,6 +35,10 @@
 
 // Forward declarations
 struct ImageInfo;
+struct StateEvent;
+struct ImageEvent;
+struct ThumbnailEvent;
+struct ScanEvent;
 
 /**
  * Event types for the StateStore event system
