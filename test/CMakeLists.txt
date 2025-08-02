@@ -28,6 +28,23 @@ target_compile_options(state_store_integration_test PRIVATE -g)
 target_include_directories(state_store_integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_link_libraries(state_store_integration_test PRIVATE pthread)
 
+# Database DAL unit tests
+if(XXHASH_FOUND AND LMDB_FOUND)
+    add_executable(database_dal_test database_dal_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/database_dal_lmdb.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/utils.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/stb_impl.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/logging.cpp)
+    target_compile_options(database_dal_test PRIVATE -g)
+    target_include_directories(database_dal_test PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${XXHASH_INCLUDE_DIRS}
+        ${LMDB_INCLUDE_DIRS}
+        ${STB_DIR}
+        ${CMAKE_SOURCE_DIR}/third_party)
+    target_link_libraries(database_dal_test PRIVATE ${XXHASH_LIBRARIES} ${LMDB_LIBRARIES} ${JPEG_LIBRARIES})
+endif()
+
 # Local Variables:
 # tab-width: 8
 # mode: cmake
