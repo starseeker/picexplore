@@ -14,6 +14,12 @@ StateStore::StateStore()
     setup_cache_eviction_callback();
 }
 
+StateStore::StateStore(const CacheConfig& cache_config)
+    : thumbnail_cache_(cache_config.max_memory_bytes(), cache_config.max_items)
+{
+    setup_cache_eviction_callback();
+}
+
 StateStore::~StateStore() {
     // Clear all state and ensure event bus is cleaned up
     clear_thumbnail_cache();
@@ -81,6 +87,45 @@ size_t StateStore::get_image_count() const {
 bool StateStore::has_image(const std::string& hash) const {
     std::shared_lock<std::shared_mutex> lock(state_mutex_);
     return images_by_hash_.find(hash) != images_by_hash_.end();
+}
+
+void StateStore::remove_image(const std::string& hash) {
+    std::vector<int> removed_thumbnail_sizes;
+    std::string removed_path;
+    
+    {
+        std::unique_lock<std::shared_mutex> lock(state_mutex_);
+        
+        // Find the image
+        auto img_it = images_by_hash_.find(hash);
+        if (img_it == images_by_hash_.end()) {
+            return; // Image not found
+        }
+        
+        // Get info for events
+        removed_path = img_it->second->metadata.path;
+        removed_thumbnail_sizes = img_it->second->available_thumbnail_sizes;
+        
+        // Remove all thumbnails for this image
+        thumbnail_cache_.remove_if([&hash](const std::string& key, const ThumbnailCacheData& data) {
+            // Key format is "hash:size", so check if it starts with hash + ":"
+            std::string prefix = hash + ":";
+            return key.substr(0, prefix.length()) == prefix;
+        });
+        
+        // Remove image metadata
+        images_by_hash_.erase(img_it);
+    }
+    
+    // Publish events outside of lock
+    ImageEvent image_event(StateEventType::IMAGE_REMOVED, hash, removed_path);
+    event_bus_.publish(image_event);
+    
+    // Publish thumbnail invalidation events
+    for (int size : removed_thumbnail_sizes) {
+        ThumbnailEvent thumb_event(StateEventType::THUMBNAIL_INVALIDATED, hash, 0, 0, size);
+        event_bus_.publish(thumb_event);
+    }
 }
 
 //==============================================================================
@@ -266,6 +311,24 @@ void StateStore::set_cache_memory_limit(size_t max_memory_mb) {
 void StateStore::set_cache_item_limit(size_t max_items) {
     std::unique_lock<std::shared_mutex> lock(state_mutex_);
     thumbnail_cache_.set_max_items(max_items);
+}
+
+CacheConfig StateStore::get_cache_config() const {
+    std::shared_lock<std::shared_mutex> lock(state_mutex_);
+    
+    auto stats = thumbnail_cache_.get_stats();
+    CacheConfig config;
+    config.max_memory_mb = stats.max_memory_bytes / (1024 * 1024);
+    config.max_items = 1000; // Would need to track this in cache provider
+    config.enable_stats = true;
+    
+    return config;
+}
+
+void StateStore::update_cache_config(const CacheConfig& config) {
+    std::unique_lock<std::shared_mutex> lock(state_mutex_);
+    thumbnail_cache_.set_max_memory(config.max_memory_bytes());
+    thumbnail_cache_.set_max_items(config.max_items);
 }
 
 StateStore::CacheStats StateStore::get_cache_stats() const {

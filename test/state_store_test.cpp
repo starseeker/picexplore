@@ -42,6 +42,8 @@ public:
         test_state_store_thumbnail_management();
         test_state_store_scan_state();
         test_state_store_events_integration();
+        test_cache_invalidation();
+        test_cache_configuration();
         test_concurrent_access();
         
         std::cout << "All tests passed!\n";
@@ -284,6 +286,92 @@ private:
         assert(metadata_events.load() == 1);
         assert(thumbnail_events.load() == 1);
         assert(scan_events.load() == 1);
+        
+        std::cout << "PASSED\n";
+    }
+    
+    static void test_cache_invalidation() {
+        std::cout << "Test: Cache invalidation on image removal... ";
+        
+        StateStore state_store;
+        
+        std::atomic<int> invalidation_events{0};
+        std::atomic<int> removal_events{0};
+        
+        // Subscribe to invalidation events
+        state_store.get_event_bus().subscribe(StateEventType::THUMBNAIL_INVALIDATED,
+            [&invalidation_events](const StateEvent&) { invalidation_events++; });
+        
+        state_store.get_event_bus().subscribe(StateEventType::IMAGE_REMOVED,
+            [&removal_events](const StateEvent&) { removal_events++; });
+        
+        // Add image and thumbnails
+        StateImageInfo info;
+        info.path = "/path/to/image.jpg";
+        info.hash = "hash123";
+        info.aspect_ratio = 1.5;
+        state_store.add_image_metadata(info);
+        
+        std::vector<uint8_t> thumb_data = {1, 2, 3, 4, 5};
+        state_store.add_thumbnail("hash123", 128, thumb_data, 128, 96);
+        state_store.add_thumbnail("hash123", 256, thumb_data, 256, 192);
+        
+        // Verify thumbnails exist
+        assert(state_store.has_thumbnail("hash123", 128));
+        assert(state_store.has_thumbnail("hash123", 256));
+        assert(state_store.has_image("hash123"));
+        
+        // Remove image - should invalidate all thumbnails
+        state_store.remove_image("hash123");
+        
+        // Verify image and thumbnails are gone
+        assert(!state_store.has_image("hash123"));
+        assert(!state_store.has_thumbnail("hash123", 128));
+        assert(!state_store.has_thumbnail("hash123", 256));
+        
+        // Verify events were triggered
+        assert(removal_events.load() == 1);
+        assert(invalidation_events.load() == 2); // One for each thumbnail size
+        
+        std::cout << "PASSED\n";
+    }
+    
+    static void test_cache_configuration() {
+        std::cout << "Test: Cache configuration and limits... ";
+        
+        // Test with custom configuration
+        CacheConfig config;
+        config.max_memory_mb = 10; // 10MB
+        config.max_items = 500;
+        
+        StateStore state_store(config);
+        
+        // Add some thumbnails
+        StateImageInfo info;
+        info.path = "/path/to/image.jpg";
+        info.hash = "hash123";
+        state_store.add_image_metadata(info);
+        
+        std::vector<uint8_t> large_thumb(1024 * 1024, 0xAB); // 1MB thumbnail
+        state_store.add_thumbnail("hash123", 512, large_thumb, 512, 512);
+        
+        auto stats = state_store.get_cache_stats();
+        assert(stats.thumbnail_count == 1);
+        assert(stats.cache_memory_usage >= 1024 * 1024); // At least 1MB
+        
+        // Test configuration updates
+        CacheConfig new_config;
+        new_config.max_memory_mb = 5; // Reduce to 5MB
+        new_config.max_items = 100;
+        
+        state_store.update_cache_config(new_config);
+        
+        // Cache should still work with new limits
+        std::vector<uint8_t> small_thumb(1024, 0xCD); // 1KB thumbnail
+        state_store.add_thumbnail("hash123", 64, small_thumb, 64, 64);
+        
+        stats = state_store.get_cache_stats();
+        assert(stats.thumbnail_count >= 1); // Should have at least the small thumbnail
         
         std::cout << "PASSED\n";
     }

@@ -35,6 +35,20 @@
 #include "event_bus.hpp"
 #include "cache_provider.hpp"
 
+/**
+ * Cache configuration structure
+ */
+struct CacheConfig {
+    size_t max_memory_mb = 50;      // Maximum memory in MB (0 = unlimited)
+    size_t max_items = 1000;        // Maximum number of items (0 = unlimited)
+    bool enable_stats = true;       // Enable statistics collection
+    
+    // Convert to bytes for internal use
+    size_t max_memory_bytes() const { 
+        return max_memory_mb * 1024 * 1024; 
+    }
+};
+
 // Forward declarations
 class DatabaseManager;
 
@@ -122,6 +136,7 @@ struct ScanState {
 class StateStore {
 public:
     StateStore();
+    explicit StateStore(const CacheConfig& cache_config);
     ~StateStore();
 
     /**
@@ -161,6 +176,12 @@ public:
      * Check if image exists
      */
     bool has_image(const std::string& hash) const;
+
+    /**
+     * Remove an image and all its thumbnails from state
+     * Publishes IMAGE_REMOVED and THUMBNAIL_INVALIDATED events
+     */
+    void remove_image(const std::string& hash);
 
     //==========================================================================
     // Thumbnail Management
@@ -252,6 +273,16 @@ public:
      * @param max_items Maximum number of cached items (0 = unlimited)
      */
     void set_cache_item_limit(size_t max_items);
+    
+    /**
+     * Get current cache configuration
+     */
+    CacheConfig get_cache_config() const;
+    
+    /**
+     * Update cache configuration
+     */
+    void update_cache_config(const CacheConfig& config);
     
     /**
      * Get cache statistics
