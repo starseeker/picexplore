@@ -54,6 +54,7 @@ void ProgressReporter::report_progress(int current, int total, const std::string
 //==============================================================================
 
 DirectoryScanThread::DirectoryScanThread() : should_stop_(false) {
+    task_scheduler_ = std::make_shared<TaskScheduler>();
 }
 
 DirectoryScanThread::~DirectoryScanThread() {
@@ -62,7 +63,7 @@ DirectoryScanThread::~DirectoryScanThread() {
 }
 
 bool DirectoryScanThread::start_scan(const std::string& directory_path, const std::string& db_path) {
-    if (scan_thread_.joinable()) {
+    if (task_scheduler_->is_running()) {
 	// Already scanning
 	return false;
     }
@@ -89,7 +90,14 @@ bool DirectoryScanThread::start_scan(const std::string& directory_path, const st
     });
 
     GlobalFlags::set_scanning(true);
-    scan_thread_ = std::thread(&DirectoryScanThread::scan_thread_main, this);
+    
+    // Start the task scheduler with a single thread for scanning
+    task_scheduler_->start(1, "DirectoryScan");
+    
+    // Submit the scan task to the scheduler
+    task_scheduler_->submit_task([this]() {
+	scan_task_main();
+    });
 
     return true;
 }
@@ -99,17 +107,20 @@ void DirectoryScanThread::stop_scan() {
     if (database_) {
 	database_->cancel_scan();
     }
+    if (task_scheduler_) {
+	task_scheduler_->shutdown();
+    }
 }
 
 void DirectoryScanThread::join() {
-    if (scan_thread_.joinable()) {
-	scan_thread_.join();
+    if (task_scheduler_) {
+	task_scheduler_->join_all();
     }
     GlobalFlags::set_scanning(false);
 }
 
-void DirectoryScanThread::scan_thread_main() {
-    LOG_SCAN_BASIC("DirectoryScanThread: Starting scan of " + directory_path_);
+void DirectoryScanThread::scan_task_main() {
+    LOG_SCAN_BASIC("DirectoryScanThread: Starting scan task via TaskScheduler of " + directory_path_);
 
     if (progress_reporter_) {
 	progress_reporter_->report_progress(0, 0, "Starting directory scan...");
@@ -143,7 +154,7 @@ void DirectoryScanThread::scan_thread_main() {
     reporter.stop();
     GlobalFlags::set_scanning(false);
 
-    LOG_SCAN_BASIC("DirectoryScanThread: Thread exiting");
+    LOG_SCAN_BASIC("DirectoryScanThread: Task exiting");
 }
 
 void DirectoryScanThread::scan_directory_recursive(const std::string& directory) {
@@ -156,6 +167,7 @@ void DirectoryScanThread::scan_directory_recursive(const std::string& directory)
 //==============================================================================
 
 UpdateMonitorThread::UpdateMonitorThread() : should_stop_(false), ui_notify_widget_(nullptr) {
+    task_scheduler_ = std::make_shared<TaskScheduler>();
 }
 
 UpdateMonitorThread::~UpdateMonitorThread() {
@@ -164,27 +176,37 @@ UpdateMonitorThread::~UpdateMonitorThread() {
 }
 
 void UpdateMonitorThread::start_monitoring(std::shared_ptr<DirectoryScanThread> scan_thread) {
-    if (monitor_thread_.joinable()) {
+    if (task_scheduler_->is_running()) {
 	return; // Already monitoring
     }
 
     scan_thread_ = scan_thread;
     should_stop_.store(false);
-    monitor_thread_ = std::thread(&UpdateMonitorThread::monitor_thread_main, this);
+    
+    // Start the task scheduler with a single thread for monitoring
+    task_scheduler_->start(1, "UpdateMonitor");
+    
+    // Submit the monitor task to the scheduler
+    task_scheduler_->submit_task([this]() {
+	monitor_task_main();
+    });
 }
 
 void UpdateMonitorThread::stop_monitoring() {
     should_stop_.store(true);
-}
-
-void UpdateMonitorThread::join() {
-    if (monitor_thread_.joinable()) {
-	monitor_thread_.join();
+    if (task_scheduler_) {
+	task_scheduler_->shutdown();
     }
 }
 
-void UpdateMonitorThread::monitor_thread_main() {
-    LOG_SCAN_BASIC("UpdateMonitorThread: Starting monitoring thread");
+void UpdateMonitorThread::join() {
+    if (task_scheduler_) {
+	task_scheduler_->join_all();
+    }
+}
+
+void UpdateMonitorThread::monitor_task_main() {
+    LOG_SCAN_BASIC("UpdateMonitorThread: Starting monitoring task via TaskScheduler");
 
     while (!should_stop_.load() && !GlobalFlags::is_shutdown_requested()) {
 	// Monitor scan progress and handle UI updates
@@ -216,14 +238,15 @@ void UpdateMonitorThread::monitor_thread_main() {
 	std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    LOG_SCAN_BASIC("UpdateMonitorThread: Thread exiting");
+    LOG_SCAN_BASIC("UpdateMonitorThread: Task exiting");
 }
 
 //==============================================================================
 // WorkerPool Implementation
 //==============================================================================
 
-WorkerPool::WorkerPool() : should_stop_(false), processed_count_(0), active_workers_(0) {
+WorkerPool::WorkerPool() : should_stop_(false), num_workers_(0), processed_count_(0), active_workers_(0) {
+    task_scheduler_ = std::make_shared<TaskScheduler>();
 }
 
 WorkerPool::~WorkerPool() {
@@ -232,7 +255,7 @@ WorkerPool::~WorkerPool() {
 }
 
 void WorkerPool::start_workers(int num_workers) {
-    if (!worker_threads_.empty()) {
+    if (task_scheduler_->is_running()) {
 	return; // Already started
     }
 
@@ -241,32 +264,42 @@ void WorkerPool::start_workers(int num_workers) {
     }
 
     should_stop_.store(false);
-    worker_threads_.reserve(num_workers);
+    num_workers_.store(num_workers);
 
+    // Start the task scheduler
+    task_scheduler_->start(num_workers, "WorkerPool");
+
+    // Submit worker tasks to the scheduler
     for (int i = 0; i < num_workers; ++i) {
-	worker_threads_.emplace_back(&WorkerPool::worker_thread_main, this);
+	task_scheduler_->submit_task([this]() {
+	    worker_task_main();
+	});
     }
 
-    LOG_THREAD_BASIC("WorkerPool: Started " + std::to_string(num_workers) + " worker threads");
+    LOG_THREAD_BASIC("WorkerPool: Started " + std::to_string(num_workers) + " worker tasks via TaskScheduler");
 }
 
 void WorkerPool::stop_workers() {
     should_stop_.store(true);
+    if (task_scheduler_) {
+	task_scheduler_->shutdown();
+    }
 }
 
 void WorkerPool::join_all() {
-    for (auto& thread : worker_threads_) {
-	if (thread.joinable()) {
-	    thread.join();
-	}
+    if (task_scheduler_) {
+	task_scheduler_->join_all();
     }
-    worker_threads_.clear();
 }
 
-void WorkerPool::worker_thread_main() {
+size_t WorkerPool::get_worker_count() const {
+    return num_workers_.load();
+}
+
+void WorkerPool::worker_task_main() {
     active_workers_.fetch_add(1);
 
-    LOG_THREAD_BASIC("WorkerPool: Worker thread started");
+    LOG_THREAD_BASIC("WorkerPool: Worker task started via TaskScheduler");
 
     ThumbnailGenerationTask task;
 
@@ -279,7 +312,7 @@ void WorkerPool::worker_thread_main() {
 	    if (scan_thread_->thumbnail_gen_queue_.wait_dequeue_timed(task, std::chrono::milliseconds(100))) {
 		// Check for shutdown sentinel
 		if (task.is_shutdown_sentinel) {
-		    LOG_THREAD_BASIC("WorkerPool: Received shutdown sentinel, exiting worker thread");
+		    LOG_THREAD_BASIC("WorkerPool: Received shutdown sentinel, exiting worker task");
 		    break;
 		}
 
@@ -325,7 +358,7 @@ void WorkerPool::worker_thread_main() {
     }
 
     active_workers_.fetch_sub(1);
-    LOG_THREAD_BASIC("WorkerPool: Worker thread exiting");
+    LOG_THREAD_BASIC("WorkerPool: Worker task exiting");
 }
 
 //==============================================================================
@@ -333,6 +366,7 @@ void WorkerPool::worker_thread_main() {
 //==============================================================================
 
 WriterThread::WriterThread() : should_stop_(false), write_count_(0) {
+    task_scheduler_ = std::make_shared<TaskScheduler>();
 }
 
 WriterThread::~WriterThread() {
@@ -341,27 +375,37 @@ WriterThread::~WriterThread() {
 }
 
 void WriterThread::start_writing(std::shared_ptr<WorkerPool> worker_pool) {
-    if (writer_thread_.joinable()) {
+    if (task_scheduler_->is_running()) {
 	return; // Already started
     }
 
     worker_pool_ = worker_pool;
     should_stop_.store(false);
-    writer_thread_ = std::thread(&WriterThread::writer_thread_main, this);
+    
+    // Start the task scheduler with a single thread for the writer
+    task_scheduler_->start(1, "WriterThread");
+    
+    // Submit the writer task to the scheduler
+    task_scheduler_->submit_task([this]() {
+	writer_task_main();
+    });
 }
 
 void WriterThread::stop_writing() {
     should_stop_.store(true);
-}
-
-void WriterThread::join() {
-    if (writer_thread_.joinable()) {
-	writer_thread_.join();
+    if (task_scheduler_) {
+	task_scheduler_->shutdown();
     }
 }
 
-void WriterThread::writer_thread_main() {
-    LOG_THREAD_BASIC("WriterThread: Starting writer thread");
+void WriterThread::join() {
+    if (task_scheduler_) {
+	task_scheduler_->join_all();
+    }
+}
+
+void WriterThread::writer_task_main() {
+    LOG_THREAD_BASIC("WriterThread: Starting writer task via TaskScheduler");
 
     WriteTask task;
     std::vector<WriteTask> batch;
@@ -373,7 +417,7 @@ void WriterThread::writer_thread_main() {
 	    if (worker_pool_->get_write_queue().wait_dequeue_timed(task, std::chrono::milliseconds(100))) {
 		// Check for shutdown sentinel
 		if (task.type == WriteTask::SHUTDOWN) {
-		    LOG_THREAD_BASIC("WriterThread: Received shutdown sentinel, exiting writer thread");
+		    LOG_THREAD_BASIC("WriterThread: Received shutdown sentinel, exiting writer task");
 		    break;
 		}
 
@@ -405,7 +449,7 @@ void WriterThread::writer_thread_main() {
 	// ... process final batch ...
     }
 
-    std::cout << "[DEBUG] WriterThread: Thread exiting, processed " << write_count_.load() << " writes" << std::endl;
+    std::cout << "[DEBUG] WriterThread: Task exiting, processed " << write_count_.load() << " writes" << std::endl;
     std::cout.flush();
 }
 
@@ -413,7 +457,8 @@ void WriterThread::writer_thread_main() {
 // ThumbnailWorkers Implementation
 //==============================================================================
 
-ThumbnailWorkers::ThumbnailWorkers() : should_stop_(false), active_tasks_(0), completed_tasks_(0), ui_notify_widget_(nullptr) {
+ThumbnailWorkers::ThumbnailWorkers() : should_stop_(false), num_workers_(0), active_tasks_(0), completed_tasks_(0), ui_notify_widget_(nullptr) {
+    task_scheduler_ = std::make_shared<TaskScheduler>();
 }
 
 ThumbnailWorkers::~ThumbnailWorkers() {
@@ -422,7 +467,7 @@ ThumbnailWorkers::~ThumbnailWorkers() {
 }
 
 void ThumbnailWorkers::start_workers(int num_workers) {
-    if (!worker_threads_.empty()) {
+    if (task_scheduler_->is_running()) {
 	return; // Already started
     }
 
@@ -432,13 +477,19 @@ void ThumbnailWorkers::start_workers(int num_workers) {
     }
 
     should_stop_.store(false);
-    worker_threads_.reserve(num_workers);
+    num_workers_.store(num_workers);
 
+    // Start the task scheduler
+    task_scheduler_->start(num_workers, "ThumbnailWorker");
+
+    // Submit worker tasks to the scheduler
     for (int i = 0; i < num_workers; ++i) {
-	worker_threads_.emplace_back(&ThumbnailWorkers::thumbnail_worker_thread_main, this);
+	task_scheduler_->submit_task([this]() {
+	    thumbnail_worker_task_main();
+	});
     }
 
-    LOG_THUMBNAIL_BASIC("ThumbnailWorkers: Started " + std::to_string(num_workers) + " thumbnail worker threads");
+    LOG_THUMBNAIL_BASIC("ThumbnailWorkers: Started " + std::to_string(num_workers) + " thumbnail worker tasks via TaskScheduler");
 }
 
 void ThumbnailWorkers::stop_workers() {
@@ -452,15 +503,20 @@ void ThumbnailWorkers::stop_workers() {
 	    in_flight_requests_.clear();
 	}
     }
+
+    if (task_scheduler_) {
+	task_scheduler_->shutdown();
+    }
 }
 
 void ThumbnailWorkers::join_all() {
-    for (auto& thread : worker_threads_) {
-	if (thread.joinable()) {
-	    thread.join();
-	}
+    if (task_scheduler_) {
+	task_scheduler_->join_all();
     }
-    worker_threads_.clear();
+}
+
+size_t ThumbnailWorkers::get_worker_count() const {
+    return num_workers_.load();
 }
 
 void ThumbnailWorkers::enqueue_high_priority(const UIThumbnailTask& task) {
@@ -558,8 +614,8 @@ uint64_t ThumbnailWorkers::get_next_generation_id() {
     return current_generation_id_.fetch_add(1) + 1;
 }
 
-void ThumbnailWorkers::thumbnail_worker_thread_main() {
-    LOG_THUMBNAIL_BASIC("ThumbnailWorkers: Thumbnail worker thread started");
+void ThumbnailWorkers::thumbnail_worker_task_main() {
+    LOG_THUMBNAIL_BASIC("ThumbnailWorkers: Thumbnail worker task started via TaskScheduler");
 
     UIThumbnailTask task;
     int tasks_processed = 0;
@@ -571,7 +627,7 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	if (high_priority_queue_.wait_dequeue_timed(task, std::chrono::milliseconds(50))) {
 	    // Check for shutdown sentinel
 	    if (task.is_shutdown_sentinel) {
-		std::cout << "[DEBUG] ThumbnailWorkers: Received shutdown sentinel on high priority queue, exiting worker thread" << std::endl;
+		std::cout << "[DEBUG] ThumbnailWorkers: Received shutdown sentinel on high priority queue, exiting worker task" << std::endl;
 		break;
 	    }
 	    
@@ -589,7 +645,7 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	} else if (low_priority_queue_.wait_dequeue_timed(task, std::chrono::milliseconds(50))) {
 	    // Check for shutdown sentinel
 	    if (task.is_shutdown_sentinel) {
-		LOG_THUMBNAIL_VERBOSE("Received shutdown sentinel on low priority queue, exiting worker thread");
+		LOG_THUMBNAIL_VERBOSE("Received shutdown sentinel on low priority queue, exiting worker task");
 		break;
 	    }
 	    // Use image-aware logging for thumbnail generation tasks since path is available
@@ -652,7 +708,7 @@ void ThumbnailWorkers::thumbnail_worker_thread_main() {
 	// No explicit sleep needed - wait_dequeue_timed handles efficient blocking
     }
 
-    LOG_THUMBNAIL_VERBOSE("Thumbnail worker thread exiting, processed " + std::to_string(tasks_processed) + " tasks");
+    LOG_THUMBNAIL_VERBOSE("Thumbnail worker task exiting, processed " + std::to_string(tasks_processed) + " tasks");
 }
 
 std::unique_ptr<Fl_RGB_Image> ThumbnailWorkers::generate_ui_thumbnail(const UIThumbnailTask& task) {

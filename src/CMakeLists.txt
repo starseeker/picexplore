@@ -1,10 +1,10 @@
 # picexplore executable
-if(JPEG_FOUND)
-    add_executable(picexplore picexplore.cpp Fl_JustifiedLayout.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp thread_manager.cpp logging.cpp ../third_party/TinyEXIF.cpp)
+if(JPEG_FOUND AND FLTK_AVAILABLE AND XXHASH_FOUND AND LMDB_FOUND)
+    add_executable(picexplore picexplore.cpp Fl_JustifiedLayout.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp thread_manager.cpp task_scheduler.cpp logging.cpp ../third_party/TinyEXIF.cpp)
     target_include_directories(picexplore PRIVATE
-        ${XXHASH_DIR}
+        ${XXHASH_INCLUDE_DIRS}
         ${STB_DIR}
-        ${LMDB_DIR}
+        ${LMDB_INCLUDE_DIRS}
         ${CXXOPTS_DIR}/include
         ${STRUETYPE_DIR}
         ${STRUETYPE_DIR}/examples
@@ -13,11 +13,38 @@ if(JPEG_FOUND)
         ${JPEG_INCLUDE_DIRS}
         ${FLTK_DIR}
     .)
-    target_link_libraries(picexplore xxhash lmdb fltk ${JPEG_LIBRARIES})
+    
+    if(FLTK_LIBRARIES)
+        target_link_libraries(picexplore ${XXHASH_LIBRARIES} ${LMDB_LIBRARIES} ${FLTK_LIBRARIES} ${JPEG_LIBRARIES})
+    else()
+        target_link_libraries(picexplore ${XXHASH_LIBRARIES} ${LMDB_LIBRARIES} fltk ${JPEG_LIBRARIES})
+    endif()
+    
     target_compile_options(picexplore PRIVATE -g -DTINYEXIF_NO_XMP_SUPPORT)
 else()
-    message(WARNING "libjpeg not found, skipping picexplore executable")
+    if(NOT JPEG_FOUND)
+        message(WARNING "libjpeg not found, skipping picexplore executable")
+    endif()
+    if(NOT FLTK_AVAILABLE)
+        message(WARNING "FLTK not found, skipping picexplore executable")
+    endif()
+    if(NOT XXHASH_FOUND)
+        message(WARNING "xxhash not found, skipping picexplore executable")
+    endif()
+    if(NOT LMDB_FOUND)
+        message(WARNING "lmdb not found, skipping picexplore executable")
+    endif()
 endif()
+
+# TaskScheduler test (minimal dependencies)
+add_executable(task_scheduler_test task_scheduler.cpp logging.cpp ../test/task_scheduler_test.cpp)
+target_include_directories(task_scheduler_test PRIVATE .)
+target_compile_options(task_scheduler_test PRIVATE -g)
+
+# Integration test (TaskScheduler + queue communication)
+add_executable(integration_test task_scheduler.cpp logging.cpp ../test/integration_test.cpp)
+target_include_directories(integration_test PRIVATE .)
+target_compile_options(integration_test PRIVATE -g)
 
 # Local Variables:
 # tab-width: 8
