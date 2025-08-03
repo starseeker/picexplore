@@ -275,6 +275,16 @@ public:
     std::shared_ptr<StateStore> get_state_store() { return state_store_; }
 
     /**
+     * Get plugin manager
+     */
+    std::shared_ptr<class PluginManager> get_plugin_manager() { return plugin_manager_; }
+    
+    /**
+     * Initialize plugin system
+     */
+    bool initialize_plugins();
+    
+    /**
      * Exit application
      */
     void exit_application();
@@ -284,6 +294,7 @@ private:
     std::shared_ptr<ThreadManager> thread_manager_;
     std::shared_ptr<ScanController> scan_controller_;
     std::shared_ptr<GalleryController> gallery_controller_;
+    std::shared_ptr<class PluginManager> plugin_manager_;
     
     PicExploreView* main_view_;
     

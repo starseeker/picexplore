@@ -26,6 +26,7 @@
 #include "views.hpp"
 #include "pdf.hpp"
 #include "utils.hpp"
+#include "plugin_manager.hpp"
 #include <iostream>
 #include <algorithm>
 
@@ -288,6 +289,18 @@ bool ApplicationController::initialize() {
     state_store_ = std::make_shared<StateStore>();
     thread_manager_ = std::make_shared<ThreadManager>();
 
+    // Create and initialize plugin manager
+    plugin_manager_ = std::make_shared<PluginManager>(
+        &state_store_->get_event_bus(), 
+        state_store_.get(), 
+        thread_manager_.get()
+    );
+    
+    if (!plugin_manager_->initialize()) {
+        std::cerr << "Failed to initialize plugin manager" << std::endl;
+        return false;
+    }
+
     // Create and initialize sub-controllers
     scan_controller_ = std::make_shared<ScanController>(state_store_, thread_manager_);
     gallery_controller_ = std::make_shared<GalleryController>(state_store_, thread_manager_);
@@ -302,10 +315,17 @@ bool ApplicationController::initialize() {
         return false;
     }
 
+    // Initialize plugins after controllers are ready
+    initialize_plugins();
+
     return true;
 }
 
 void ApplicationController::shutdown() {
+    // Shutdown plugin manager first
+    if (plugin_manager_) {
+        plugin_manager_->shutdown();
+    }
     if (scan_controller_) {
         scan_controller_->shutdown();
     }
@@ -432,6 +452,30 @@ void ApplicationController::handle_scan_progress(int current, int total, const s
     if (main_view_) {
         main_view_->handle_scan_progress(current, total, status);
     }
+}
+
+bool ApplicationController::initialize_plugins() {
+    if (!plugin_manager_) {
+        return false;
+    }
+    
+    // Get default plugin directories and scan for plugins
+    auto plugin_dirs = plugin_manager_->get_default_plugin_directories();
+    
+    for (const auto& dir : plugin_dirs) {
+        auto results = plugin_manager_->scan_and_load_plugins(dir);
+        
+        for (const auto& result : results) {
+            if (result.is_success()) {
+                std::cout << "Loaded plugin: " << result.plugin_name << std::endl;
+            } else if (result.status != PluginLoadStatus::FILE_NOT_FOUND) {
+                // Don't warn about missing directories, but warn about other issues
+                std::cerr << "Plugin load warning: " << result.message << std::endl;
+            }
+        }
+    }
+    
+    return true;
 }
 
 // Local Variables:

@@ -3,6 +3,18 @@ add_executable(justified_layout_test justified_layout_test.cpp)
 target_compile_options(justified_layout_test PRIVATE -g)
 target_include_directories(justified_layout_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
+# Plugin Manager unit tests
+add_executable(plugin_manager_test plugin_manager_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/extension_points.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/event_bus.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/cache_provider.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/logging.cpp)
+target_compile_options(plugin_manager_test PRIVATE -g)
+target_include_directories(plugin_manager_test PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${CONCURRENTQUEUE_DIR})
+target_link_libraries(plugin_manager_test PRIVATE ${CMAKE_DL_LIBS} pthread)
+
 # StateStore and EventBus unit tests
 add_executable(state_store_test state_store_test.cpp 
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/state_store.cpp
