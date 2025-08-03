@@ -459,6 +459,33 @@ bool ApplicationController::initialize_plugins() {
         return false;
     }
     
+    // Register hooks first to catch plugin registrations
+    plugin_manager_->register_extension_hook(ExtensionPointType::METADATA_EXTRACTOR,
+        [](IExtensionPoint* extension) {
+            auto* extractor = dynamic_cast<IMetadataExtractor*>(extension);
+            if (extractor) {
+                std::cout << "Registered metadata extractor: " << extractor->get_name() 
+                         << " with capabilities: ";
+                for (const auto& cap : extractor->get_capabilities()) {
+                    std::cout << cap << " ";
+                }
+                std::cout << std::endl;
+            }
+        });
+    
+    plugin_manager_->register_extension_hook(ExtensionPointType::IMAGE_PROCESSOR,
+        [](IExtensionPoint* extension) {
+            auto* processor = dynamic_cast<IImageProcessor*>(extension);
+            if (processor) {
+                std::cout << "Registered image processor: " << processor->get_name() 
+                         << " with capabilities: ";
+                for (const auto& cap : processor->get_capabilities()) {
+                    std::cout << cap << " ";
+                }
+                std::cout << std::endl;
+            }
+        });
+    
     // Get default plugin directories and scan for plugins
     auto plugin_dirs = plugin_manager_->get_default_plugin_directories();
     

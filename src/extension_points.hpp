@@ -29,6 +29,7 @@
 #include <memory>
 #include <unordered_map>
 #include <functional>
+#include <mutex>
 #include "plugin_interface.hpp"
 
 // Forward declarations for image data structures
@@ -285,32 +286,104 @@ public:
     /**
      * Register an extension point implementation
      */
-    static void register_extension_point(std::unique_ptr<IExtensionPoint> extension);
+    static void register_extension_point(std::unique_ptr<IExtensionPoint> extension) {
+        if (!extension) {
+            return;
+        }
+        
+        std::lock_guard<std::mutex> lock(get_mutex());
+        
+        ExtensionPointType type = extension->get_type();
+        std::string name = extension->get_name();
+        
+        // Store by type
+        get_extensions()[type].push_back(std::move(extension));
+        
+        // Store by name for quick lookup
+        IExtensionPoint* ext_ptr = get_extensions()[type].back().get();
+        get_extensions_by_name()[name] = ext_ptr;
+        
+        // Notify registered hooks
+        if (get_hooks().find(type) != get_hooks().end()) {
+            for (const auto& hook : get_hooks()[type]) {
+                hook(ext_ptr);
+            }
+        }
+    }
     
     /**
      * Get all extension points of a specific type
      */
-    static std::vector<IExtensionPoint*> get_extension_points(ExtensionPointType type);
+    static std::vector<IExtensionPoint*> get_extension_points(ExtensionPointType type) {
+        std::lock_guard<std::mutex> lock(get_mutex());
+        
+        std::vector<IExtensionPoint*> result;
+        if (get_extensions().find(type) != get_extensions().end()) {
+            for (const auto& ext : get_extensions()[type]) {
+                result.push_back(ext.get());
+            }
+        }
+        return result;
+    }
     
     /**
      * Get extension point by name
      */
-    static IExtensionPoint* get_extension_point(const std::string& name);
+    static IExtensionPoint* get_extension_point(const std::string& name) {
+        std::lock_guard<std::mutex> lock(get_mutex());
+        
+        auto it = get_extensions_by_name().find(name);
+        return (it != get_extensions_by_name().end()) ? it->second : nullptr;
+    }
     
     /**
      * Register hook to be called when new extension points are added
      */
-    static void register_hook(ExtensionPointType type, ExtensionHook hook);
+    static void register_hook(ExtensionPointType type, ExtensionHook hook) {
+        std::lock_guard<std::mutex> lock(get_mutex());
+        
+        get_hooks()[type].push_back(hook);
+        
+        // Call hook immediately for any existing extensions of this type
+        if (get_extensions().find(type) != get_extensions().end()) {
+            for (const auto& ext : get_extensions()[type]) {
+                hook(ext.get());
+            }
+        }
+    }
     
     /**
      * Unregister all extension points (for cleanup)
      */
-    static void clear_all();
+    static void clear_all() {
+        std::lock_guard<std::mutex> lock(get_mutex());
+        
+        get_extensions().clear();
+        get_extensions_by_name().clear();
+        get_hooks().clear();
+    }
 
 private:
-    static std::unordered_map<ExtensionPointType, std::vector<std::unique_ptr<IExtensionPoint>>> extensions_;
-    static std::unordered_map<std::string, IExtensionPoint*> extensions_by_name_;
-    static std::unordered_map<ExtensionPointType, std::vector<ExtensionHook>> hooks_;
+    // Use static functions to avoid initialization order issues
+    static std::unordered_map<ExtensionPointType, std::vector<std::unique_ptr<IExtensionPoint>>>& get_extensions() {
+        static std::unordered_map<ExtensionPointType, std::vector<std::unique_ptr<IExtensionPoint>>> extensions;
+        return extensions;
+    }
+    
+    static std::unordered_map<std::string, IExtensionPoint*>& get_extensions_by_name() {
+        static std::unordered_map<std::string, IExtensionPoint*> extensions_by_name;
+        return extensions_by_name;
+    }
+    
+    static std::unordered_map<ExtensionPointType, std::vector<ExtensionHook>>& get_hooks() {
+        static std::unordered_map<ExtensionPointType, std::vector<ExtensionHook>> hooks;
+        return hooks;
+    }
+    
+    static std::mutex& get_mutex() {
+        static std::mutex registry_mutex;
+        return registry_mutex;
+    }
 };
 
 // Local Variables:
