@@ -28,6 +28,15 @@ target_compile_options(state_store_integration_test PRIVATE -g)
 target_include_directories(state_store_integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_link_libraries(state_store_integration_test PRIVATE pthread)
 
+# MVC Core Components test (without GUI dependencies)
+add_executable(mvc_core_test mvc_core_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/state_store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/event_bus.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/cache_provider.cpp)
+target_compile_options(mvc_core_test PRIVATE -g)
+target_include_directories(mvc_core_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_link_libraries(mvc_core_test PRIVATE pthread)
+
 # Database DAL unit tests
 if(XXHASH_FOUND AND LMDB_FOUND)
     add_executable(database_dal_test database_dal_test.cpp
@@ -77,15 +86,6 @@ if(XXHASH_FOUND AND LMDB_FOUND)
         ${STB_DIR}
         ${CMAKE_SOURCE_DIR}/third_party)
     target_link_libraries(database_dal_eventbus_integration_test PRIVATE ${XXHASH_LIBRARIES} ${LMDB_LIBRARIES} ${JPEG_LIBRARIES} pthread)
-
-    # MVC Core Components test (without GUI dependencies)
-    add_executable(mvc_core_test mvc_core_test.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/state_store.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/event_bus.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/cache_provider.cpp)
-    target_compile_options(mvc_core_test PRIVATE -g)
-    target_include_directories(mvc_core_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
-    target_link_libraries(mvc_core_test PRIVATE pthread)
 
     # MVC Components test (with full dependencies)
     if(FLTK_AVAILABLE)
