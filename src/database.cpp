@@ -25,6 +25,7 @@
 #include "database.hpp"
 #include "utils.hpp"
 #include "logging.hpp"
+#include "database_dal_lmdb.hpp"
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
@@ -43,7 +44,7 @@
 
 namespace fs = std::filesystem;
 DatabaseManager::DatabaseManager() : env_(nullptr), dbi_(0), is_open_(false), stop_processing_(false),
-    image_info_callback_(nullptr) {
+    image_info_callback_(nullptr), dal_(create_database_dal()) {
     }
 
 DatabaseManager::~DatabaseManager() {
@@ -55,190 +56,79 @@ bool DatabaseManager::open(const std::string& db_path) {
 	close();
     }
 
-    int rc = mdb_env_create(&env_);
-    if (rc != 0) {
-	LOG_SCAN_BASIC("DatabaseManager: Failed to create LMDB environment: " + std::string(mdb_strerror(rc)));
-	return false;
+    // Initialize the DAL - this is now the primary database interface
+    if (!dal_->initialize(db_path)) {
+        LOG_SCAN_BASIC("DatabaseManager: Failed to initialize DAL");
+        return false;
     }
 
-    // Set map size to handle large databases (1GB)
-    rc = mdb_env_set_mapsize(env_, MAX_DB_SIZE);
-    if (rc != 0) {
-	LOG_SCAN_BASIC("DatabaseManager: Failed to set LMDB map size: " + std::string(mdb_strerror(rc)));
-	mdb_env_close(env_);
-	env_ = nullptr;
-	return false;
-    }
-
-    // Check if this is a new database for bulk insert optimization
-    bool is_new_db = !std::filesystem::exists(db_path);
-
-    unsigned int flags = MDB_NOSUBDIR;
-    if (is_new_db) {
-	flags |= MDB_NOSYNC; // Use MDB_NOSYNC for faster bulk insert on new DB
-    }
-
-    rc = mdb_env_open(env_, db_path.c_str(), flags, 0664);
-    if (rc != 0) {
-	LOG_SCAN_BASIC("DatabaseManager: Failed to open LMDB database at " + db_path + ": " + std::string(mdb_strerror(rc)));
-	mdb_env_close(env_);
-	env_ = nullptr;
-	return false;
-    }
-
-    // Open the DBI handle once for all transactions
-    MDB_txn* setup_txn;
-    rc = mdb_txn_begin(env_, nullptr, 0, &setup_txn);
-    if (rc != 0) {
-	LOG_SCAN_BASIC("DatabaseManager: Failed to begin setup transaction: " + std::string(mdb_strerror(rc)));
-	mdb_env_close(env_);
-	env_ = nullptr;
-	return false;
-    }
-
-    rc = mdb_dbi_open(setup_txn, nullptr, MDB_CREATE, &dbi_);
-    if (rc != 0) {
-	LOG_SCAN_BASIC("DatabaseManager: Failed to open DBI: " + std::string(mdb_strerror(rc)));
-	mdb_txn_abort(setup_txn);
-	mdb_env_close(env_);
-	env_ = nullptr;
-	return false;
-    }
-
-    rc = mdb_txn_commit(setup_txn);
-    if (rc != 0) {
-	LOG_SCAN_BASIC("DatabaseManager: Failed to commit setup transaction: " + std::string(mdb_strerror(rc)));
-	mdb_env_close(env_);
-	env_ = nullptr;
-	return false;
-    }
-
+    // For backward compatibility, we still set up some legacy fields
+    // but we no longer open a separate LMDB environment
+    env_ = nullptr;  // DAL handles this now
+    dbi_ = 0;        // DAL handles this now
     is_open_ = true;
+    
+    LOG_SCAN_BASIC("DatabaseManager: Successfully opened database using DAL at " + db_path);
     return true;
 }
 
 void DatabaseManager::close() {
-    if (env_) {
-	mdb_env_close(env_);
-	env_ = nullptr;
+    if (dal_) {
+        dal_->close();
     }
+    
+    // Legacy LMDB cleanup - no longer needed since DAL handles everything
+    env_ = nullptr;
+    dbi_ = 0;
     is_open_ = false;
 }
 
 bool DatabaseManager::begin_write_transaction(MDB_txn*& txn) {
-    if (!is_open_) {
-	return false;
-    }
-
-    int rc = mdb_txn_begin(env_, nullptr, 0, &txn);
-    if (rc != 0) {
-	txn = nullptr;
-	LOG_SCAN_BASIC("DatabaseManager: Failed to begin write transaction: " + std::string(mdb_strerror(rc)));
-	return false;
-    }
-
-    return true;
+    // DEPRECATED: This method is deprecated. Use get_dal()->begin_write_transaction() instead.
+    LOG_SCAN_BASIC("DatabaseManager: begin_write_transaction is deprecated. Use get_dal()->begin_write_transaction() instead.");
+    txn = nullptr;
+    return false;
 }
 
 bool DatabaseManager::begin_read_transaction(MDB_txn*& txn) {
-    if (!is_open_) {
-	return false;
-    }
-
-    int rc = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
-    if (rc != 0) {
-	txn = nullptr;
-	LOG_SCAN_BASIC("DatabaseManager: Failed to begin read transaction: " + std::string(mdb_strerror(rc)));
-	return false;
-    }
-
-    return true;
+    // DEPRECATED: This method is deprecated. Use get_dal()->begin_read_transaction() instead.
+    LOG_SCAN_BASIC("DatabaseManager: begin_read_transaction is deprecated. Use get_dal()->begin_read_transaction() instead.");
+    txn = nullptr;
+    return false;
 }
 
 bool DatabaseManager::commit_transaction(MDB_txn* txn) {
-    if (!txn) {
-	return false;
-    }
-
-    int rc = mdb_txn_commit(txn);
-    bool success = (rc == 0);
-    if (!success) {
-	LOG_SCAN_BASIC("DatabaseManager: Transaction commit failed: " + std::string(mdb_strerror(rc)));
-    }
-    return success;
+    // DEPRECATED: This method is deprecated. Use DAL transactions instead.
+    LOG_SCAN_BASIC("DatabaseManager: commit_transaction is deprecated. Use DAL transactions instead.");
+    return false;
 }
 
 void DatabaseManager::abort_transaction(MDB_txn* txn) {
-    if (txn) {
-	mdb_txn_abort(txn);
-    }
+    // DEPRECATED: This method is deprecated. Use DAL transactions instead.
+    LOG_SCAN_BASIC("DatabaseManager: abort_transaction is deprecated. Use DAL transactions instead.");
 }
 
 bool DatabaseManager::store_key_value(MDB_txn* txn, const std::string& key, const std::string& value) {
-    if (!txn) {
-	return false;
-    }
-
-
-    MDB_val k, v;
-    k.mv_data = (void*)key.c_str();
-    k.mv_size = key.length();
-    v.mv_data = (void*)value.c_str();
-    v.mv_size = value.length();
-
-    int rc = mdb_put(txn, dbi_, &k, &v, 0);
-    bool success = (rc == 0);
-    if (success) {
-    } else {
-    }
-    return success;
+    // DEPRECATED: This method is deprecated. Use DAL instead.
+    LOG_SCAN_BASIC("DatabaseManager: store_key_value is deprecated. Use DAL instead.");
+    return false;
 }
 
 bool DatabaseManager::store_key_data(MDB_txn* txn, const std::string& key, const std::vector<uint8_t>& data) {
-    if (!txn) {
-	return false;
-    }
-
-
-    MDB_val k, v;
-    k.mv_data = (void*)key.c_str();
-    k.mv_size = key.length();
-    v.mv_data = (void*)data.data();
-    v.mv_size = data.size();
-
-    int rc = mdb_put(txn, dbi_, &k, &v, 0);
-    bool success = (rc == 0);
-    if (success) {
-    } else {
-    }
-    return success;
+    // DEPRECATED: This method is deprecated. Use DAL instead.
+    LOG_SCAN_BASIC("DatabaseManager: store_key_data is deprecated. Use DAL instead.");
+    return false;
 }
 
 bool DatabaseManager::get_key_value(MDB_txn* txn, const std::string& key, std::string& value) {
-    if (!txn) return false;
-
-    MDB_val k, v;
-    k.mv_data = (void*)key.c_str();
-    k.mv_size = key.length();
-
-    if (mdb_get(txn, dbi_, &k, &v) == 0) {
-	value.assign((char*)v.mv_data, v.mv_size);
-	return true;
-    }
+    // DEPRECATED: This method is deprecated. Use DAL instead.
+    LOG_SCAN_BASIC("DatabaseManager: get_key_value is deprecated. Use DAL instead.");
     return false;
 }
 
 bool DatabaseManager::get_key_data(MDB_txn* txn, const std::string& key, std::vector<uint8_t>& data) {
-    if (!txn) return false;
-
-    MDB_val k, v;
-    k.mv_data = (void*)key.c_str();
-    k.mv_size = key.length();
-
-    if (mdb_get(txn, dbi_, &k, &v) == 0) {
-	data.assign((uint8_t*)v.mv_data, (uint8_t*)v.mv_data + v.mv_size);
-	return true;
-    }
+    // DEPRECATED: This method is deprecated. Use DAL instead.
+    LOG_SCAN_BASIC("DatabaseManager: get_key_data is deprecated. Use DAL instead.");
     return false;
 }
 
@@ -1214,55 +1104,54 @@ bool DatabaseManager::load_image_info(MDB_txn* txn, const std::string& hash, Ima
 std::vector<ImageInfo> DatabaseManager::get_all_images() {
     std::vector<ImageInfo> images;
 
-    if (!is_open_) return images;
-
-    MDB_txn* read_txn;
-    MDB_cursor* cursor;
-
-    if (mdb_txn_begin(env_, nullptr, MDB_RDONLY, &read_txn) != 0) {
-	return images;
+    if (!is_open_ || !dal_->is_ready()) {
+        return images;
     }
 
-    if (mdb_cursor_open(read_txn, dbi_, &cursor) != 0) {
-	mdb_txn_abort(read_txn);
-	return images;
+    auto txn = dal_->begin_read_transaction();
+    if (!txn) {
+        return images;
     }
 
-    MDB_val key, data;
-    while (mdb_cursor_get(cursor, &key, &data, MDB_NEXT) == 0) {
-	std::string hash = extract_hash_from_key((char*)key.mv_data, key.mv_size);
-	if (!hash.empty()) {
-	    ImageInfo info;
-	    info.hash = hash;
-	    info.path = std::string((char*)data.mv_data, data.mv_size);
-	    info.has_thumbnails = false;  // Initialize to false
-
-	    if (load_image_info(read_txn, hash, info)) {
-		// load_image_info sets has_thumbnails to true if successful
-		images.push_back(std::move(info));
-	    } else {
-		// Even if thumbnails don't exist, we might have metadata
-		std::string metadata_key = hash + ":metadata";
-		std::string metadata_value;
-		if (get_key_value(read_txn, metadata_key, metadata_value)) {
-		    info.aspect_ratio = std::stod(metadata_value);
-		    info.has_thumbnails = false;
-		    images.push_back(std::move(info));
-		} else {
-		    fprintf(stderr, "Warning: Failed to load image info for '%s' (hash: %s)\n", info.path.c_str(), hash.c_str());
-		}
-	    }
-	}
+    // Get all image hashes from DAL
+    auto image_hashes = dal_->images().get_all_image_hashes(*txn);
+    
+    for (const auto& hash : image_hashes) {
+        ImageInfo info;
+        info.hash = hash;
+        info.has_thumbnails = false;  // Initialize to false
+        
+        // Get image path
+        auto path_opt = dal_->images().get_image_path(*txn, hash);
+        if (!path_opt.has_value()) {
+            continue; // Skip if no path found
+        }
+        info.path = path_opt.value();
+        
+        // Get image metadata (aspect ratio)
+        auto metadata_opt = dal_->images().get_image_metadata(*txn, hash);
+        if (metadata_opt.has_value()) {
+            info.aspect_ratio = metadata_opt.value();
+        } else {
+            info.aspect_ratio = 1.0; // Default aspect ratio
+        }
+        
+        // Try to load thumbnail info using legacy method for compatibility
+        if (load_image_info_from_dal(*txn, hash, info)) {
+            // load_image_info sets has_thumbnails to true if successful
+            images.push_back(std::move(info));
+        } else {
+            // No thumbnails available, but we have the basic info
+            info.has_thumbnails = false;
+            images.push_back(std::move(info));
+        }
     }
-
-    mdb_cursor_close(cursor);
-    mdb_txn_abort(read_txn);
 
     // Sort images alphabetically by path
     std::sort(images.begin(), images.end(),
-	    [](const ImageInfo& a, const ImageInfo& b) {
-	    return a.path < b.path;
-	    });
+            [](const ImageInfo& a, const ImageInfo& b) {
+            return a.path < b.path;
+            });
 
     return images;
 }
@@ -1280,20 +1169,18 @@ std::vector<ImageInfo> DatabaseManager::get_images_since_count(size_t last_count
 }
 
 bool DatabaseManager::has_thumbnails(const std::string& hash) {
-    if (!is_open_) return false;
-
-    MDB_txn* read_txn;
-    if (!begin_read_transaction(read_txn)) {
-	return false;
+    if (!is_open_ || !dal_->is_ready()) {
+        return false;
     }
 
-    // Check if any thumbnail exists for this hash
-    std::string thumb_key = make_thumbnail_key(hash, 32); // Check smallest size
-    std::vector<uint8_t> data;
-    bool has_thumb = get_key_data(read_txn, thumb_key, data);
+    auto txn = dal_->begin_read_transaction();
+    if (!txn) {
+        return false;
+    }
 
-    abort_transaction(read_txn);
-    return has_thumb;
+    // Check if any thumbnail exists for this hash using DAL
+    auto sizes = dal_->thumbnails().get_available_thumbnail_sizes(*txn, hash);
+    return !sizes.empty();
 }
 
 std::vector<ImageInfo> DatabaseManager::get_images_without_thumbnails() {
@@ -1612,6 +1499,53 @@ void DatabaseManager::apply_orientation_transform(unsigned char* data, int& widt
 
 void DatabaseManager::cancel_scan() {
     stop_processing_.store(true);
+}
+
+bool DatabaseManager::load_image_info_from_dal(ITransaction& txn, const std::string& hash, ImageInfo& info) {
+    // Find largest thumbnail size available using DAL
+    std::vector<int> sizes = dal_->thumbnails().get_available_thumbnail_sizes(txn, hash);
+    
+    if (sizes.empty()) {
+        return false;
+    }
+    
+    // Get the largest available thumbnail
+    int best_size = *std::max_element(sizes.begin(), sizes.end());
+    auto best_data_opt = dal_->thumbnails().get_thumbnail(txn, hash, best_size);
+    
+    if (!best_data_opt.has_value()) {
+        return false;
+    }
+    
+    std::vector<uint8_t> best_data = best_data_opt.value();
+    
+    // Try to load thumbnail image to get dimensions and aspect ratio
+    int width, height, channels;
+    stbi_uc* pixels = stbi_load_from_memory(best_data.data(), best_data.size(),
+            &width, &height, &channels, 3);
+
+    if (!pixels) {
+        // Failed to load thumbnail data - this is not necessarily an error,
+        // just means the thumbnail data might be invalid or corrupted
+        // We still know thumbnails exist, just can't get dimensions from them
+        info.best_thumb_size = best_size;
+        info.thumb_data = std::move(best_data);
+        info.thumb_width = 0;
+        info.thumb_height = 0;
+        info.has_thumbnails = true;
+        // Don't overwrite aspect_ratio if it was already set from metadata
+        return true;
+    }
+
+    info.best_thumb_size = best_size;
+    info.thumb_data = std::move(best_data);
+    info.thumb_width = width;
+    info.thumb_height = height;
+    info.aspect_ratio = static_cast<double>(width) / height;
+    info.has_thumbnails = true;
+
+    stbi_image_free(pixels);
+    return true;
 }
 
 // Local Variables:

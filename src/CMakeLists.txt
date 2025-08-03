@@ -1,6 +1,6 @@
 # picexplore executable
 if(JPEG_FOUND AND FLTK_AVAILABLE AND XXHASH_FOUND AND LMDB_FOUND)
-    add_executable(picexplore picexplore.cpp Fl_JustifiedLayout.cpp database.cpp pdf.cpp utils.cpp stb_impl.cpp thread_manager.cpp task_scheduler.cpp logging.cpp state_store.cpp event_bus.cpp cache_provider.cpp ../third_party/TinyEXIF.cpp)
+    add_executable(picexplore picexplore.cpp Fl_JustifiedLayout.cpp database.cpp database_dal_lmdb.cpp pdf.cpp utils.cpp stb_impl.cpp thread_manager.cpp task_scheduler.cpp logging.cpp state_store.cpp event_bus.cpp cache_provider.cpp ../third_party/TinyEXIF.cpp)
     target_include_directories(picexplore PRIVATE
         ${XXHASH_INCLUDE_DIRS}
         ${STB_DIR}

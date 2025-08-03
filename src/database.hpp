@@ -36,6 +36,7 @@
 #include "utils.hpp"
 #include "concurrentqueue.h"
 #include "blockingconcurrentqueue.h"
+#include "database_dal.hpp"
 
 // Image information structure
 struct ImageInfo {
@@ -116,7 +117,7 @@ class DatabaseManager {
 	// Scanning control
 	void cancel_scan();
 
-	// Database operations (made public for UI access)
+	// Database operations (made public for UI access) - DEPRECATED, use DAL directly
 	bool begin_write_transaction(MDB_txn*& txn);
 	bool begin_read_transaction(MDB_txn*& txn);
 	bool commit_transaction(MDB_txn* txn);
@@ -124,10 +125,18 @@ class DatabaseManager {
 	bool load_image_info(MDB_txn* txn, const std::string& hash, ImageInfo& info);
 	bool get_key_data(MDB_txn* txn, const std::string& key, std::vector<uint8_t>& data);
 
+	// New DAL access for modern usage
+	IDatabaseDAL* get_dal() { return dal_.get(); }
+	const IDatabaseDAL* get_dal() const { return dal_.get(); }
+
     private:
+	// Legacy LMDB fields - kept for backward compatibility of deprecated methods
 	MDB_env* env_;
 	MDB_dbi dbi_;
 	bool is_open_;
+
+	// New DAL interface
+	std::unique_ptr<IDatabaseDAL> dal_;
 
 	// Parallel processing
 	mutable std::mutex db_mutex_;
@@ -169,6 +178,9 @@ class DatabaseManager {
 	// EXIF orientation helpers
 	int get_exif_orientation(const std::string& filepath);
 	void apply_orientation_transform(unsigned char* data, int& width, int& height, int orientation);
+	
+	// DAL-compatible helper methods
+	bool load_image_info_from_dal(ITransaction& txn, const std::string& hash, ImageInfo& info);
 };
 
 // Local Variables:
