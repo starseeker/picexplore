@@ -58,25 +58,25 @@ struct Item {
 
 // Represents a row of items in the justified layout.
 class Row {
-public:
-    Row(const LayoutCfg& cfg, double top, bool breakout);
+    public:
+	Row(const LayoutCfg& cfg, double top, bool breakout);
 
-    bool add(const Item& it);
-    bool done() const;
-    void finish(double rh = -1);
-    const std::vector<Item>& items() const;
-    double height() const;
-    bool breakout() const;
+	bool add(const Item& it);
+	bool done() const;
+	void finish(double rh = -1);
+	const std::vector<Item>& items() const;
+	double height() const;
+	bool breakout() const;
 
-private:
-    void layout(double newH, WidowStyle ws);
+    private:
+	void layout(double newH, WidowStyle ws);
 
-    const LayoutCfg& c;
-    double top_;
-    bool breakout_;
-    double h_ = 0.0;
-    std::vector<Item> its_;
-    double minAR_, maxAR_;
+	const LayoutCfg& c;
+	double top_;
+	bool breakout_;
+	double h_ = 0.0;
+	std::vector<Item> its_;
+	double minAR_, maxAR_;
 };
 
 // --- Row Implementation ---
@@ -102,39 +102,39 @@ inline bool Row::add(const Item& it) {
 
     // Full-width breakout row
     if (breakout_) {
-        if (its_.empty() && it.ar >= 1.0) {
-            its_.push_back(it);
-            layout(ws / it.ar, WidowStyle::Justify);
-            return true;
-        }
+	if (its_.empty() && it.ar >= 1.0) {
+	    its_.push_back(it);
+	    layout(ws / it.ar, WidowStyle::Justify);
+	    return true;
+	}
     }
 
     if (sumAR < minAR_) {
-        its_.push_back(it);
-        return true;
+	its_.push_back(it);
+	return true;
     } else if (sumAR > maxAR_) {
-        if (its_.empty()) {
-            its_.push_back(it);
-            layout(ws / sumAR, WidowStyle::Justify);
-            return true;
-        }
-        double prevWS = w - (its_.size() - 1) * c.sh;
-        double prevAR = 0.0;
-        for (const auto& i : its_) prevAR += i.ar;
-        double prevTargetAR = prevWS / c.rh;
+	if (its_.empty()) {
+	    its_.push_back(it);
+	    layout(ws / sumAR, WidowStyle::Justify);
+	    return true;
+	}
+	double prevWS = w - (its_.size() - 1) * c.sh;
+	double prevAR = 0.0;
+	for (const auto& i : its_) prevAR += i.ar;
+	double prevTargetAR = prevWS / c.rh;
 
-        if (std::abs(sumAR - targetAR) > std::abs(prevAR - prevTargetAR)) {
-            layout(prevWS / prevAR, WidowStyle::Justify);
-            return false;
-        } else {
-            its_.push_back(it);
-            layout(ws / sumAR, WidowStyle::Justify);
-            return true;
-        }
+	if (std::abs(sumAR - targetAR) > std::abs(prevAR - prevTargetAR)) {
+	    layout(prevWS / prevAR, WidowStyle::Justify);
+	    return false;
+	} else {
+	    its_.push_back(it);
+	    layout(ws / sumAR, WidowStyle::Justify);
+	    return true;
+	}
     } else {
-        its_.push_back(it);
-        layout(ws / sumAR, WidowStyle::Justify);
-        return true;
+	its_.push_back(it);
+	layout(ws / sumAR, WidowStyle::Justify);
+	return true;
     }
 }
 
@@ -142,9 +142,9 @@ inline bool Row::done() const { return h_ > 0.0; }
 
 inline void Row::finish(double rh) {
     if (rh > 0)
-        layout(rh, c.ws);
+	layout(rh, c.ws);
     else
-        layout(c.rh, c.ws);
+	layout(c.rh, c.ws);
 }
 
 inline const std::vector<Item>& Row::items() const { return its_; }
@@ -160,65 +160,65 @@ inline void Row::layout(double newH, WidowStyle ws) {
     double wsW = width - (its_.size() - 1) * spacing;
     double clampH = std::max(minH, std::min(newH, maxH));
     double scale = (newH != clampH)
-        ? ((wsW / clampH) / (wsW / newH))
-        : 1.0;
+	? ((wsW / clampH) / (wsW / newH))
+	: 1.0;
     h_ = clampH;
 
     for (auto& it : its_) {
-        it.t = top_;
-        it.w = it.ar * h_ * scale;
-        it.h = h_;
-        it.l = left;
-        left += it.w + spacing;
+	it.t = top_;
+	it.w = it.ar * h_ * scale;
+	it.h = h_;
+	it.l = left;
+	left += it.w + spacing;
     }
 
     switch (ws) {
-    case WidowStyle::Justify: {
-        left -= (spacing + c.pl);
-        double err = (left - width) / its_.size();
-        std::vector<int> ce(its_.size(), 0);
-        for (size_t i = 0; i < its_.size(); ++i)
-            ce[i] = static_cast<int>(std::round((i + 1) * err));
-        if (its_.size() == 1) {
-            its_[0].w -= std::round(err);
-        } else {
-            for (size_t i = 0; i < its_.size(); ++i) {
-                if (i > 0) {
-                    its_[i].l -= ce[i - 1];
-                    its_[i].w -= (ce[i] - ce[i - 1]);
-                } else {
-                    its_[i].w -= ce[i];
-                }
-            }
-        }
-        break;
-    }
-    case WidowStyle::Center: {
-        double offset = (width - left) / 2.0;
-        for (auto& it : its_) it.l += offset + spacing;
-        break;
-    }
-    case WidowStyle::Left:
-    default:
-        // Do nothing.
-        break;
+	case WidowStyle::Justify: {
+				      left -= (spacing + c.pl);
+				      double err = (left - width) / its_.size();
+				      std::vector<int> ce(its_.size(), 0);
+				      for (size_t i = 0; i < its_.size(); ++i)
+					  ce[i] = static_cast<int>(std::round((i + 1) * err));
+				      if (its_.size() == 1) {
+					  its_[0].w -= std::round(err);
+				      } else {
+					  for (size_t i = 0; i < its_.size(); ++i) {
+					      if (i > 0) {
+						  its_[i].l -= ce[i - 1];
+						  its_[i].w -= (ce[i] - ce[i - 1]);
+					      } else {
+						  its_[i].w -= ce[i];
+					      }
+					  }
+				      }
+				      break;
+				  }
+	case WidowStyle::Center: {
+				     double offset = (width - left) / 2.0;
+				     for (auto& it : its_) it.l += offset + spacing;
+				     break;
+				 }
+	case WidowStyle::Left:
+	default:
+				 // Do nothing.
+				 break;
     }
 }
 
 // JustifiedLayout manages the overall justified layout process.
 class JustifiedLayout {
-public:
-    JustifiedLayout(const std::vector<Item>& input, const LayoutCfg& cfg);
+    public:
+	JustifiedLayout(const std::vector<Item>& input, const LayoutCfg& cfg);
 
-    double height() const { return height_; }
-    int widows() const { return widows_; }
-    const std::vector<Item>& boxes() const { return boxes_; }
+	double height() const { return height_; }
+	int widows() const { return widows_; }
+	const std::vector<Item>& boxes() const { return boxes_; }
 
-private:
-    double height_ = 0;
-    int widows_ = 0;
-    std::vector<Item> boxes_;
-    LayoutCfg cfg_;
+    private:
+	double height_ = 0;
+	int widows_ = 0;
+	std::vector<Item> boxes_;
+	LayoutCfg cfg_;
 };
 
 // --- JustifiedLayout Implementation ---
@@ -234,10 +234,10 @@ inline JustifiedLayout::JustifiedLayout(const std::vector<Item>& input, const La
     // Prepare aspect ratios if forced.
     std::vector<Item> items = input;
     if (cfg_.ar > 0) {
-        for (auto& item : items) {
-            item.forcedAR = true;
-            item.ar = cfg_.ar;
-        }
+	for (auto& item : items) {
+	    item.forcedAR = true;
+	    item.ar = cfg_.ar;
+	}
     }
 
     size_t idx = 0;
@@ -245,57 +245,57 @@ inline JustifiedLayout::JustifiedLayout(const std::vector<Item>& input, const La
     int rc = 0;
 
     auto newRow = [&](int rc) -> Row {
-        bool breakout = false;
-        if (cfg_.breakCadence > 0 && ((rc + 1) % cfg_.breakCadence) == 0)
-            breakout = true;
-        return Row(cfg_, y, breakout);
+	bool breakout = false;
+	if (cfg_.breakCadence > 0 && ((rc + 1) % cfg_.breakCadence) == 0)
+	    breakout = true;
+	return Row(cfg_, y, breakout);
     };
 
     auto addRow = [&](Row& r) {
-        rows.push_back(r);
-        for (const auto& it : r.items()) boxes_.push_back(it);
-        y += r.height() + cfg_.sv;
+	rows.push_back(r);
+	for (const auto& it : r.items()) boxes_.push_back(it);
+	y += r.height() + cfg_.sv;
     };
 
     while (idx < items.size()) {
-        if (!row) row = std::make_unique<Row>(newRow(rc));
-        Item& it = items[idx];
+	if (!row) row = std::make_unique<Row>(newRow(rc));
+	Item& it = items[idx];
 
-        if (std::isnan(it.ar)) throw std::runtime_error("Item has invalid aspect ratio");
+	if (std::isnan(it.ar)) throw std::runtime_error("Item has invalid aspect ratio");
 
-        bool added = row->add(it);
+	bool added = row->add(it);
 
-        if (row->done()) {
-            addRow(*row);
-            ++rc;
-            if (rc >= cfg_.maxRows) {
-                row.reset();
-                break;
-            }
-            row = std::make_unique<Row>(newRow(rc));
-            if (!added) {
-                row->add(it);
-                if (row->done()) {
-                    addRow(*row);
-                    ++rc;
-                    if (rc >= cfg_.maxRows) {
-                        row.reset();
-                        break;
-                    }
-                    row = std::make_unique<Row>(newRow(rc));
-                }
-            }
-        }
-        ++idx;
+	if (row->done()) {
+	    addRow(*row);
+	    ++rc;
+	    if (rc >= cfg_.maxRows) {
+		row.reset();
+		break;
+	    }
+	    row = std::make_unique<Row>(newRow(rc));
+	    if (!added) {
+		row->add(it);
+		if (row->done()) {
+		    addRow(*row);
+		    ++rc;
+		    if (rc >= cfg_.maxRows) {
+			row.reset();
+			break;
+		    }
+		    row = std::make_unique<Row>(newRow(rc));
+		}
+	    }
+	}
+	++idx;
     }
 
     // Widow/orphan row
     if (row && !row->items().empty() && cfg_.widows) {
-        double prevH = cfg_.rh;
-        if (!rows.empty()) prevH = rows.back().height();
-        row->finish(prevH);
-        addRow(*row);
-        wc = static_cast<int>(row->items().size());
+	double prevH = cfg_.rh;
+	if (!rows.empty()) prevH = rows.back().height();
+	row->finish(prevH);
+	addRow(*row);
+	wc = static_cast<int>(row->items().size());
     }
 
     y -= cfg_.sv;
@@ -304,3 +304,12 @@ inline JustifiedLayout::JustifiedLayout(const std::vector<Item>& input, const La
     height_ = y;
     widows_ = wc;
 }
+
+// Local Variables:
+// tab-width: 8
+// mode: C++
+// c-basic-offset: 4
+// indent-tabs-mode: t
+// c-file-style: "stroustrup"
+// End:
+// ex: shiftwidth=4 tabstop=8 cino=N-s
