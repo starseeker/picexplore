@@ -1,0 +1,42 @@
+# Build directories
+build/
+cmake-build-*/
+
+# Generated files
+*.o
+*.so
+*.a
+*.dylib
+*.dll
+*.exe
+
+# Misc files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.bak
+
+# Generated SVG files
+*.svg
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# macOS
+.DS_Store
+
+# Test files and databases
+test_*.db
+test_*.db-lock
+test_*.pdf
+test_error_handling/
+test_1x1.png
+
+# LMDB database files (created by application)
+*.db
+*.db-lock
