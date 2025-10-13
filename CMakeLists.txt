@@ -49,6 +49,9 @@ target_compile_definitions(lmdb PRIVATE MDB_MAXKEYSIZE=511)
 # Test programs
 add_subdirectory(tests)
 
+# GUI application
+add_subdirectory(gui)
+
 # New unified picscan executable
 add_executable(picscan picscan.cpp database.cpp pdf.cpp utils.cpp third_party/TinyEXIF.cpp)
 target_include_directories(picscan PRIVATE
