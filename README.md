@@ -34,6 +34,29 @@ This will:
 
 ## Tools
 
+### picexplore_gui (NEW!)
+Interactive FLTK-based GUI for browsing image collections with justified layout and progressive thumbnail loading.
+
+**Features:**
+- **Incremental Display**: Fast initial scan shows grey rectangles with image metadata, then progressively loads thumbnails
+- **Priority Queue**: Visible images are prioritized for thumbnail generation
+- **Scroll Stabilization**: Waits 500ms after scrolling before reprioritizing (prevents thrashing)
+- **Progressive Quality**: Thumbnails improve from 32px → 64px → 128px → 256px → 512px → 1024px
+- **Justified Layout**: Optimally arranges images using the same algorithm as PDF generation
+- **Multi-threaded**: 4 worker threads for parallel thumbnail generation
+- **Efficient JPEG**: Uses libjpeg-turbo DCT-domain scaling for fast decoding
+
+**Usage:**
+```bash
+# Launch GUI
+picexplore_gui
+
+# Or load a directory directly
+picexplore_gui /path/to/photos
+```
+
+See [gui/README.md](gui/README.md) for detailed architecture and design information.
+
 ### picscan
 Unified image scanner and PDF gallery generator that combines the functionality of the previous separate tools.
 
@@ -104,11 +127,12 @@ You need the following system packages installed:
 - CMake 3.12 or later
 - A C++17 compatible compiler (GCC, Clang)
 - libjpeg-turbo development headers (`libjpeg-turbo8-dev` on Ubuntu/Debian)
+- FLTK 1.3+ development headers (`libfltk1.3-dev` on Ubuntu/Debian) - for GUI
 - pkg-config
 
 On Ubuntu/Debian:
 ```bash
-sudo apt-get install cmake build-essential libjpeg-turbo8-dev pkg-config
+sudo apt-get install cmake build-essential libjpeg-turbo8-dev libfltk1.3-dev pkg-config
 ```
 
 ### Build Steps
@@ -132,8 +156,9 @@ cmake ..
 make
 ```
 
-This will build the unified executable:
+This will build the executables:
 - `picscan` (unified image scanner and PDF gallery generator)
+- `picexplore_gui` (interactive FLTK-based image browser)
 
 ## Supported Image Formats
 
