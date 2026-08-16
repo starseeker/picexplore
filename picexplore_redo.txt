@@ -1,0 +1,1035 @@
+================================================================================
+                    PICEXPLORE GUI REDESIGN: CLEAN-SHEET PROPOSAL
+================================================================================
+
+Author: Antigravity Analysis
+Date: 2026-08-16
+Status: Proposed
+
+
+TABLE OF CONTENTS
+-----------------
+  1. Executive Summary
+  2. Analysis of What Works
+  3. Analysis of What Failed and Why
+  4. Design Principles for the Redo
+  5. Architecture Overview
+  6. Component Design
+     6.1 ImageStore (Data Model)
+     6.2 ScanCoordinator (Filesystem Discovery)
+     6.3 ThumbnailPipeline (Async Thumbnail Generation)
+     6.4 LayoutEngine (Justified Layout)
+     6.5 VirtualViewport (Virtualized Rendering)
+     6.6 MainWindow (FLTK Shell)
+  7. Threading Model
+  8. Data Flow and State Machine
+  9. The Critical Design: FLTK Event Loop Integration
+ 10. Progressive Loading Strategy
+ 11. Memory Management
+ 12. LMDB Integration for Persistent Caching
+ 13. File Organization
+ 14. Build System Changes
+ 15. Migration Path
+
+
+================================================================================
+1. EXECUTIVE SUMMARY
+================================================================================
+
+The existing picexplore project has strong backend fundamentals: the LMDB
+database layer, the justified layout algorithm (ported from SmugMug's library),
+the picscan command-line scanner with multi-threaded thumbnail generation, and
+efficient JPEG processing via DCT-domain scaling. These components are solid
+and should be preserved.
+
+The GUI attempt failed because it conflated several hard problems into a
+tightly-coupled design that couldn't actually work. The specific failure modes
+are documented in Section 3, but the fundamental issue is that the GUI was
+designed as if FLTK were a retained-mode, reactive UI framework (like Qt or a
+web browser), when in fact FLTK is an immediate-mode toolkit that requires
+very explicit management of the widget tree, redraw cycles, and cross-thread
+communication.
+
+This document proposes a new GUI architecture built around three key insights:
+
+  (a) VIRTUALIZED RENDERING: Do not create FLTK widgets for every image.
+      Instead, maintain a data model and only render the visible region,
+      drawing directly onto a canvas surface. This eliminates the O(N) widget
+      scaling problem and the Fl_Scroll interaction issues.
+
+  (b) EXPLICIT STATE MACHINE: Drive the entire GUI through a state machine
+      with well-defined transitions, rather than relying on ad-hoc callbacks
+      and cross-thread notifications. All state mutations happen on the FLTK
+      main thread.
+
+  (c) POLL-BASED MAIN THREAD INTEGRATION: Instead of trying to push
+      individual thumbnail-ready notifications from worker threads (which
+      creates an avalanche of Fl::awake() calls that flood the event loop),
+      use a periodic timer on the main thread that polls a lock-free queue of
+      completed work, batches updates, and redraws only what changed.
+
+
+================================================================================
+2. ANALYSIS OF WHAT WORKS
+================================================================================
+
+The following components from the existing codebase are solid and should be
+reused either directly or with minor adaptation:
+
+2.1 justified_layout.hpp
+    - Clean, header-only C++ port of SmugMug's justified-layout algorithm
+    - Correctly handles row building, widow rows, breakout rows, padding
+    - Takes a vector of aspect ratios, produces positioned boxes
+    - No FLTK dependency - pure layout math
+    - REUSE AS-IS
+
+2.2 database.cpp / database.h
+    - LMDB-based storage with key format: "thumb:{hash}:{size}" for
+      thumbnails, "path:{hash}" for file paths
+    - Multi-threaded scanning with worker/writer separation
+    - DCT-domain JPEG downscaling for efficient thumbnail generation
+    - EXIF orientation support via TinyEXIF
+    - Content-based deduplication via xxHash
+    - Six thumbnail sizes: 32, 64, 128, 256, 512, 1024px
+    - REUSE WITH MINOR API ADDITIONS (need ability to look up thumbnails
+      by path without full scan, and incremental scan capability)
+
+2.3 picscan.cpp
+    - Clean command-line interface with cxxopts
+    - Unified scan + PDF generation workflow
+    - KEEP AS-IS (separate tool, not part of GUI)
+
+2.4 pdf.cpp / pdf.h
+    - PDF gallery generation using struetype for font rendering
+    - Uses justified_layout.hpp for page layout
+    - KEEP AS-IS (separate tool, not part of GUI)
+
+2.5 utils.cpp / utils.h
+    - Timer and StatusReporter utilities
+    - JPEG encoding helper
+    - Image file extension detection
+    - REUSE AS-IS
+
+2.6 Third-party libraries
+    - xxHash (content hashing)
+    - stb_image / stb_image_resize2 (image decode/resize)
+    - LMDB (database)
+    - cxxopts (CLI parsing)
+    - TinyEXIF (EXIF orientation)
+    - concurrentqueue (lock-free queue by Cameron314)
+    - REUSE ALL
+
+
+================================================================================
+3. ANALYSIS OF WHAT FAILED AND WHY
+================================================================================
+
+3.1 THE WIDGET SCALING PROBLEM
+    fl_justified_gallery.cpp creates one Fl_Image_Box widget per image in the
+    collection (rebuild_layout(), lines 214-258). For a photo collection of
+    10,000+ images, this means 10,000+ FLTK widgets in the widget tree.
+    FLTK was never designed for this. Fl_Scroll must manage all children,
+    layout and clip calculations become O(N), and memory usage for widget
+    objects alone becomes significant.
+
+    The image_boxes_ vector stores unique_ptr<Fl_Image_Box> but these widgets
+    are not properly added to the Fl_Scroll's child list - they're created
+    with raw new inside unique_ptrs but FLTK's parent-child relationship
+    requires widgets to be added during group construction or via add().
+    The manual draw() override tries to compensate but this bypasses FLTK's
+    damage/redraw system.
+
+3.2 THE Fl::awake() AVALANCHE
+    thumbnail_cache.cpp fires a callback for EVERY thumbnail that completes
+    (worker_thread(), lines 209-214). The callback in fl_justified_gallery.cpp
+    (set_cache(), lines 179-195) wraps each notification in Fl::awake() with
+    a heap-allocated pair<>. When 4 worker threads are generating thumbnails
+    at full speed, this creates hundreds of Fl::awake() wakeup events per
+    second, each allocating and freeing memory. Fl::awake() is designed for
+    occasional cross-thread notifications, not as a high-throughput message
+    bus. The result is that the FLTK event loop spends most of its time
+    processing wakeup callbacks rather than drawing, and the UI becomes
+    unresponsive.
+
+3.3 JPEG DECODE ON EVERY REDRAW
+    Fl_Image_Box::set_thumbnail() (lines 46-88) decodes JPEG data into RGB
+    every time a thumbnail is set. But worse, it creates the Fl_RGB_Image
+    TWICE (lines 77-83): once with the stack-allocated rgb_data (which will
+    be invalid after the function returns), then again with a heap copy. The
+    first Fl_RGB_Image is immediately leaked/destroyed. The second one has a
+    dangling alloc_array flag from the first. This is a memory corruption
+    bug.
+
+    Additionally, Fl_Image_Box::draw() calls fl_image_->copy(draw_w, draw_h)
+    on EVERY draw call (line 119), creating a scaled copy each frame and
+    immediately deleting it. This is extremely expensive, especially during
+    scroll, when draw() is called for every visible widget on every frame.
+
+3.4 MISSING CONTENT WIDGET FOR Fl_Scroll
+    Fl_Justified_Gallery extends Fl_Scroll but never creates a content
+    widget that is sized to total_height_. Fl_Scroll needs a child widget
+    whose size determines the scrollable area. Without this, the scrollbar
+    range is wrong, and scrolling behavior is unpredictable. The content_
+    member is declared in the header but never initialized or used.
+
+3.5 BROKEN PROGRESSIVE QUALITY ESCALATION
+    ThumbnailCache::prioritize_visible_images() calculates the "next quality"
+    by doubling the enum value: static_cast<ThumbQuality>(int(current) * 2).
+    The enum values are 0, 32, 64, 128, 256, 512, 1024. Doubling 0 gives 0
+    (handled), doubling 32 gives 64 (correct), but this only advances ONE
+    quality level per reprioritization call. After the scroll stabilization
+    delay of 0.5s, only one level improvement is queued for visible images.
+    The system never reaches higher quality levels because each scroll event
+    resets the entire queue, discarding in-progress work.
+
+3.6 THE in_progress FLAG RACE
+    worker_thread() checks and sets thumb.in_progress under cache_mutex_
+    (lines 191-197), but generate_thumbnail() takes a long time (decoding
+    images from disk). During this time, other workers can't see that this
+    image is being processed because in_progress is checked per-work-item,
+    not per-image. Multiple workers can end up processing the same image at
+    the same quality level if it appears in the queue multiple times (which
+    happens because prioritize_visible_images() rebuilds the entire queue
+    from scratch).
+
+3.7 NO PERSISTENT CACHE INTEGRATION
+    The GUI's ThumbnailCache (gui/thumbnail_cache.cpp) generates thumbnails
+    from raw image files every time. It completely ignores the LMDB database
+    that picscan builds. If a user has already scanned a directory with
+    picscan, the GUI should use those pre-computed thumbnails instantly. This
+    is a massive missed optimization.
+
+3.8 BLOCKING SCAN PHASE
+    perform_fast_scan() calls stbi_info() for every image file to get
+    dimensions. While this doesn't decode the full image, it still reads
+    file headers from disk. For a directory with 50,000 images on a network
+    filesystem, this is a long blocking operation. The scan thread does use
+    Fl::awake() to send status updates, but it accumulates ALL metadata in
+    a vector before passing it to the UI thread. The UI shows nothing until
+    the entire scan completes.
+
+
+================================================================================
+4. DESIGN PRINCIPLES FOR THE REDO
+================================================================================
+
+P1: SEPARATE DATA FROM PRESENTATION
+    The image list, their metadata, and their thumbnail data should live in
+    a pure data structure (ImageStore) with no FLTK dependencies. The
+    rendering layer reads from this store but never modifies it.
+
+P2: VIRTUALIZE THE VIEWPORT
+    Never create widgets for off-screen images. The gallery is a single
+    custom FLTK widget that draws directly into its area using fl_draw
+    primitives. It maintains its own scroll offset and renders only images
+    whose layout rectangles intersect the visible viewport.
+
+P3: BATCH AND POLL, DON'T PUSH
+    Worker threads write results into a lock-free concurrent queue
+    (moodycamel::ConcurrentQueue). A 16ms repeating timer on the FLTK main
+    thread drains the queue, updates the ImageStore, and triggers targeted
+    redraws. No Fl::awake() calls from workers.
+
+P4: INCREMENTAL EVERYTHING
+    The filesystem scan produces results incrementally. As soon as one image
+    is discovered, it can be added to the layout and displayed as a grey
+    placeholder. The layout is rebuilt incrementally (appending rows) rather
+    than from scratch.
+
+P5: LEVERAGE EXISTING LMDB DATA
+    If a database exists from a prior picscan run, load thumbnails from it
+    instantly. Generate thumbnails from files only for images not in the
+    database.
+
+P6: PRIORITIZE VISIBLE, BUT DON'T STARVE BACKGROUND
+    Visible images get highest priority for thumbnail generation. But
+    background work should make steady progress too, using a two-tier queue:
+    urgent (visible) and normal (everything else). Workers take from urgent
+    first, then normal.
+
+P7: CACHE DECODED RGB DATA, NOT JPEG
+    Once a JPEG thumbnail is decoded to RGB, keep the RGB data in memory
+    (up to a memory budget). Drawing from pre-decoded RGB is dramatically
+    faster than re-decoding JPEG every time.
+
+P8: MINIMIZE ALLOCATIONS IN THE DRAW PATH
+    The draw() method must be allocation-free. All image scaling and caching
+    should happen before draw() is called. Draw just blits pre-prepared
+    data.
+
+
+================================================================================
+5. ARCHITECTURE OVERVIEW
+================================================================================
+
+    ┌─────────────────────────────────────────────────────────┐
+    │                    MainWindow (FLTK)                    │
+    │  ┌──────────┐ ┌────────────────────────────────────┐   │
+    │  │ Toolbar  │ │        VirtualViewport              │   │
+    │  │ [Browse] │ │  (single Fl_Widget, custom draw)    │   │
+    │  │ [Status] │ │                                     │   │
+    │  └──────────┘ │  Reads from:                        │   │
+    │               │    - ImageStore (metadata + thumbs)  │   │
+    │               │    - LayoutCache (positioned boxes)   │   │
+    │               │                                      │   │
+    │               │  Renders only visible rect            │   │
+    │               │  Handles scroll via custom logic      │   │
+    │               └────────────────────────────────────┘   │
+    └────────────────────────┬────────────────────────────────┘
+                             │
+                      polls every 16ms
+                             │
+    ┌────────────────────────┴────────────────────────────────┐
+    │                   UpdateQueue                           │
+    │  (moodycamel::ConcurrentQueue<UpdateEvent>)             │
+    │                                                         │
+    │  Event types:                                           │
+    │    IMAGE_DISCOVERED  - new image found during scan      │
+    │    THUMB_READY       - thumbnail generated              │
+    │    SCAN_PROGRESS     - scan status update               │
+    │    SCAN_COMPLETE     - scan finished                    │
+    └───────────┬─────────────────────┬───────────────────────┘
+                │                     │
+    ┌───────────┴──────────┐ ┌───────┴────────────────────────┐
+    │  ScanCoordinator     │ │  ThumbnailPipeline             │
+    │  (1 thread)          │ │  (N worker threads)            │
+    │                      │ │                                │
+    │  - Walks filesystem  │ │  - Reads from WorkQueue        │
+    │  - Gets dimensions   │ │  - Checks LMDB first          │
+    │  - Computes xxHash   │ │  - Falls back to file decode   │
+    │  - Enqueues events   │ │  - DCT scaling for JPEG        │
+    │  - Checks LMDB for   │ │  - Stores result in LMDB      │
+    │    existing thumbs   │ │  - Enqueues THUMB_READY event  │
+    └──────────────────────┘ └────────────────────────────────┘
+
+
+================================================================================
+6. COMPONENT DESIGN
+================================================================================
+
+6.1 ImageStore (Data Model)
+----------------------------
+
+Purpose: Central repository of all known images and their current state.
+Accessed ONLY from the FLTK main thread (no locking needed for reads).
+
+struct ImageEntry {
+    // Identity
+    std::string filepath;
+    std::string content_hash;    // xxHash hex string
+    size_t index;                // Position in ordered list
+
+    // Metadata (known after scan or LMDB lookup)
+    int original_width = 0;
+    int original_height = 0;
+    double aspect_ratio = 1.0;
+    bool metadata_known = false;
+
+    // Thumbnail state
+    ThumbQuality best_quality = ThumbQuality::NONE;
+
+    // Decoded RGB cache (for the currently-used quality level)
+    // This is what draw() uses directly - no JPEG decode in draw path
+    struct DecodedThumb {
+        std::vector<uint8_t> rgb_data;
+        int width = 0;
+        int height = 0;
+        ThumbQuality quality = ThumbQuality::NONE;
+    };
+    DecodedThumb decoded;
+
+    // Pre-scaled image for current layout dimensions (avoids per-frame scaling)
+    struct ScaledImage {
+        std::vector<uint8_t> rgb_data;
+        int width = 0;
+        int height = 0;
+        int layout_width = 0;   // The layout box width this was scaled for
+        int layout_height = 0;  // The layout box height this was scaled for
+    };
+    ScaledImage scaled;
+};
+
+class ImageStore {
+public:
+    // Add a new image (from scan discovery or LMDB load)
+    size_t add_image(const std::string& filepath, double aspect_ratio,
+                     int width = 0, int height = 0);
+
+    // Update thumbnail data (called from main thread after polling queue)
+    void set_thumbnail(size_t index, ThumbQuality quality,
+                       const uint8_t* jpeg_data, size_t jpeg_size,
+                       int width, int height);
+
+    // Access
+    const ImageEntry& get(size_t index) const;
+    size_t count() const;
+
+    // Aspect ratio list for layout engine
+    std::vector<double> get_aspect_ratios() const;
+
+private:
+    std::vector<ImageEntry> entries_;
+};
+
+Key design decisions:
+- Single-threaded access (main thread only) eliminates all locking
+- Decoded RGB data is kept in the entry, not decoded on every draw
+- Scaled image cache avoids re-scaling when the layout hasn't changed
+- JPEG decode happens once when the thumbnail arrives, not on draw
+
+
+6.2 ScanCoordinator (Filesystem Discovery)
+-------------------------------------------
+
+Purpose: Walk a directory tree, discover images, extract basic metadata,
+and feed results incrementally to the main thread.
+
+Runs on a single dedicated thread.
+
+Workflow:
+  1. If LMDB database exists at the expected path, load the image list
+     from it first. This gives instant population with known aspect ratios
+     and pre-computed thumbnails.
+
+  2. Walk the filesystem. For each image file found:
+     a. Compute xxHash of file content
+     b. If hash exists in LMDB, skip detailed scanning (we already have it)
+     c. If new: call stbi_info() for dimensions, enqueue IMAGE_DISCOVERED
+     d. Every 100 files or 1 second, enqueue SCAN_PROGRESS
+
+  3. When walk completes, enqueue SCAN_COMPLETE
+
+struct ImageDiscoveredEvent {
+    std::string filepath;
+    std::string content_hash;
+    int width;
+    int height;
+    double aspect_ratio;
+    // If we loaded from LMDB, we may already have thumbnail data:
+    ThumbQuality best_available_quality;
+    std::vector<uint8_t> jpeg_data;  // Best thumbnail from LMDB
+    int thumb_width;
+    int thumb_height;
+};
+
+The ScanCoordinator pushes events into the shared ConcurrentQueue. It never
+touches FLTK APIs.
+
+
+6.3 ThumbnailPipeline (Async Thumbnail Generation)
+----------------------------------------------------
+
+Purpose: Generate thumbnails for images that need them, at the quality
+levels appropriate for their current display state.
+
+Design:
+- N worker threads (default: std::thread::hardware_concurrency() / 2,
+  minimum 2, maximum 8)
+- Two-tier work queue using moodycamel::ConcurrentQueue:
+    urgent_queue_: visible images needing quality upgrade
+    normal_queue_: background work for non-visible images
+- Workers try urgent_queue_ first; if empty, try normal_queue_;
+  if both empty, sleep on a condition variable
+
+struct ThumbWorkItem {
+    size_t image_index;
+    std::string filepath;
+    std::string content_hash;
+    ThumbQuality current_quality;    // What we already have
+    ThumbQuality target_quality;     // What we want
+    int original_width;
+    int original_height;
+};
+
+struct ThumbReadyEvent {
+    size_t image_index;
+    ThumbQuality quality;
+    std::vector<uint8_t> jpeg_data;
+    int width;
+    int height;
+};
+
+Worker behavior:
+  1. Pop work item
+  2. Check LMDB for existing thumbnail at target quality
+     -> If found, enqueue ThumbReadyEvent immediately
+  3. If not in LMDB:
+     a. For JPEG files: use libjpeg-turbo with DCT-domain scaling
+        (reuse the scale factor logic from database.cpp)
+     b. For PNG/BMP/TGA: use stb_image + stb_image_resize2
+     c. Encode result as JPEG using libjpeg-turbo
+     d. Store in LMDB for future use
+     e. Enqueue ThumbReadyEvent
+  4. Workers never touch FLTK APIs
+
+Reprioritization:
+  When the viewport scrolls, the main thread:
+  1. Determines newly visible image indices
+  2. For each visible image needing upgrade, pushes to urgent_queue_
+  3. Does NOT clear normal_queue_ (background work continues)
+  4. Uses a generation counter: workers check if their work item's
+     generation matches current; if not, skip (stale work from old
+     scroll position)
+
+
+6.4 LayoutEngine (Justified Layout)
+-------------------------------------
+
+Purpose: Compute the justified layout for the current set of images
+given the current viewport width.
+
+This is a thin wrapper around the existing justified_layout.hpp.
+
+class LayoutEngine {
+public:
+    struct LayoutResult {
+        struct Box {
+            size_t image_index;
+            double x, y, w, h;
+        };
+        std::vector<Box> boxes;
+        double total_height;
+    };
+
+    // Full recompute (when images added or viewport width changes)
+    LayoutResult compute(const std::vector<double>& aspect_ratios,
+                         double viewport_width,
+                         double target_row_height = 150.0);
+
+    // Incremental append (when new images are discovered during scan)
+    // Recomputes only the last partial row + new rows
+    LayoutResult append(const std::vector<double>& new_aspect_ratios);
+};
+
+Incremental layout strategy:
+- Keep track of the last "complete" row boundary
+- When new images arrive, recompute from the start of the last incomplete
+  row (the widow row) through the new images
+- This avoids full O(N) recompute on every image discovery
+
+Viewport width change:
+- Full recompute is needed, but the algorithm is fast (100K images in <50ms)
+- Debounce resize events (200ms delay after last resize)
+
+
+6.5 VirtualViewport (Virtualized Rendering)
+---------------------------------------------
+
+Purpose: Single FLTK widget that renders the image gallery. Does NOT
+create child widgets. Draws everything itself using FLTK drawing
+primitives.
+
+class VirtualViewport : public Fl_Widget {
+public:
+    VirtualViewport(int X, int Y, int W, int H);
+
+    void set_store(ImageStore* store);
+    void set_layout(const LayoutEngine::LayoutResult* layout);
+
+    // Scroll interface
+    void scroll_to(double y_offset);
+    double scroll_offset() const;
+    double content_height() const;
+
+    // Called by main thread poll timer to process updates
+    void apply_updates(const std::vector<size_t>& changed_indices);
+
+    // Determine which images are currently visible
+    std::vector<size_t> get_visible_indices() const;
+
+protected:
+    void draw() override;
+    int handle(int event) override;
+
+private:
+    ImageStore* store_;
+    const LayoutEngine::LayoutResult* layout_;
+
+    double scroll_y_ = 0;
+    double max_scroll_y_ = 0;
+
+    // Smooth scrolling state
+    double scroll_velocity_ = 0;
+    double target_scroll_y_ = 0;
+
+    // Selection state
+    int hovered_index_ = -1;
+    std::set<size_t> selected_indices_;
+
+    // Render helpers
+    void draw_image_box(const LayoutEngine::LayoutResult::Box& box,
+                        const ImageEntry& entry);
+    void draw_placeholder(const LayoutEngine::LayoutResult::Box& box,
+                          const ImageEntry& entry);
+};
+
+Drawing strategy:
+  1. In draw(), compute visible row range from scroll_y_ and viewport height
+  2. For each box in visible range:
+     - If entry has scaled image at correct dimensions: blit directly
+       using fl_draw_image()
+     - If entry has decoded RGB but wrong scale: scale now, cache result,
+       then blit
+     - If entry has no decoded data: draw grey rectangle with dimensions text
+  3. fl_draw_image() is the fast path: it draws directly from an RGB buffer
+     without creating Fl_RGB_Image objects
+
+Scroll handling:
+  - FL_MOUSEWHEEL: adjust scroll_velocity_ (smooth scroll with deceleration)
+  - FL_KEYBOARD: Page Up/Down, Home/End
+  - No Fl_Scroll involved at all: we manage scrolling ourselves with a
+    scrollbar widget
+
+  For the scrollbar: use a companion Fl_Scrollbar widget positioned at
+  the right edge. Connect its callback to update scroll_y_. Update its
+  range whenever content_height changes.
+
+Why not Fl_Scroll?
+  Fl_Scroll expects to manage child widgets and adjusts their positions
+  based on scroll offset. Since we have no child widgets (we draw directly),
+  Fl_Scroll adds complexity for no benefit. A single Fl_Scrollbar widget
+  gives us the scrollbar UI we need.
+
+
+6.6 MainWindow (FLTK Shell)
+-----------------------------
+
+Purpose: Top-level window that owns all components and drives the
+update loop.
+
+class MainWindow : public Fl_Window {
+public:
+    MainWindow(int W, int H, const char* title);
+    ~MainWindow();
+
+    void open_directory(const std::string& path);
+
+private:
+    // UI components
+    Fl_Button* browse_btn_;
+    Fl_Box* status_bar_;
+    VirtualViewport* viewport_;
+    Fl_Scrollbar* scrollbar_;
+
+    // Data components (not FLTK)
+    ImageStore store_;
+    LayoutEngine layout_engine_;
+    LayoutEngine::LayoutResult layout_;
+
+    std::unique_ptr<ScanCoordinator> scanner_;
+    std::unique_ptr<ThumbnailPipeline> pipeline_;
+
+    // Shared event queue (written by workers, read by main thread)
+    moodycamel::ConcurrentQueue<UpdateEvent> update_queue_;
+
+    // The critical timer: main thread poll
+    static void poll_timer_callback(void* data);
+    void process_pending_updates();
+
+    // Scroll change handler
+    void on_scroll_changed();
+    void schedule_reprioritize();
+
+    // Resize handler
+    void resize(int X, int Y, int W, int H) override;
+    void on_viewport_width_changed();
+
+    // State
+    bool scan_in_progress_ = false;
+    uint64_t priority_generation_ = 0;  // For stale work detection
+};
+
+
+================================================================================
+7. THREADING MODEL
+================================================================================
+
+Thread 1: FLTK Main Thread
+  - Runs Fl::run() event loop
+  - Owns ImageStore, LayoutEngine, VirtualViewport
+  - Polls update_queue_ every 16ms via Fl::repeat_timeout()
+  - All FLTK drawing happens here
+  - All state mutations happen here
+  - NEVER blocks on I/O or heavy computation
+
+Thread 2: ScanCoordinator Thread
+  - Walks filesystem, reads file headers
+  - Pushes IMAGE_DISCOVERED events to update_queue_
+  - Reads from LMDB (read-only transactions, safe from any thread)
+  - Dies when scan completes
+
+Threads 3..N+2: ThumbnailPipeline Workers
+  - Read from urgent_queue_ / normal_queue_
+  - Decode images, generate thumbnails
+  - Write to LMDB (serialized through a dedicated LMDB write thread or
+    a mutex, since LMDB allows only one write transaction at a time)
+  - Push THUMB_READY events to update_queue_
+  - Live for the duration of the application
+
+Thread N+3: LMDB Writer (optional, if writes are frequent)
+  - Batches LMDB write transactions
+  - Receives write requests via a ConcurrentQueue
+  - Commits in batches of 100 or every 500ms, whichever comes first
+
+Synchronization points:
+  - update_queue_: ConcurrentQueue (lock-free MPSC)
+  - urgent_queue_ / normal_queue_: ConcurrentQueue (lock-free MPMC)
+  - LMDB reads: each thread opens its own read transaction (LMDB safe)
+  - LMDB writes: serialized through writer thread or mutex
+  - NO direct thread-to-FLTK communication (no Fl::awake() from workers)
+
+
+================================================================================
+8. DATA FLOW AND STATE MACHINE
+================================================================================
+
+Application States:
+  IDLE          -> No directory loaded
+  SCANNING      -> Directory scan in progress, images appearing incrementally
+  POPULATING    -> Scan complete, thumbnails still loading
+  READY         -> All visible thumbnails loaded
+  (READY can transition back to POPULATING when user scrolls to new region)
+
+Data flow for a typical session:
+
+  1. User clicks "Browse", selects /home/user/Photos
+  2. MainWindow creates ScanCoordinator for /home/user/Photos
+  3. ScanCoordinator checks for LMDB database at ./images.db
+     -> If found: loads ALL image paths and aspect ratios from LMDB
+        (instant, since LMDB is memory-mapped)
+     -> Pushes IMAGE_DISCOVERED for each, with best_available_quality
+        set to the best thumbnail found in LMDB
+  4. Main thread poll timer fires (16ms):
+     -> Drains up to 200 events from update_queue_
+     -> For each IMAGE_DISCOVERED:
+        a. Add to ImageStore
+        b. If JPEG data was included (from LMDB), decode to RGB and store
+     -> After batch: recompute layout (incremental append)
+     -> Update VirtualViewport
+     -> Determine newly visible images
+     -> Push thumbnail work for visible images needing quality upgrade
+  5. ThumbnailPipeline workers generate thumbnails:
+     -> Push THUMB_READY events
+  6. Main thread poll timer fires:
+     -> Drains THUMB_READY events
+     -> Updates ImageStore with decoded RGB data
+     -> Triggers redraw of affected image boxes
+  7. User scrolls:
+     -> VirtualViewport updates scroll_y_
+     -> After 200ms stabilization, main thread reprioritizes:
+        Push visible images to urgent_queue_
+
+
+================================================================================
+9. THE CRITICAL DESIGN: FLTK EVENT LOOP INTEGRATION
+================================================================================
+
+This is where the previous design failed most catastrophically. Here is the
+correct approach:
+
+void MainWindow::poll_timer_callback(void* data)
+{
+    MainWindow* self = static_cast<MainWindow*>(data);
+    self->process_pending_updates();
+
+    // Re-arm the timer. Use repeat_timeout for drift-free timing.
+    Fl::repeat_timeout(0.016, poll_timer_callback, data);  // ~60 Hz
+}
+
+void MainWindow::process_pending_updates()
+{
+    // Drain events from the lock-free queue, up to a budget
+    const int MAX_EVENTS_PER_TICK = 200;
+    UpdateEvent event;
+    int count = 0;
+    bool layout_dirty = false;
+    bool need_redraw = false;
+    std::vector<size_t> changed_indices;
+
+    while (count < MAX_EVENTS_PER_TICK &&
+           update_queue_.try_dequeue(event)) {
+        count++;
+
+        switch (event.type) {
+            case UpdateEvent::IMAGE_DISCOVERED: {
+                size_t idx = store_.add_image(
+                    event.image.filepath,
+                    event.image.aspect_ratio,
+                    event.image.width,
+                    event.image.height);
+
+                // If LMDB had a thumbnail, decode it now
+                if (!event.image.jpeg_data.empty()) {
+                    store_.set_thumbnail(idx,
+                        event.image.best_quality,
+                        event.image.jpeg_data.data(),
+                        event.image.jpeg_data.size(),
+                        event.image.thumb_width,
+                        event.image.thumb_height);
+                }
+
+                layout_dirty = true;
+                break;
+            }
+
+            case UpdateEvent::THUMB_READY: {
+                store_.set_thumbnail(
+                    event.thumb.image_index,
+                    event.thumb.quality,
+                    event.thumb.jpeg_data.data(),
+                    event.thumb.jpeg_data.size(),
+                    event.thumb.width,
+                    event.thumb.height);
+
+                changed_indices.push_back(event.thumb.image_index);
+                need_redraw = true;
+                break;
+            }
+
+            case UpdateEvent::SCAN_PROGRESS: {
+                update_status("Scanning... " +
+                    std::to_string(event.progress.found) + " images found");
+                break;
+            }
+
+            case UpdateEvent::SCAN_COMPLETE: {
+                scan_in_progress_ = false;
+                update_status("Found " +
+                    std::to_string(store_.count()) + " images");
+                break;
+            }
+        }
+    }
+
+    // Batch layout update
+    if (layout_dirty) {
+        auto ratios = store_.get_aspect_ratios();
+        layout_ = layout_engine_.compute(ratios,
+            viewport_->w() - scrollbar_->w());
+        viewport_->set_layout(&layout_);
+
+        // Update scrollbar range
+        scrollbar_->value(viewport_->scroll_offset(), viewport_->h(),
+                          0, layout_.total_height);
+
+        // Queue thumbnail work for newly visible images
+        schedule_reprioritize();
+        need_redraw = true;
+    }
+
+    // Targeted redraw
+    if (need_redraw) {
+        viewport_->apply_updates(changed_indices);
+        viewport_->redraw();
+    }
+}
+
+Why this works:
+  - All state mutation happens on the main thread (no races)
+  - Events are batched (up to 200 per tick, ~60 ticks/sec = 12,000/sec max)
+  - Layout recomputation is amortized (once per tick, not per image)
+  - Redraw is requested once per tick, not per thumbnail
+  - No heap allocations for cross-thread communication (ConcurrentQueue
+    manages its own memory pool)
+  - No Fl::awake() calls at all
+  - The timer is self-rearming and drift-free via repeat_timeout
+
+
+================================================================================
+10. PROGRESSIVE LOADING STRATEGY
+================================================================================
+
+The thumbnail quality progression should be driven by DISPLAY NEED, not by
+a fixed escalation sequence. The quality level needed depends on the
+display size in the layout:
+
+  Layout box width/height -> Needed thumbnail quality:
+    < 48px   -> ThumbQuality::TINY   (32px)
+    < 96px   -> ThumbQuality::SMALL  (64px)
+    < 192px  -> ThumbQuality::MEDIUM (128px)
+    < 384px  -> ThumbQuality::LARGE  (256px)
+    < 768px  -> ThumbQuality::XLARGE (512px)
+    >= 768px -> ThumbQuality::FULL   (1024px)
+
+When reprioritizing (after scroll stabilization):
+  1. Get list of visible image indices from VirtualViewport
+  2. For each visible image:
+     a. Determine layout box dimensions
+     b. Calculate needed quality level
+     c. If current quality < needed quality:
+        Push to urgent_queue_ with target_quality = needed
+  3. For background (non-visible) images:
+     Only generate up to ThumbQuality::SMALL (64px) in background
+     (enough for instant display when user scrolls to them)
+
+This is dramatically more efficient than the old design which tried to
+escalate through ALL quality levels (32 -> 64 -> 128 -> 256 -> 512 -> 1024)
+for every image regardless of display size.
+
+
+================================================================================
+11. MEMORY MANAGEMENT
+================================================================================
+
+Problem: Decoded RGB thumbnails can consume significant memory.
+A 512x512 RGB image is ~768KB. With 10,000 images, that's 7.5GB.
+
+Solution: LRU eviction with a configurable memory budget.
+
+Memory pools:
+  1. JPEG cache: Keep compressed JPEG data for recently-used thumbnails.
+     These are small (typically 10-50KB each). Budget: 256MB.
+     (Stores up to ~10,000 thumbnails)
+
+  2. Decoded RGB cache: Keep decoded RGB data only for images that are
+     currently visible or recently visible. Budget: 128MB.
+     (Stores ~170 images at 512px quality)
+
+  3. Scaled image cache: Keep pre-scaled images matching current layout
+     box dimensions. Budget: 64MB. Invalidated on layout recompute.
+
+Eviction strategy:
+  - When budget exceeded, evict LRU entries that are NOT currently visible
+  - Decoded RGB can be regenerated from JPEG cache (cheap)
+  - JPEG cache can be regenerated from LMDB (very cheap)
+  - LMDB thumbnails can be regenerated from source files (expensive,
+    so avoid evicting from LMDB)
+
+Implementation:
+  - Maintain a usage_order list (most recently accessed at front)
+  - On access: move to front
+  - On budget exceeded: evict from back until under budget
+  - VirtualViewport::get_visible_indices() marks entries as "pinned"
+    (cannot be evicted)
+
+
+================================================================================
+12. LMDB INTEGRATION FOR PERSISTENT CACHING
+================================================================================
+
+The GUI should share the same LMDB database format as picscan. This means:
+
+Key format (from database.cpp analysis):
+  "path:{hash}"         -> file path string
+  "thumb:{hash}:{size}" -> JPEG thumbnail data (size = 32/64/128/256/512/1024)
+
+GUI database usage:
+
+On directory open:
+  1. Check for images.db in the scanned directory (or user-specified path)
+  2. If exists, open read-only and enumerate all entries
+  3. For each hash:
+     a. Read path
+     b. Read best available thumbnail
+     c. Push IMAGE_DISCOVERED event with the thumbnail data
+
+On thumbnail generation:
+  1. Worker generates thumbnail
+  2. Worker writes to LMDB (through write serialization)
+  3. Next time the directory is opened, thumbnails load instantly
+
+Database path resolution:
+  - Default: ./images.db (same as picscan default)
+  - Can be overridden via command line: picexplore_gui --db /path/to/images.db
+  - Can be overridden via GUI: File -> Set Database Path
+
+This means a typical workflow is:
+  $ picscan --directory ~/Photos --db ~/Photos/images.db   # First scan (slow)
+  $ picexplore_gui --db ~/Photos/images.db ~/Photos        # Instant display!
+
+
+================================================================================
+13. FILE ORGANIZATION
+================================================================================
+
+gui/
+├── CMakeLists.txt              # Updated build configuration
+├── main.cpp                    # Entry point, argument parsing
+├── main_window.h               # MainWindow class declaration
+├── main_window.cpp             # MainWindow implementation + poll timer
+├── image_store.h               # ImageStore + ImageEntry definitions
+├── image_store.cpp             # ImageStore implementation + LRU cache
+├── virtual_viewport.h          # VirtualViewport widget declaration
+├── virtual_viewport.cpp        # VirtualViewport drawing + scroll handling
+├── scan_coordinator.h          # ScanCoordinator thread
+├── scan_coordinator.cpp        # Filesystem walking + LMDB loading
+├── thumbnail_pipeline.h        # ThumbnailPipeline + worker pool
+├── thumbnail_pipeline.cpp      # Thumbnail generation + LMDB integration
+├── update_events.h             # UpdateEvent union definition
+├── layout_engine.h             # LayoutEngine wrapper around justified_layout
+├── layout_engine.cpp           # Layout computation + incremental append
+└── stb_impl.cpp                # stb_image implementation (keep existing)
+
+Reused from parent directory (no changes needed):
+  justified_layout.hpp
+  database.h / database.cpp      # For LMDB format compatibility
+  utils.h / utils.cpp
+  third_party/                   # All third-party libraries
+
+Note: database.cpp is shared but the GUI uses it in read-mostly mode.
+The scan_coordinator.cpp and thumbnail_pipeline.cpp need only the LMDB
+read/write functions, not the full scan_directory() machinery. We should
+extract the LMDB open/read/write primitives into a lightweight lmdb_store.h
+utility so the GUI doesn't pull in the entire database.cpp dependency chain.
+
+
+================================================================================
+14. BUILD SYSTEM CHANGES
+================================================================================
+
+gui/CMakeLists.txt needs to be rewritten. The existing one is minimal:
+
+  find_package(FLTK QUIET)
+  if(FLTK_FOUND)
+    add_executable(picexplore_gui ...)
+    target_link_libraries(picexplore_gui ${FLTK_LIBRARIES} ${JPEG_LIBRARIES})
+  endif()
+
+New version should:
+  - Link against FLTK, libjpeg-turbo, LMDB, xxHash, pthreads
+  - Include stb, concurrentqueue, TinyEXIF headers
+  - Enable -O2 for release builds (thumbnail generation is CPU-intensive)
+  - Support -DGUI_MEMORY_BUDGET_MB=256 compile-time configuration
+
+
+================================================================================
+15. MIGRATION PATH
+================================================================================
+
+Phase 1: Core infrastructure (can be built and tested without FLTK)
+  - ImageStore with unit tests
+  - LayoutEngine with unit tests (feed it aspect ratios, verify positions)
+  - UpdateEvent definitions
+  - LMDB read utilities (lmdb_store.h)
+
+Phase 2: Backend workers (can be tested with a simple console harness)
+  - ScanCoordinator (test: scan a directory, verify events produced)
+  - ThumbnailPipeline (test: generate thumbnails, verify LMDB storage)
+  - ConcurrentQueue integration test (producer/consumer stress test)
+
+Phase 3: FLTK GUI
+  - VirtualViewport (test: feed it a layout and store, verify draw calls)
+  - MainWindow with poll timer
+  - Scrollbar integration
+  - Browse dialog
+
+Phase 4: Polish
+  - Smooth scrolling animation
+  - Keyboard navigation
+  - Image selection and info panel
+  - Window resize handling with layout debounce
+  - Memory budget enforcement / LRU eviction
+  - Status bar with scan progress and thumbnail loading progress
+
+Phase 5: Optional enhancements
+  - Full-screen image view on double-click
+  - EXIF info display
+  - Sort by date/name/size
+  - Filter by file type
+  - Search by path substring
+  - Multi-directory support
+
+
+================================================================================
+END OF PROPOSAL
+================================================================================
