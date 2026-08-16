@@ -30,8 +30,12 @@ private:
     moodycamel::ConcurrentQueue<UpdateEvent> update_queue_;
     ScanCoordinator* scanner_ = nullptr;
     ThumbnailPipeline* pipeline_ = nullptr;
+    class FileWatcher* watcher_ = nullptr;
+    class DatabaseManager* db_ = nullptr;
 
     bool layout_dirty_ = false;
+    double target_height_ = 150.0;
+    uint64_t current_generation_ = 0;
 
     static void timer_cb(void* data);
     void poll_events();

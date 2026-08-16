@@ -18,6 +18,8 @@ enum class ThumbQuality {
 struct UpdateEvent {
     enum class Type {
         IMAGE_DISCOVERED,
+        IMAGE_DELETED,
+        IMAGE_RENAMED,
         THUMB_READY,
         SCAN_PROGRESS,
         SCAN_COMPLETE
@@ -54,6 +56,17 @@ struct UpdateEvent {
     struct {
         int found;
     } progress;
+
+    // Payload for IMAGE_DELETED
+    struct {
+        std::string filepath;
+    } deletion;
+
+    // Payload for IMAGE_RENAMED
+    struct {
+        std::string old_filepath;
+        std::string new_filepath;
+    } rename;
 
     // Helper constructors
     static UpdateEvent make_image_discovered(
@@ -104,6 +117,21 @@ struct UpdateEvent {
     static UpdateEvent make_scan_complete() {
         UpdateEvent e;
         e.type = Type::SCAN_COMPLETE;
+        return e;
+    }
+
+    static UpdateEvent make_image_deleted(const std::string& path) {
+        UpdateEvent e;
+        e.type = Type::IMAGE_DELETED;
+        e.deletion.filepath = path;
+        return e;
+    }
+
+    static UpdateEvent make_image_renamed(const std::string& old_path, const std::string& new_path) {
+        UpdateEvent e;
+        e.type = Type::IMAGE_RENAMED;
+        e.rename.old_filepath = old_path;
+        e.rename.new_filepath = new_path;
         return e;
     }
 };

@@ -171,6 +171,16 @@ bool DatabaseManager::store_key_data(const std::string& key, const std::vector<u
     return mdb_put(txn_, dbi_, &k, &v, 0) == 0;
 }
 
+bool DatabaseManager::delete_key(const std::string& key) {
+    if (!txn_) return false;
+
+    MDB_val k;
+    k.mv_data = (void*)key.c_str();
+    k.mv_size = key.length();
+
+    return mdb_del(txn_, dbi_, &k, nullptr) == 0;
+}
+
 bool DatabaseManager::get_key_value(const std::string& key, std::string& value) {
     if (!txn_) return false;
 

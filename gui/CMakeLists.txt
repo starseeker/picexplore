@@ -10,6 +10,7 @@ add_executable(picexplore_gui
     thumbnail_pipeline.cpp
     image_store.cpp
     layout_engine.cpp
+    inotify_watcher.cpp
     ../database.cpp
     ../utils.cpp
     ../third_party/TinyEXIF.cpp

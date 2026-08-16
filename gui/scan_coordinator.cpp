@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <iostream>
 #include <algorithm>
+#include <unordered_set>
 #include "../third_party/stb/stb_image.h"
 
 namespace fs = std::filesystem;
@@ -35,6 +36,7 @@ void ScanCoordinator::run() {
     DatabaseManager db;
     bool db_opened = db.open(db_path_);
     std::vector<ImageInfo> images;
+    std::unordered_set<std::string> known_paths;
     
     if (db_opened) {
         images = db.get_all_images();
@@ -43,6 +45,19 @@ void ScanCoordinator::run() {
             int found = 0;
             for (const auto& img : images) {
                 if (stop_requested_) break;
+                
+                if (!fs::exists(img.path)) {
+                    std::cout << "File missing, removing from database: " << img.path << std::endl;
+                    std::lock_guard<std::mutex> lock(db.get_mutex());
+                    if (db.begin_transaction()) {
+                        db.delete_key(img.hash + ":path");
+                        db.delete_key("file:" + img.path);
+                        db.commit_transaction();
+                    }
+                    continue;
+                }
+                
+                known_paths.insert(img.path);
                 
                 ThumbQuality bq = static_cast<ThumbQuality>(img.best_thumb_size);
                 
@@ -72,19 +87,18 @@ void ScanCoordinator::run() {
         }
     }
 
-    if (!db_opened || images.empty()) {
-        if (!db_opened) {
-            std::cout << "Database not found or could not be opened: " << db_path_ << std::endl;
-        } else {
-            std::cout << "Database is empty, scanning directory: " << directory_ << std::endl;
-        }
-        int found = 0;
-        try {
-            for (const auto& entry : fs::recursive_directory_iterator(directory_)) {
-                if (stop_requested_) break;
-                if (entry.is_regular_file()) {
-                    std::string path = entry.path().string();
-                    auto ext = entry.path().extension().string();
+    // Always scan directory for new or renamed files
+    int found = 0;
+    try {
+        for (const auto& entry : fs::recursive_directory_iterator(directory_)) {
+            if (stop_requested_) break;
+            if (entry.is_regular_file()) {
+                std::string path = entry.path().string();
+                if (known_paths.find(path) != known_paths.end()) {
+                    continue; // Already loaded from DB
+                }
+                
+                auto ext = entry.path().extension().string();
                     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                     
                     if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp") {
@@ -113,7 +127,6 @@ void ScanCoordinator::run() {
         } catch (const fs::filesystem_error& e) {
             std::cerr << "Filesystem error: " << e.what() << std::endl;
         }
-    }
 
     update_queue_.enqueue(UpdateEvent::make_scan_complete());
 }

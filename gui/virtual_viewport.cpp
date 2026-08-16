@@ -97,17 +97,10 @@ void VirtualViewport::draw() {
             // Draw text centered and wrapped inside the box, with 10px padding
             fl_draw(text.c_str(), draw_x + 10, draw_y + 10, draw_w - 20, draw_h - 20, FL_ALIGN_CENTER | FL_ALIGN_WRAP, nullptr, 0);
         } else {
-            if (entry.scaled.layout_width != draw_w || entry.scaled.layout_height != draw_h) {
-                entry.scaled.layout_width = draw_w;
-                entry.scaled.layout_height = draw_h;
-                entry.scaled.width = draw_w;
-                entry.scaled.height = draw_h;
-                entry.scaled.rgb_data.resize(draw_w * draw_h * 3);
-                stbir_resize_uint8_linear(entry.decoded.rgb_data.data(), entry.decoded.width, entry.decoded.height, 0,
-                                          entry.scaled.rgb_data.data(), draw_w, draw_h, 0, STBIR_RGB);
+            const uint8_t* img_data = store_.get_scaled_image(box.image_index, draw_w, draw_h);
+            if (img_data) {
+                fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, draw_w * 3);
             }
-            std::cout << "Drawing image for box " << box.image_index << std::endl;
-            fl_draw_image(entry.scaled.rgb_data.data(), draw_x, draw_y, draw_w, draw_h, 3, draw_w * 3);
         }
     }
 

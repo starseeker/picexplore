@@ -2,6 +2,7 @@
 #include <jpeglib.h>
 #include <setjmp.h>
 #include <algorithm>
+#include "../third_party/stb/stb_image_resize2.h"
 
 ImageStore::ImageStore() {
 }
@@ -83,6 +84,56 @@ bool ImageStore::decode_jpeg(const uint8_t* jpeg_data, size_t jpeg_size, std::ve
     return true;
 }
 
+void ImageStore::remove_image(const std::string& filepath) {
+    size_t index = find_by_filepath(filepath);
+    if (index == static_cast<size_t>(-1)) return;
+    
+    auto& entry = entries_[index];
+    decoded_rgb_memory_used_ -= entry.decoded.rgb_data.size();
+    scaled_rgb_memory_used_ -= entry.scaled.rgb_data.size();
+    
+    auto lru_it = lru_map_.find(index);
+    if (lru_it != lru_map_.end()) {
+        lru_list_.erase(lru_it->second);
+        lru_map_.erase(lru_it);
+    }
+    
+    entries_.erase(entries_.begin() + index);
+    
+    std::unordered_map<size_t, std::list<size_t>::iterator> new_lru_map;
+    for (auto list_it = lru_list_.begin(); list_it != lru_list_.end(); ) {
+        if (*list_it == index) {
+            list_it = lru_list_.erase(list_it);
+        } else {
+            if (*list_it > index) {
+                *list_it = *list_it - 1;
+            }
+            new_lru_map[*list_it] = list_it;
+            ++list_it;
+        }
+    }
+    lru_map_ = std::move(new_lru_map);
+    
+    std::vector<size_t> new_visible;
+    for (size_t vis_idx : currently_visible_) {
+        if (vis_idx == index) continue;
+        if (vis_idx > index) new_visible.push_back(vis_idx - 1);
+        else new_visible.push_back(vis_idx);
+    }
+    currently_visible_ = std::move(new_visible);
+    
+    for (size_t i = index; i < entries_.size(); ++i) {
+        entries_[i].index = i;
+    }
+}
+
+void ImageStore::rename_image(const std::string& old_filepath, const std::string& new_filepath) {
+    size_t index = find_by_filepath(old_filepath);
+    if (index == static_cast<size_t>(-1)) return;
+    entries_[index].filepath = new_filepath;
+}
+
+
 void ImageStore::set_thumbnail(size_t index, const std::string& filepath, ThumbQuality quality,
                                const uint8_t* jpeg_data, size_t jpeg_size,
                                int width, int height) {
@@ -133,6 +184,28 @@ ImageEntry& ImageStore::get(size_t index) {
 
 const ImageEntry& ImageStore::get(size_t index) const {
     return entries_[index];
+}
+
+const uint8_t* ImageStore::get_scaled_image(size_t index, int draw_w, int draw_h) {
+    auto& entry = get(index); // updates LRU
+    if (entry.decoded.rgb_data.empty()) return nullptr;
+
+    if (entry.scaled.layout_width != draw_w || entry.scaled.layout_height != draw_h) {
+        scaled_rgb_memory_used_ -= entry.scaled.rgb_data.size();
+        
+        entry.scaled.layout_width = draw_w;
+        entry.scaled.layout_height = draw_h;
+        entry.scaled.width = draw_w;
+        entry.scaled.height = draw_h;
+        entry.scaled.rgb_data.resize(draw_w * draw_h * 3);
+        
+        stbir_resize_uint8_linear(entry.decoded.rgb_data.data(), entry.decoded.width, entry.decoded.height, 0,
+                                  entry.scaled.rgb_data.data(), draw_w, draw_h, 0, STBIR_RGB);
+                                  
+        scaled_rgb_memory_used_ += entry.scaled.rgb_data.size();
+        evict_memory_if_needed();
+    }
+    return entry.scaled.rgb_data.data();
 }
 
 size_t ImageStore::count() const {

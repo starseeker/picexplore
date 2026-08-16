@@ -1,4 +1,6 @@
 #include "main_window.h"
+#include "inotify_watcher.h"
+#include "../database.h"
 #include <FL/Fl.H>
 
 #include <FL/Fl_Output.H>
@@ -19,6 +21,10 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     menubar_->add("Sort/File Size (Largest)", 0, menu_cb, (void*)4);
     menubar_->add("Sort/Date (Oldest)", 0, menu_cb, (void*)5);
     menubar_->add("Sort/Date (Newest)", 0, menu_cb, (void*)6);
+    
+    menubar_->add("View/Zoom In (Ctrl+Wheel Up)", FL_CTRL | '=', menu_cb, (void*)7);
+    menubar_->add("View/Zoom Out (Ctrl+Wheel Down)", FL_CTRL | '-', menu_cb, (void*)8);
+    menubar_->add("View/Reset Zoom", FL_CTRL | '0', menu_cb, (void*)9);
 
     viewport_ = new VirtualViewport(0, menu_h, w - scroll_w, vp_h, store_);
     scrollbar_ = new Fl_Scrollbar(w - scroll_w, menu_h, scroll_w, vp_h);
@@ -47,16 +53,30 @@ MainWindow::~MainWindow() {
         pipeline_->stop();
         delete pipeline_;
     }
+    if (watcher_) {
+        watcher_->stop();
+        delete watcher_;
+    }
+    if (db_) {
+        delete db_;
+    }
     Fl::remove_timeout(timer_cb, this);
 }
 
 void MainWindow::start() {
     std::string db_path = "./images.db";
+    
+    db_ = new DatabaseManager();
+    db_->open(db_path);
+
     pipeline_ = new ThumbnailPipeline(update_queue_, db_path);
     pipeline_->start(4);
 
     scanner_ = new ScanCoordinator(directory_, update_queue_, db_path);
     scanner_->start();
+    
+    watcher_ = new InotifyWatcher();
+    watcher_->start(directory_, update_queue_);
 
     Fl::add_timeout(0.016, timer_cb, this); 
 }
@@ -79,19 +99,48 @@ void MainWindow::poll_events() {
             store_.add_image(ev.image.filepath, ev.image.aspect_ratio, ev.image.width, ev.image.height, ev.image.file_size, ev.image.file_timestamp);
             layout_dirty_ = true;
         } else if (ev.type == UpdateEvent::Type::THUMB_READY) {
-            std::cout << "THUMB_READY for index " << ev.thumb.image_index << std::endl;
             store_.set_thumbnail(ev.thumb.image_index, ev.thumb.filepath, ev.thumb.quality,
                                  ev.thumb.jpeg_data.data(), ev.thumb.jpeg_data.size(),
                                  ev.thumb.width, ev.thumb.height);
             changed.push_back(ev.thumb.image_index);
             need_redraw = true;
+        } else if (ev.type == UpdateEvent::Type::IMAGE_DELETED) {
+            std::cout << "DELETED: " << ev.deletion.filepath << std::endl;
+            store_.remove_image(ev.deletion.filepath);
+            if (db_ && db_->is_open()) {
+                std::lock_guard<std::mutex> lock(db_->get_mutex());
+                if (db_->begin_transaction()) {
+                    std::string hash;
+                    if (db_->get_hash_for_path(ev.deletion.filepath, hash)) {
+                        db_->delete_key(hash + ":path");
+                    }
+                    db_->delete_key("file:" + ev.deletion.filepath);
+                    db_->commit_transaction();
+                }
+            }
+            layout_dirty_ = true;
+        } else if (ev.type == UpdateEvent::Type::IMAGE_RENAMED) {
+            std::cout << "RENAMED: " << ev.rename.old_filepath << " -> " << ev.rename.new_filepath << std::endl;
+            store_.rename_image(ev.rename.old_filepath, ev.rename.new_filepath);
+            if (db_ && db_->is_open()) {
+                std::lock_guard<std::mutex> lock(db_->get_mutex());
+                if (db_->begin_transaction()) {
+                    std::string hash;
+                    if (db_->get_hash_for_path(ev.rename.old_filepath, hash)) {
+                        db_->delete_key("file:" + ev.rename.old_filepath);
+                        db_->store_key_value(hash + ":path", ev.rename.new_filepath);
+                        db_->store_key_value("file:" + ev.rename.new_filepath, hash);
+                    }
+                    db_->commit_transaction();
+                }
+            }
         } else if (ev.type == UpdateEvent::Type::SCAN_COMPLETE) {
             std::cout << "Scan complete." << std::endl;
         }
     }
 
     if (layout_dirty_) {
-        layout_result_ = layout_engine_.compute(store_.get_aspect_ratios(), viewport_->content_width(), 150.0);
+        layout_result_ = layout_engine_.compute(store_.get_aspect_ratios(), viewport_->content_width(), target_height_);
         viewport_->set_layout(&layout_result_);
         
         scrollbar_->value(viewport_->scroll_offset(), viewport_->h(), 0, layout_result_.total_height);
@@ -109,20 +158,27 @@ void MainWindow::reprioritize_thumbnails() {
     auto visible = viewport_->get_visible_indices();
     store_.mark_visible(visible);
     
+    current_generation_++;
+    pipeline_->set_generation(current_generation_);
+    
     for (size_t idx : visible) {
         const auto& entry = store_.get(idx);
         
-        double layout_h = 150.0;
-        double layout_w = entry.aspect_ratio * layout_h;
+        double layout_w = entry.aspect_ratio * target_height_;
         
         ThumbQuality needed = ThumbQuality::SMALL;
         if (layout_w < 96) needed = ThumbQuality::SMALL;
         else if (layout_w < 192) needed = ThumbQuality::MEDIUM;
         else if (layout_w < 384) needed = ThumbQuality::LARGE;
-        else needed = ThumbQuality::XLARGE;
+        else if (layout_w < 768) needed = ThumbQuality::XLARGE;
+        else needed = ThumbQuality::FULL;
+        
+        if (entry.best_quality == ThumbQuality::NONE) {
+            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash, ThumbQuality::SMALL, true, current_generation_);
+        }
         
         if (entry.best_quality < needed) {
-            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash, needed, true);
+            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash, needed, false, current_generation_);
         }
     }
 }
@@ -164,24 +220,39 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 4: criteria = ImageStore::SortCriteria::FILE_SIZE; ascending = false; break;
         case 5: criteria = ImageStore::SortCriteria::TIMESTAMP; ascending = true; break;
         case 6: criteria = ImageStore::SortCriteria::TIMESTAMP; ascending = false; break;
+        case 7: win->target_height_ = std::min(win->target_height_ * 1.2, 800.0); win->layout_dirty_ = true; break;
+        case 8: win->target_height_ = std::max(win->target_height_ / 1.2, 50.0); win->layout_dirty_ = true; break;
+        case 9: win->target_height_ = 150.0; win->layout_dirty_ = true; break;
         default: return;
     }
     
-    win->store_.sort_entries(criteria, ascending);
-    win->layout_dirty_ = true;
-    win->viewport_->set_scroll_offset(0);
+    if (choice >= 1 && choice <= 6) {
+        win->store_.sort_entries(criteria, ascending);
+        win->layout_dirty_ = true;
+        win->viewport_->set_scroll_offset(0);
+    }
 }
 
 int MainWindow::handle(int event) {
     if (event == FL_MOUSEWHEEL) {
         int dy = Fl::event_dy();
-        int new_val = scrollbar_->value() + dy * 50;
-        if (new_val < 0) new_val = 0;
-        if (new_val > scrollbar_->maximum() - viewport_->h()) new_val = scrollbar_->maximum() - viewport_->h();
-        if (new_val < 0) new_val = 0;
-        scrollbar_->value(new_val);
-        scroll_cb(scrollbar_, this);
-        return 1;
+        if (Fl::event_state() & FL_CTRL) {
+            if (dy > 0) {
+                target_height_ = std::max(target_height_ / 1.2, 50.0);
+            } else if (dy < 0) {
+                target_height_ = std::min(target_height_ * 1.2, 800.0);
+            }
+            layout_dirty_ = true;
+            return 1;
+        } else {
+            int new_val = scrollbar_->value() + dy * 50;
+            if (new_val < 0) new_val = 0;
+            if (new_val > scrollbar_->maximum() - viewport_->h()) new_val = scrollbar_->maximum() - viewport_->h();
+            if (new_val < 0) new_val = 0;
+            scrollbar_->value(new_val);
+            scroll_cb(scrollbar_, this);
+            return 1;
+        }
     }
     return Fl_Double_Window::handle(event);
 }

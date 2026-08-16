@@ -36,8 +36,16 @@ void ThumbnailPipeline::stop() {
     workers_.clear();
 }
 
-void ThumbnailPipeline::request_thumbnail(size_t image_index, const std::string& filepath, const std::string& hash, ThumbQuality quality, bool urgent) {
-    ThumbRequest req{image_index, filepath, quality, hash};
+void ThumbnailPipeline::set_generation(uint64_t gen) {
+    current_generation_ = gen;
+}
+
+uint64_t ThumbnailPipeline::get_generation() const {
+    return current_generation_;
+}
+
+void ThumbnailPipeline::request_thumbnail(size_t image_index, const std::string& filepath, const std::string& hash, ThumbQuality quality, bool urgent, uint64_t generation) {
+    ThumbRequest req{image_index, filepath, quality, hash, generation};
     if (urgent) {
         urgent_queue_.enqueue(req);
     } else {
@@ -59,6 +67,10 @@ void ThumbnailPipeline::worker_thread() {
         }
 
         if (got_req) {
+            if (req.generation > 0 && req.generation < current_generation_) {
+                pending_requests_--;
+                continue;
+            }
             pending_requests_--;
             process_request(req);
         } else {
@@ -145,6 +157,9 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
         if (db_.begin_transaction()) {
             std::string key = hash + ":" + std::to_string(static_cast<int>(req.target_quality));
             if (db_.store_key_data(key, jpeg_data)) {
+                // Also store the path mapping so it is discovered on next startup
+                db_.store_key_value(hash + ":path", req.filepath);
+                db_.store_key_value("file:" + req.filepath, hash);
                 db_.commit_transaction();
             } else {
                 db_.abort_transaction();

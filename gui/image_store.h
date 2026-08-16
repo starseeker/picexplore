@@ -54,6 +54,12 @@ public:
                      int width = 0, int height = 0,
                      uintmax_t file_size = 0, uintmax_t file_timestamp = 0);
 
+    // Remove an image (e.g. from file deletion)
+    void remove_image(const std::string& filepath);
+
+    // Rename an image (e.g. from file rename)
+    void rename_image(const std::string& old_filepath, const std::string& new_filepath);
+
     // Update thumbnail data (called from main thread after polling queue)
     void set_thumbnail(size_t index, const std::string& filepath, ThumbQuality quality,
                        const uint8_t* jpeg_data, size_t jpeg_size,
@@ -62,6 +68,7 @@ public:
     // Access
     ImageEntry& get(size_t index);
     const ImageEntry& get(size_t index) const;
+    const uint8_t* get_scaled_image(size_t index, int target_w, int target_h);
     size_t count() const;
 
     // Aspect ratio list for layout engine
