@@ -2,6 +2,7 @@
 
 #include <FL/Fl_Widget.H>
 #include <FL/Fl_Scrollbar.H>
+#include <functional>
 #include "image_store.h"
 #include "layout_engine.h"
 
@@ -19,6 +20,8 @@ public:
     std::vector<size_t> get_visible_indices() const;
 
     int content_width() const { return w(); }
+
+    std::function<void(const std::string&)> on_image_clicked;
 
 protected:
     void draw() override;

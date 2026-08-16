@@ -10,7 +10,8 @@ ImageStore::~ImageStore() {
 }
 
 size_t ImageStore::add_image(const std::string& filepath, double aspect_ratio,
-                             int width, int height) {
+                             int width, int height,
+                             uintmax_t file_size, uintmax_t file_timestamp) {
     size_t idx = entries_.size();
     ImageEntry entry;
     entry.filepath = filepath;
@@ -18,6 +19,8 @@ size_t ImageStore::add_image(const std::string& filepath, double aspect_ratio,
     entry.aspect_ratio = aspect_ratio;
     entry.original_width = width;
     entry.original_height = height;
+    entry.file_size = file_size;
+    entry.file_timestamp = file_timestamp;
     if (width > 0 && height > 0) {
         entry.metadata_known = true;
     }
@@ -80,10 +83,17 @@ bool ImageStore::decode_jpeg(const uint8_t* jpeg_data, size_t jpeg_size, std::ve
     return true;
 }
 
-void ImageStore::set_thumbnail(size_t index, ThumbQuality quality,
+void ImageStore::set_thumbnail(size_t index, const std::string& filepath, ThumbQuality quality,
                                const uint8_t* jpeg_data, size_t jpeg_size,
                                int width, int height) {
     if (index >= entries_.size()) return;
+    
+    // Verify the file path to handle race conditions during sorting
+    if (entries_[index].filepath != filepath) {
+        index = find_by_filepath(filepath);
+        if (index == static_cast<size_t>(-1)) return;
+    }
+    
     auto& entry = entries_[index];
     
     // Only upgrade if it's better or same quality
@@ -137,6 +147,37 @@ std::vector<double> ImageStore::get_aspect_ratios() const {
     return ratios;
 }
 
+void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
+    std::sort(entries_.begin(), entries_.end(), [criteria, ascending](const ImageEntry& a, const ImageEntry& b) {
+        bool result = false;
+        if (criteria == SortCriteria::ALPHABETICAL) {
+            result = a.filepath < b.filepath;
+        } else if (criteria == SortCriteria::FILE_SIZE) {
+            result = a.file_size < b.file_size;
+        } else if (criteria == SortCriteria::TIMESTAMP) {
+            result = a.file_timestamp < b.file_timestamp;
+        }
+        return ascending ? result : !result;
+    });
+
+    // Reassign indices
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        entries_[i].index = i;
+    }
+    
+    // Clear LRU and visibility state because indices changed completely
+    currently_visible_.clear();
+    lru_list_.clear();
+    lru_map_.clear();
+}
+
+size_t ImageStore::find_by_filepath(const std::string& filepath) const {
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        if (entries_[i].filepath == filepath) return i;
+    }
+    return static_cast<size_t>(-1);
+}
+
 void ImageStore::update_lru(size_t index) {
     auto it = lru_map_.find(index);
     if (it != lru_map_.end()) {
@@ -155,6 +196,13 @@ void ImageStore::mark_visible(const std::vector<size_t>& visible_indices) {
 }
 
 void ImageStore::evict_memory_if_needed() {
+    decoded_rgb_memory_used_ = 0;
+    scaled_rgb_memory_used_ = 0;
+    for (const auto& entry : entries_) {
+        decoded_rgb_memory_used_ += entry.decoded.rgb_data.size();
+        scaled_rgb_memory_used_ += entry.scaled.rgb_data.size();
+    }
+
     while ((decoded_rgb_memory_used_ > MAX_DECODED_MEMORY || 
             scaled_rgb_memory_used_ > MAX_SCALED_MEMORY) && !lru_list_.empty()) {
         
@@ -169,12 +217,14 @@ void ImageStore::evict_memory_if_needed() {
                 scaled_rgb_memory_used_ -= entry.scaled.rgb_data.size();
                 
                 entry.decoded.rgb_data.clear();
+                entry.decoded.rgb_data.shrink_to_fit();
                 entry.decoded.width = 0;
                 entry.decoded.height = 0;
                 entry.decoded.quality = ThumbQuality::NONE;
                 entry.best_quality = ThumbQuality::NONE; 
                 
                 entry.scaled.rgb_data.clear();
+                entry.scaled.rgb_data.shrink_to_fit();
                 entry.scaled.width = 0;
                 entry.scaled.height = 0;
                 entry.scaled.layout_width = 0;

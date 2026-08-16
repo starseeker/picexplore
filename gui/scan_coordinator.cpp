@@ -46,10 +46,18 @@ void ScanCoordinator::run() {
                 
                 ThumbQuality bq = static_cast<ThumbQuality>(img.best_thumb_size);
                 
+                uintmax_t fsize = 0, ftime = 0;
+                try {
+                    fsize = fs::file_size(img.path);
+                    ftime = std::chrono::duration_cast<std::chrono::seconds>(
+                                fs::last_write_time(img.path).time_since_epoch()).count();
+                } catch (...) {}
+
                 UpdateEvent ev = UpdateEvent::make_image_discovered(
                     img.path, img.hash,
                     img.thumb_width, img.thumb_height, img.aspect_ratio, 
-                    bq, img.thumb_data,
+                    fsize, ftime,
+                    bq, {}, // Skip passing jpeg data to save memory, ThumbnailPipeline will load it
                     img.thumb_width, img.thumb_height
                 );
                 
@@ -83,8 +91,14 @@ void ScanCoordinator::run() {
                         int w = 0, h = 0, comp = 0;
                         if (stbi_info(path.c_str(), &w, &h, &comp) && w > 0 && h > 0) {
                             double ar = static_cast<double>(w) / h;
+                            uintmax_t fsize = 0, ftime = 0;
+                            try {
+                                fsize = fs::file_size(path);
+                                ftime = std::chrono::duration_cast<std::chrono::seconds>(
+                                            fs::last_write_time(path).time_since_epoch()).count();
+                            } catch (...) {}
                             UpdateEvent ev = UpdateEvent::make_image_discovered(
-                                path, "", w, h, ar, ThumbQuality::NONE
+                                path, "", w, h, ar, fsize, ftime, ThumbQuality::NONE
                             );
                             update_queue_.enqueue(std::move(ev));
                             

@@ -122,6 +122,7 @@ class DatabaseManager {
 	bool store_key_data(const std::string& key, const std::vector<uint8_t>& data);
 	bool get_key_value(const std::string& key, std::string& value);
 	bool get_key_data(const std::string& key, std::vector<uint8_t>& data);
+	bool get_hash_for_path(const std::string& filepath, std::string& hash_out);
 	std::string extract_hash_from_key(const char* key, size_t key_size);
 	bool load_image_info(const std::string& hash, ImageInfo& info);
 	bool is_open() const { return is_open_; }

@@ -71,27 +71,48 @@ void ThumbnailPipeline::worker_thread() {
 }
 
 bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
-    if (!req.hash.empty() && db_.is_open()) {
+    std::string hash = req.hash;
+    
+    if (hash.empty() && db_.is_open()) {
         std::lock_guard<std::mutex> lock(db_.get_mutex());
         if (db_.begin_transaction()) {
-            std::string key = req.hash + ":" + std::to_string(static_cast<int>(req.target_quality));
-            std::vector<uint8_t> data;
-            bool found = db_.get_key_data(key, data);
+            db_.get_hash_for_path(req.filepath, hash);
             db_.abort_transaction();
-            if (found) {
-                update_queue_.enqueue(UpdateEvent::make_thumb_ready(
-                    req.image_index, req.target_quality, data, 0, 0
-                ));
-                return true;
-            }
         }
     }
+
+    bool target_found = false;
+    if (!hash.empty() && db_.is_open()) {
+        std::lock_guard<std::mutex> lock(db_.get_mutex());
+        if (db_.begin_transaction()) {
+            std::vector<ThumbQuality> qualities = {
+                ThumbQuality::TINY, ThumbQuality::SMALL, ThumbQuality::MEDIUM,
+                ThumbQuality::LARGE, ThumbQuality::XLARGE, ThumbQuality::FULL
+            };
+            
+            for (auto q : qualities) {
+                std::string key = hash + ":" + std::to_string(static_cast<int>(q));
+                std::vector<uint8_t> data;
+                if (db_.get_key_data(key, data)) {
+                    update_queue_.enqueue(UpdateEvent::make_thumb_ready(
+                        req.image_index, req.filepath, q, data, 0, 0
+                    ));
+                    if (q == req.target_quality) {
+                        target_found = true;
+                    }
+                }
+                if (q >= req.target_quality) break;
+            }
+            db_.abort_transaction();
+        }
+    }
+
+    if (target_found) return true;
 
     int w, h, channels;
     unsigned char* img = stbi_load(req.filepath.c_str(), &w, &h, &channels, 3);
     if (!img) return false;
 
-    std::string hash = req.hash;
     if (hash.empty()) {
         XXH64_hash_t hval = XXH64(img, w * h * 3, 0);
         char hash_str[17];
@@ -132,7 +153,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
     }
 
     update_queue_.enqueue(UpdateEvent::make_thumb_ready(
-        req.image_index, req.target_quality, jpeg_data, target_w, target_h
+        req.image_index, req.filepath, req.target_quality, jpeg_data, target_w, target_h
     ));
 
     return true;

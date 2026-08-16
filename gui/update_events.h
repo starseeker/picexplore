@@ -32,6 +32,8 @@ struct UpdateEvent {
         int width;
         int height;
         double aspect_ratio;
+        uintmax_t file_size;
+        uintmax_t file_timestamp;
         ThumbQuality best_quality;
         std::vector<uint8_t> jpeg_data;
         int thumb_width;
@@ -41,6 +43,7 @@ struct UpdateEvent {
     // Payload for THUMB_READY
     struct {
         size_t image_index;
+        std::string filepath;
         ThumbQuality quality;
         std::vector<uint8_t> jpeg_data;
         int width;
@@ -56,36 +59,39 @@ struct UpdateEvent {
     static UpdateEvent make_image_discovered(
         const std::string& path, const std::string& hash,
         int w, int h, double ar,
+        uintmax_t size = 0, uintmax_t timestamp = 0,
         ThumbQuality bq = ThumbQuality::NONE,
         const std::vector<uint8_t>& jpeg = {},
         int tw = 0, int th = 0) 
     {
-        UpdateEvent e;
-        e.type = Type::IMAGE_DISCOVERED;
-        e.image.filepath = path;
-        e.image.content_hash = hash;
-        e.image.width = w;
-        e.image.height = h;
-        e.image.aspect_ratio = ar;
-        e.image.best_quality = bq;
-        e.image.jpeg_data = jpeg;
-        e.image.thumb_width = tw;
-        e.image.thumb_height = th;
-        return e;
+        UpdateEvent ev;
+        ev.type = Type::IMAGE_DISCOVERED;
+        ev.image.filepath = path;
+        ev.image.content_hash = hash;
+        ev.image.width = w;
+        ev.image.height = h;
+        ev.image.aspect_ratio = ar;
+        ev.image.file_size = size;
+        ev.image.file_timestamp = timestamp;
+        ev.image.best_quality = bq;
+        ev.image.jpeg_data = jpeg;
+        ev.image.thumb_width = tw;
+        ev.image.thumb_height = th;
+        return ev;
     }
 
     static UpdateEvent make_thumb_ready(
-        size_t idx, ThumbQuality q,
-        const std::vector<uint8_t>& jpeg, int w, int h)
-    {
-        UpdateEvent e;
-        e.type = Type::THUMB_READY;
-        e.thumb.image_index = idx;
-        e.thumb.quality = q;
-        e.thumb.jpeg_data = jpeg;
-        e.thumb.width = w;
-        e.thumb.height = h;
-        return e;
+        size_t index, const std::string& filepath, ThumbQuality q,
+        const std::vector<uint8_t>& jpeg, int w, int h) {
+        UpdateEvent ev;
+        ev.type = Type::THUMB_READY;
+        ev.thumb.image_index = index;
+        ev.thumb.filepath = filepath;
+        ev.thumb.quality = q;
+        ev.thumb.jpeg_data = jpeg;
+        ev.thumb.width = w;
+        ev.thumb.height = h;
+        return ev;
     }
 
     static UpdateEvent make_scan_progress(int found) {

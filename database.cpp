@@ -571,6 +571,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 
     // Store file path as write task
     write_tasks.emplace_back(WriteTask::STORE_PATH, path_key, filepath);
+    write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, std::string(hash_str));
 
     // Generate and store thumbnails
     std::vector<int> thumb_sizes = {32, 64, 128, 256, 512, 1024};
@@ -981,8 +982,8 @@ int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, 
 
 	timer.start("Database Update");
 
-	// Store file path
-	if (!store_key_value(path_key, filepath)) {
+	// Store file path and reverse lookup
+	if (!store_key_value(path_key, filepath) || !store_key_value("file:" + filepath, std::string(hash_str))) {
 	    stbi_image_free(image_data);
 	    continue;
 	}
@@ -1046,23 +1047,18 @@ bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) 
 	return false;
     }
 
-    // Load thumbnail image to get dimensions and aspect ratio
-    int width, height, channels;
-    stbi_uc* pixels = stbi_load_from_memory(best_data.data(), best_data.size(),
-	    &width, &height, &channels, 3);
-
-    if (!pixels) {
-	fprintf(stderr, "Error: Failed to load thumbnail from memory for hash '%s': %s\n", hash.c_str(), stbi_failure_reason());
+    // Load thumbnail info to get dimensions and aspect ratio
+    int width = 0, height = 0, channels = 0;
+    if (!stbi_info_from_memory(best_data.data(), best_data.size(), &width, &height, &channels)) {
+	fprintf(stderr, "Error: Failed to get thumbnail info for hash '%s': %s\n", hash.c_str(), stbi_failure_reason());
 	return false;
     }
 
     info.best_thumb_size = best_size;
-    info.thumb_data = std::move(best_data);
+    info.thumb_data.clear(); // Free memory, we don't need the jpeg data here
     info.thumb_width = width;
     info.thumb_height = height;
     info.aspect_ratio = static_cast<double>(width) / height;
-
-    stbi_image_free(pixels);
     return true;
 }
 
@@ -1129,7 +1125,10 @@ std::vector<ImageInfo> DatabaseManager::get_all_images() {
     return images;
 }
 
-// Get EXIF orientation from JPEG file
+bool DatabaseManager::get_hash_for_path(const std::string& filepath, std::string& hash_out) {
+	return get_key_value("file:" + filepath, hash_out);
+}
+
 int DatabaseManager::get_exif_orientation(const std::string& filepath) {
     // Only process JPEG files
     auto ext = fs::path(filepath).extension().string();

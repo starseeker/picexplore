@@ -24,6 +24,8 @@ private:
     
     VirtualViewport* viewport_;
     Fl_Scrollbar* scrollbar_;
+    class Fl_Output* info_bar_;
+    class Fl_Menu_Bar* menubar_;
 
     moodycamel::ConcurrentQueue<UpdateEvent> update_queue_;
     ScanCoordinator* scanner_ = nullptr;
@@ -38,5 +40,6 @@ private:
     void resize(int X, int Y, int W, int H) override;
     
     static void scroll_cb(Fl_Widget* w, void* data);
+    static void menu_cb(Fl_Widget* w, void* data);
     int handle(int event) override;
 };
