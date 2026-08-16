@@ -113,6 +113,7 @@ class DatabaseManager {
 		int* actual_width, int* actual_height);
 	int calculate_scale_factor(int image_width, int image_height, int target_width, int target_height);
 
+	public:
 	// Database operations
 	bool begin_transaction();
 	bool commit_transaction();
@@ -123,6 +124,8 @@ class DatabaseManager {
 	bool get_key_data(const std::string& key, std::vector<uint8_t>& data);
 	std::string extract_hash_from_key(const char* key, size_t key_size);
 	bool load_image_info(const std::string& hash, ImageInfo& info);
+	bool is_open() const { return is_open_; }
+	std::mutex& get_mutex() { return db_mutex_; }
 
 	// Image processing helper
 	bool process_image_file(const std::string& filepath,
