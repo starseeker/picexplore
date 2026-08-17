@@ -1,5 +1,7 @@
 # picexplore
 
+![PicExplore GUI viewing NARA images](doc/nara_demo.png)
+
 Program for exploring what images are present in a filesystem.
 
 Fast identification and display of JPEG, PNG, BMP, and TGA images with thumbnail generation and PDF gallery creation.
