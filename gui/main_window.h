@@ -33,7 +33,13 @@ private:
     InfoPanel*       info_panel_;
     class Fl_Menu_Bar* menubar_;
     Fl_Box*          statusbar_;
+    
     bool info_panel_visible_ = false;
+
+    // Database build progress tracking
+    int db_build_total_ = 0;
+    int db_build_completed_ = 0;
+    bool scan_complete_ = false;
 
     // Directory filter (empty string = no filter = show all)
     std::string directory_filter_;

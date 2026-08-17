@@ -179,9 +179,8 @@ void MainWindow::reset_directory_filter() {
 }
 
 void MainWindow::update_statusbar() {
-    if (directory_filter_.empty()) {
-        statusbar_->copy_label("");
-    } else {
+    std::string label;
+    if (!directory_filter_.empty()) {
         // Show the filter as a path relative to the launch root for brevity
         namespace fs = std::filesystem;
         std::string rel;
@@ -190,9 +189,17 @@ void MainWindow::update_statusbar() {
         } catch (...) {
             rel = directory_filter_;
         }
-        std::string label = "  Filter: " + rel + "/";
-        statusbar_->copy_label(label.c_str());
+        label = "  Filter: " + rel + "/";
     }
+
+    if (db_build_total_ > 0 && !(scan_complete_ && db_build_completed_ >= db_build_total_)) {
+        label += "   |   Building Thumbnails: " + std::to_string(db_build_completed_) + " / " + std::to_string(db_build_total_);
+        if (!scan_complete_) {
+            label += " (Scanning...)";
+        }
+    }
+    
+    statusbar_->copy_label(label.c_str());
     statusbar_->redraw();
 }
 
@@ -222,23 +229,36 @@ void MainWindow::poll_events() {
             layout_dirty_ = true;
             
             if (ev.image.best_quality == ThumbQuality::NONE) {
+                db_build_total_++;
+                update_statusbar();
+                
                 // Queue a background task to generate the thumbnail so the DB fully populates.
                 // Generation 0 ensures it is not discarded when the user scrolls.
                 pipeline_->request_thumbnail(idx, ev.image.filepath, ev.image.content_hash, 
                                              ThumbQuality::SMALL, false, 0, 0, 0);
             }
         } else if (ev.type == UpdateEvent::Type::THUMB_READY) {
+            bool was_none = (store_.get(ev.thumb.image_index).best_quality == ThumbQuality::NONE);
             store_.set_thumbnail(ev.thumb.image_index, ev.thumb.filepath, ev.thumb.quality,
                                  ev.thumb.jpeg_data.data(), ev.thumb.jpeg_data.size(),
                                  ev.thumb.width, ev.thumb.height);
             changed.push_back(ev.thumb.image_index);
             need_redraw = true;
+            if (was_none) {
+                db_build_completed_++;
+                update_statusbar();
+            }
         } else if (ev.type == UpdateEvent::Type::THUMB_RGB_READY) {
+            bool was_none = (store_.get(ev.thumb_rgb.image_index).best_quality == ThumbQuality::NONE);
             store_.set_thumbnail_rgb(ev.thumb_rgb.image_index, ev.thumb_rgb.filepath,
                                      ev.thumb_rgb.quality, std::move(ev.thumb_rgb.rgb_data),
                                      ev.thumb_rgb.width, ev.thumb_rgb.height);
             changed.push_back(ev.thumb_rgb.image_index);
             need_redraw = true;
+            if (was_none) {
+                db_build_completed_++;
+                update_statusbar();
+            }
         } else if (ev.type == UpdateEvent::Type::FULL_RES_READY) {
             viewport_->set_full_res_image(ev.full_res.rgb_data, ev.full_res.width, ev.full_res.height);
             
@@ -279,6 +299,8 @@ void MainWindow::poll_events() {
             }
         } else if (ev.type == UpdateEvent::Type::SCAN_COMPLETE) {
             std::cout << "Scan complete." << std::endl;
+            scan_complete_ = true;
+            update_statusbar();
         }
     }
 
