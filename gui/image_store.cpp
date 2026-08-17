@@ -249,6 +249,31 @@ std::vector<double> ImageStore::get_aspect_ratios() const {
     return ratios;
 }
 
+std::vector<std::pair<size_t,double>> ImageStore::get_filtered_aspects(const std::string& dir) const {
+    std::vector<std::pair<size_t,double>> result;
+    result.reserve(entries_.size());
+
+    if (dir.empty()) {
+        for (size_t i = 0; i < entries_.size(); ++i) {
+            result.emplace_back(i, entries_[i].aspect_ratio);
+        }
+    } else {
+        // Match any filepath that lives directly in or under `dir`.
+        // We use filesystem::path to avoid substring false-positives like
+        // filter="/foo/bar" accidentally matching "/foo/bard/img.jpg".
+        std::string prefix = dir;
+        if (prefix.back() != '/') prefix += '/';
+        for (size_t i = 0; i < entries_.size(); ++i) {
+            const std::string& fp = entries_[i].filepath;
+            if (fp.size() > prefix.size() && fp.compare(0, prefix.size(), prefix) == 0) {
+                result.emplace_back(i, entries_[i].aspect_ratio);
+            }
+        }
+    }
+    return result;
+}
+
+
 void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
     std::sort(entries_.begin(), entries_.end(), [criteria, ascending](const ImageEntry& a, const ImageEntry& b) {
         bool result = false;

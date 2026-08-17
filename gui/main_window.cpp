@@ -2,38 +2,65 @@
 #include "inotify_watcher.h"
 #include "../database.h"
 #include <FL/Fl.H>
-
 #include <FL/Fl_Output.H>
 #include <FL/Fl_Menu_Bar.H>
+#include <FL/fl_ask.H>
+#include <filesystem>
+
+static constexpr int MENU_H   = 25;
+static constexpr int STATUS_H = 20;
+static constexpr int SCROLL_W = 20;
+static constexpr int INFO_W   = 250;
 
 MainWindow::MainWindow(int w, int h, const char* title, const std::string& directory)
     : Fl_Double_Window(w, h, title), directory_(directory) {
-    
-    int scroll_w = 20;
-    int menu_h = 25;
-    int vp_h = h - menu_h;
 
-    menubar_ = new Fl_Menu_Bar(0, 0, w, menu_h);
-    menubar_->add("Sort/Alphabetical (A-Z)", 0, menu_cb, (void*)1);
-    menubar_->add("Sort/Alphabetical (Z-A)", 0, menu_cb, (void*)2);
-    menubar_->add("Sort/File Size (Smallest)", 0, menu_cb, (void*)3);
-    menubar_->add("Sort/File Size (Largest)", 0, menu_cb, (void*)4);
-    menubar_->add("Sort/Date (Oldest)", 0, menu_cb, (void*)5);
-    menubar_->add("Sort/Date (Newest)", 0, menu_cb, (void*)6);
-    
-    menubar_->add("View/Zoom In (Ctrl+Wheel Up)", FL_CTRL | '=', menu_cb, (void*)7);
+    int vp_h = h - MENU_H - STATUS_H;
+
+    menubar_ = new Fl_Menu_Bar(0, 0, w, MENU_H);
+    menubar_->add("Sort/Alphabetical (A-Z)",    0, menu_cb, (void*)1);
+    menubar_->add("Sort/Alphabetical (Z-A)",    0, menu_cb, (void*)2);
+    menubar_->add("Sort/File Size (Smallest)",  0, menu_cb, (void*)3);
+    menubar_->add("Sort/File Size (Largest)",   0, menu_cb, (void*)4);
+    menubar_->add("Sort/Date (Oldest)",         0, menu_cb, (void*)5);
+    menubar_->add("Sort/Date (Newest)",         0, menu_cb, (void*)6);
+
+    menubar_->add("View/Zoom In (Ctrl+Wheel Up)",    FL_CTRL | '=', menu_cb, (void*)7);
     menubar_->add("View/Zoom Out (Ctrl+Wheel Down)", FL_CTRL | '-', menu_cb, (void*)8);
-    menubar_->add("View/Reset Zoom", FL_CTRL | '0', menu_cb, (void*)9);
+    menubar_->add("View/Reset Zoom",                 FL_CTRL | '0', menu_cb, (void*)9);
+    menubar_->add("View/Information Panel",          0,             menu_cb, (void*)10, FL_MENU_TOGGLE);
 
-    viewport_ = new VirtualViewport(0, menu_h, w - scroll_w, vp_h, store_);
-    scrollbar_ = new Fl_Scrollbar(w - scroll_w, menu_h, scroll_w, vp_h);
+    menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO);
+    menubar_->add("View/Info Panel Font Size/Medium (14pt)",  0, menu_cb, (void*)12, FL_MENU_RADIO);
+    menubar_->add("View/Info Panel Font Size/Large (18pt)",   0, menu_cb, (void*)13, FL_MENU_RADIO);
+    menubar_->add("View/Info Panel Font Size/X-Large (24pt)", 0, menu_cb, (void*)14, FL_MENU_RADIO);
+    menubar_->add("View/Info Panel Font Size/Custom...",      0, menu_cb, (void*)15, 0);
+
+    menubar_->add("View/Reset Directory Filter", FL_CTRL | 'r', menu_cb, (void*)16, 0);
+
+    viewport_  = new VirtualViewport(0, MENU_H, w - SCROLL_W, vp_h, store_);
+    scrollbar_ = new Fl_Scrollbar(w - SCROLL_W, MENU_H, SCROLL_W, vp_h);
     scrollbar_->type(FL_VERTICAL);
     scrollbar_->callback(scroll_cb, this);
 
-    info_panel_ = new InfoPanel(w, menu_h, 250, vp_h);
+    info_panel_ = new InfoPanel(w, MENU_H, INFO_W, vp_h);
     info_panel_->hide();
+    info_panel_->set_root_dir(directory_);
 
-    menubar_->add("View/Information Panel", 0, menu_cb, (void*)10, FL_MENU_TOGGLE);
+    // Status bar at the very bottom
+    statusbar_ = new Fl_Box(0, MENU_H + vp_h, w, STATUS_H, "");
+    statusbar_->box(FL_FLAT_BOX);
+    statusbar_->color(fl_darker(FL_DARK2));
+    statusbar_->labelcolor(fl_rgb_color(180, 180, 180));
+    statusbar_->labelsize(12);
+    statusbar_->labelfont(FL_HELVETICA);
+    statusbar_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+
+    // Wire info panel breadcrumb → directory filter
+    // Only fires when info panel is already visible (panel must be shown to click it).
+    info_panel_->on_dir_clicked = [this](const std::string& dir) {
+        apply_directory_filter(dir);
+    };
 
     viewport_->on_image_clicked = [this](const std::string& path) {
         size_t idx = store_.find_by_filepath(path);
@@ -47,21 +74,10 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
 }
 
 MainWindow::~MainWindow() {
-    if (scanner_) {
-        scanner_->stop();
-        delete scanner_;
-    }
-    if (pipeline_) {
-        pipeline_->stop();
-        delete pipeline_;
-    }
-    if (watcher_) {
-        watcher_->stop();
-        delete watcher_;
-    }
-    if (db_) {
-        delete db_;
-    }
+    if (scanner_) { scanner_->stop(); delete scanner_; }
+    if (pipeline_) { pipeline_->stop(); delete pipeline_; }
+    if (watcher_) { watcher_->stop(); delete watcher_; }
+    if (db_) { delete db_; }
     Fl::remove_timeout(timer_cb, this);
 }
 
@@ -80,8 +96,46 @@ void MainWindow::start() {
     watcher_ = new InotifyWatcher();
     watcher_->start(directory_, update_queue_);
 
-    Fl::add_timeout(0.016, timer_cb, this); 
+    Fl::add_timeout(0.016, timer_cb, this);
 }
+
+// ── filter helpers ─────────────────────────────────────────────────────────
+
+void MainWindow::apply_directory_filter(const std::string& dir) {
+    directory_filter_ = dir;
+    layout_dirty_ = true;
+    viewport_->set_scroll_offset(0);
+    scrollbar_->value(0);
+    update_statusbar();
+}
+
+void MainWindow::reset_directory_filter() {
+    directory_filter_.clear();
+    layout_dirty_ = true;
+    viewport_->set_scroll_offset(0);
+    scrollbar_->value(0);
+    update_statusbar();
+}
+
+void MainWindow::update_statusbar() {
+    if (directory_filter_.empty()) {
+        statusbar_->copy_label("");
+    } else {
+        // Show the filter as a path relative to the launch root for brevity
+        namespace fs = std::filesystem;
+        std::string rel;
+        try {
+            rel = fs::relative(directory_filter_, std::filesystem::path(directory_).parent_path()).string();
+        } catch (...) {
+            rel = directory_filter_;
+        }
+        std::string label = "  Filter: " + rel + "/";
+        statusbar_->copy_label(label.c_str());
+    }
+    statusbar_->redraw();
+}
+
+// ── timer / event poll ────────────────────────────────────────────────────
 
 void MainWindow::timer_cb(void* data) {
     MainWindow* win = static_cast<MainWindow*>(data);
@@ -98,7 +152,9 @@ void MainWindow::poll_events() {
     while (update_queue_.try_dequeue(ev) && process_count < 200) {
         process_count++;
         if (ev.type == UpdateEvent::Type::IMAGE_DISCOVERED) {
-            store_.add_image(ev.image.filepath, ev.image.aspect_ratio, ev.image.width, ev.image.height, ev.image.file_size, ev.image.file_timestamp);
+            store_.add_image(ev.image.filepath, ev.image.aspect_ratio,
+                             ev.image.width, ev.image.height,
+                             ev.image.file_size, ev.image.file_timestamp);
             layout_dirty_ = true;
         } else if (ev.type == UpdateEvent::Type::THUMB_READY) {
             store_.set_thumbnail(ev.thumb.image_index, ev.thumb.filepath, ev.thumb.quality,
@@ -107,8 +163,9 @@ void MainWindow::poll_events() {
             changed.push_back(ev.thumb.image_index);
             need_redraw = true;
         } else if (ev.type == UpdateEvent::Type::THUMB_RGB_READY) {
-            store_.set_thumbnail_rgb(ev.thumb_rgb.image_index, ev.thumb_rgb.filepath, ev.thumb_rgb.quality,
-                                     std::move(ev.thumb_rgb.rgb_data), ev.thumb_rgb.width, ev.thumb_rgb.height);
+            store_.set_thumbnail_rgb(ev.thumb_rgb.image_index, ev.thumb_rgb.filepath,
+                                     ev.thumb_rgb.quality, std::move(ev.thumb_rgb.rgb_data),
+                                     ev.thumb_rgb.width, ev.thumb_rgb.height);
             changed.push_back(ev.thumb_rgb.image_index);
             need_redraw = true;
         } else if (ev.type == UpdateEvent::Type::IMAGE_DELETED) {
@@ -127,7 +184,8 @@ void MainWindow::poll_events() {
             }
             layout_dirty_ = true;
         } else if (ev.type == UpdateEvent::Type::IMAGE_RENAMED) {
-            std::cout << "RENAMED: " << ev.rename.old_filepath << " -> " << ev.rename.new_filepath << std::endl;
+            std::cout << "RENAMED: " << ev.rename.old_filepath
+                      << " -> " << ev.rename.new_filepath << std::endl;
             store_.rename_image(ev.rename.old_filepath, ev.rename.new_filepath);
             if (db_ && db_->is_open()) {
                 std::lock_guard<std::mutex> lock(db_->get_mutex());
@@ -147,7 +205,9 @@ void MainWindow::poll_events() {
     }
 
     if (layout_dirty_) {
-        layout_result_ = layout_engine_.compute(store_.get_aspect_ratios(), viewport_->content_width(), target_height_);
+        // Use get_filtered_aspects so the layout carries real raw store indices.
+        auto indexed = store_.get_filtered_aspects(directory_filter_);
+        layout_result_ = layout_engine_.compute(indexed, viewport_->content_width(), target_height_);
         viewport_->set_layout(&layout_result_);
         
         int max_scroll = std::max(0, static_cast<int>(layout_result_.total_height) - viewport_->h());
@@ -173,55 +233,67 @@ void MainWindow::reprioritize_thumbnails() {
     pipeline_->set_generation(current_generation_);
     
     for (size_t idx : visible) {
+        // idx is a raw store index (box.image_index carries the raw index now)
         const auto& entry = store_.get(idx);
         
         double layout_w = entry.aspect_ratio * target_height_;
         double layout_h = target_height_;
-        if (idx < layout_result_.boxes.size()) {
-            layout_w = layout_result_.boxes[idx].w;
-            layout_h = layout_result_.boxes[idx].h;
+        // Find this raw index in the layout boxes
+        for (const auto& box : layout_result_.boxes) {
+            if (box.image_index == idx) {
+                layout_w = box.w;
+                layout_h = box.h;
+                break;
+            }
         }
         
         ThumbQuality needed = ThumbQuality::SMALL;
-        if (layout_w < 96) needed = ThumbQuality::SMALL;
+        if (layout_w < 96)       needed = ThumbQuality::SMALL;
         else if (layout_w < 192) needed = ThumbQuality::MEDIUM;
         else if (layout_w < 384) needed = ThumbQuality::LARGE;
         else if (layout_w < 768) needed = ThumbQuality::XLARGE;
-        else needed = ThumbQuality::FULL;
+        else                     needed = ThumbQuality::FULL;
         
-        bool size_mismatch = (entry.scaled.layout_width != static_cast<int>(layout_w) || 
+        bool size_mismatch = (entry.scaled.layout_width  != static_cast<int>(layout_w) ||
                               entry.scaled.layout_height != static_cast<int>(layout_h));
         
         if (entry.best_quality == ThumbQuality::NONE) {
-            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash, ThumbQuality::SMALL, true, current_generation_, static_cast<int>(layout_w), static_cast<int>(layout_h));
+            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
+                                         ThumbQuality::SMALL, true, current_generation_,
+                                         static_cast<int>(layout_w), static_cast<int>(layout_h));
             if (needed > ThumbQuality::SMALL) {
-                pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash, needed, false, current_generation_, static_cast<int>(layout_w), static_cast<int>(layout_h));
+                pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
+                                             needed, false, current_generation_,
+                                             static_cast<int>(layout_w), static_cast<int>(layout_h));
             }
         } else if (entry.best_quality < needed || size_mismatch) {
             ThumbQuality req_quality = std::max(needed, entry.best_quality);
-            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash, req_quality, false, current_generation_, static_cast<int>(layout_w), static_cast<int>(layout_h));
+            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
+                                         req_quality, false, current_generation_,
+                                         static_cast<int>(layout_w), static_cast<int>(layout_h));
         }
     }
 }
 
+// ── resize ─────────────────────────────────────────────────────────────────
+
 void MainWindow::resize(int X, int Y, int W, int H) {
     Fl_Double_Window::resize(X, Y, W, H);
-    int scroll_w = scrollbar_->w();
-    int menu_h = menubar_->h();
-    int vp_h = H - menu_h;
+    int vp_h = H - MENU_H - STATUS_H;
 
-    int info_w = 250;
-    int vp_w = W - scroll_w;
+    int info_w = INFO_W;
+    int vp_w = W - SCROLL_W;
     if (info_panel_visible_) {
         vp_w -= info_w;
     }
 
-    menubar_->resize(0, 0, W, menu_h);
-    viewport_->resize(0, menu_h, vp_w, vp_h);
-    scrollbar_->resize(vp_w, menu_h, scroll_w, vp_h);
-    
+    menubar_->resize(0, 0, W, MENU_H);
+    viewport_->resize(0, MENU_H, vp_w, vp_h);
+    scrollbar_->resize(vp_w, MENU_H, SCROLL_W, vp_h);
+    statusbar_->resize(0, MENU_H + vp_h, W, STATUS_H);
+
     if (info_panel_visible_) {
-        info_panel_->resize(vp_w + scroll_w, menu_h, info_w, vp_h);
+        info_panel_->resize(vp_w + SCROLL_W, MENU_H, info_w, vp_h);
         info_panel_->show();
     } else {
         info_panel_->hide();
@@ -229,6 +301,8 @@ void MainWindow::resize(int X, int Y, int W, int H) {
     
     layout_dirty_ = true;
 }
+
+// ── callbacks ──────────────────────────────────────────────────────────────
 
 void MainWindow::scroll_cb(Fl_Widget* w, void* data) {
     MainWindow* win = static_cast<MainWindow*>(data);
@@ -246,19 +320,36 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
     bool ascending = true;
     
     switch (choice) {
-        case 1: criteria = ImageStore::SortCriteria::ALPHABETICAL; ascending = true; break;
+        case 1: criteria = ImageStore::SortCriteria::ALPHABETICAL; ascending = true;  break;
         case 2: criteria = ImageStore::SortCriteria::ALPHABETICAL; ascending = false; break;
-        case 3: criteria = ImageStore::SortCriteria::FILE_SIZE; ascending = true; break;
-        case 4: criteria = ImageStore::SortCriteria::FILE_SIZE; ascending = false; break;
-        case 5: criteria = ImageStore::SortCriteria::TIMESTAMP; ascending = true; break;
-        case 6: criteria = ImageStore::SortCriteria::TIMESTAMP; ascending = false; break;
+        case 3: criteria = ImageStore::SortCriteria::FILE_SIZE;    ascending = true;  break;
+        case 4: criteria = ImageStore::SortCriteria::FILE_SIZE;    ascending = false; break;
+        case 5: criteria = ImageStore::SortCriteria::TIMESTAMP;    ascending = true;  break;
+        case 6: criteria = ImageStore::SortCriteria::TIMESTAMP;    ascending = false; break;
         case 7: win->target_height_ = std::min(win->target_height_ * 1.2, 800.0); win->layout_dirty_ = true; break;
-        case 8: win->target_height_ = std::max(win->target_height_ / 1.2, 50.0); win->layout_dirty_ = true; break;
+        case 8: win->target_height_ = std::max(win->target_height_ / 1.2,  50.0); win->layout_dirty_ = true; break;
         case 9: win->target_height_ = 150.0; win->layout_dirty_ = true; break;
-        case 10: 
-            win->info_panel_visible_ = !win->info_panel_visible_; 
-            win->resize(win->x(), win->y(), win->w(), win->h()); 
+        case 10:
+            win->info_panel_visible_ = !win->info_panel_visible_;
+            win->resize(win->x(), win->y(), win->w(), win->h());
             break;
+        case 11: win->info_panel_->set_font_size(11); break;
+        case 12: win->info_panel_->set_font_size(14); break;
+        case 13: win->info_panel_->set_font_size(18); break;
+        case 14: win->info_panel_->set_font_size(24); break;
+        case 15: {
+            const char* val = fl_input("Enter font size (8\u201348):", "14");
+            if (val) {
+                int sz = std::atoi(val);
+                if (sz >= 8 && sz <= 48) {
+                    win->info_panel_->set_font_size(sz);
+                } else {
+                    fl_alert("Please enter a size between 8 and 48.");
+                }
+            }
+            break;
+        }
+        case 16: win->reset_directory_filter(); break;
         default: return;
     }
     
@@ -283,7 +374,10 @@ int MainWindow::handle(int event) {
         } else {
             int new_val = scrollbar_->value() + dy * 50;
             if (new_val < 0) new_val = 0;
-            if (new_val > scrollbar_->maximum() - viewport_->h()) new_val = scrollbar_->maximum() - viewport_->h();
+            // scrollbar_->maximum() is already total_height - viewport_h;
+            // do NOT subtract viewport_->h() again or the bound goes negative.
+            if (new_val > scrollbar_->maximum())
+                new_val = scrollbar_->maximum();
             if (new_val < 0) new_val = 0;
             scrollbar_->value(new_val);
             scroll_cb(scrollbar_, this);

@@ -2,6 +2,7 @@
 
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Scrollbar.H>
+#include <FL/Fl_Box.H>
 #include "image_store.h"
 #include "layout_engine.h"
 #include "virtual_viewport.h"
@@ -24,10 +25,17 @@ private:
     LayoutEngine::LayoutResult layout_result_;
     
     VirtualViewport* viewport_;
-    Fl_Scrollbar* scrollbar_;
-    InfoPanel* info_panel_;
+    Fl_Scrollbar*    scrollbar_;
+    InfoPanel*       info_panel_;
     class Fl_Menu_Bar* menubar_;
+    Fl_Box*          statusbar_;
     bool info_panel_visible_ = false;
+
+    // Directory filter (empty string = no filter = show all)
+    std::string directory_filter_;
+    void apply_directory_filter(const std::string& dir);
+    void reset_directory_filter();
+    void update_statusbar();
 
     moodycamel::ConcurrentQueue<UpdateEvent> update_queue_;
     ScanCoordinator* scanner_ = nullptr;

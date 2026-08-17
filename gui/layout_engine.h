@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <utility>
 #include "../justified_layout.hpp"
 
 class LayoutEngine {
@@ -17,13 +18,14 @@ public:
     LayoutEngine();
     ~LayoutEngine();
 
-    // Full recompute
-    LayoutResult compute(const std::vector<double>& aspect_ratios,
+    // Full recompute. Each pair is {raw_store_index, aspect_ratio}.
+    // box.image_index will equal the raw_store_index from each pair.
+    LayoutResult compute(const std::vector<std::pair<size_t,double>>& indexed_aspects,
                          double viewport_width,
                          double target_row_height = 150.0);
 
     // Incremental append
-    LayoutResult append(const std::vector<double>& all_aspect_ratios);
+    LayoutResult append(const std::vector<std::pair<size_t,double>>& indexed_aspects);
 
 private:
     LayoutCfg cfg_;

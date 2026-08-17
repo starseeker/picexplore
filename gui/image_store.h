@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <list>
 #include <unordered_map>
+#include <utility>
 #include "update_events.h"
 
 struct ImageEntry {
@@ -75,6 +76,12 @@ public:
 
     // Aspect ratio list for layout engine
     std::vector<double> get_aspect_ratios() const;
+
+    // Filtered aspect ratios for layout engine.
+    // Returns {raw_store_index, aspect_ratio} pairs.
+    // If dir is empty, returns all images (equivalent to get_aspect_ratios with indices).
+    // If dir is set, returns only images whose filepath starts with dir + "/" or equals dir.
+    std::vector<std::pair<size_t,double>> get_filtered_aspects(const std::string& dir) const;
 
     enum class SortCriteria {
         ALPHABETICAL,
