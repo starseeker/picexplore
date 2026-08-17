@@ -11,7 +11,9 @@ add_executable(picexplore_gui
     image_store.cpp
     layout_engine.cpp
     info_panel.cpp
+    full_res_loader.cpp
     inotify_watcher.cpp
+    ../third_party/miniz/miniz.c
     ../database.cpp
     ../utils.cpp
     ../third_party/TinyEXIF.cpp

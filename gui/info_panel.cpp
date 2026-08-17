@@ -6,6 +6,8 @@
 #include <ctime>
 #include <fstream>
 #include <filesystem>
+#include <cstring>
+#include "../third_party/miniz/miniz.h"
 #include "../third_party/TinyEXIF.h"
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -26,6 +28,109 @@ static std::string format_time(uintmax_t t) {
     if (std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&time)))
         return buf;
     return "Unknown";
+}
+
+// Helper to read big-endian 32-bit integers for PNG parsing
+static uint32_t read_be32(std::ifstream& file) {
+    uint8_t bytes[4];
+    if (file.read(reinterpret_cast<char*>(bytes), 4)) {
+        return (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
+    }
+    return 0;
+}
+
+// Helper to decode a hex profile string embedded in tEXt/zTXt chunks
+static std::vector<uint8_t> decode_hex_profile(const std::string& text) {
+    std::string hex_str;
+    for (char c : text) {
+        if (std::isxdigit(c)) {
+            hex_str.push_back(c);
+        }
+    }
+    
+    std::vector<uint8_t> bytes;
+    bytes.reserve(hex_str.length() / 2);
+    for (size_t i = 0; i + 1 < hex_str.length(); i += 2) {
+        std::string byteString = hex_str.substr(i, 2);
+        uint8_t byte = (uint8_t) strtol(byteString.c_str(), nullptr, 16);
+        bytes.push_back(byte);
+    }
+    
+    std::vector<uint8_t> payload;
+    payload.reserve(bytes.size() + 6);
+    const char header[6] = {'E','x','i','f','\0','\0'};
+    payload.insert(payload.end(), header, header + 6);
+    payload.insert(payload.end(), bytes.begin(), bytes.end());
+    
+    return payload;
+}
+
+static std::vector<uint8_t> extract_png_exif(std::ifstream& file) {
+    // Read signature
+    uint8_t sig[8];
+    if (!file.read(reinterpret_cast<char*>(sig), 8)) return {};
+    
+    // Check if it's a valid PNG
+    const uint8_t png_sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+    if (std::memcmp(sig, png_sig, 8) != 0) return {};
+    
+    while (file.good()) {
+        uint32_t length = read_be32(file);
+        if (!file.good()) break;
+        
+        char type[5] = {0};
+        if (!file.read(type, 4)) break;
+        
+        if (std::string(type) == "eXIf") {
+            // PNG eXIf chunk does not contain the Exif\0\0 header. 
+            // We prepend it so TinyEXIF can parse it seamlessly.
+            std::vector<uint8_t> payload(length + 6);
+            std::memcpy(payload.data(), "Exif\0\0", 6);
+            if (length > 0 && file.read(reinterpret_cast<char*>(payload.data() + 6), length)) {
+                return payload;
+            }
+            break;
+        } else if (std::string(type) == "tEXt" || std::string(type) == "zTXt") {
+            std::vector<uint8_t> chunk_data(length);
+            if (length > 0 && file.read(reinterpret_cast<char*>(chunk_data.data()), length)) {
+                size_t null_pos = 0;
+                while (null_pos < length && chunk_data[null_pos] != '\0') {
+                    null_pos++;
+                }
+                
+                if (null_pos < length) {
+                    std::string keyword(reinterpret_cast<char*>(chunk_data.data()), null_pos);
+                    if (keyword == "Raw profile type exif" || keyword == "Raw profile type APP1") {
+                        if (std::string(type) == "tEXt") {
+                            std::string text(reinterpret_cast<char*>(chunk_data.data() + null_pos + 1), length - null_pos - 1);
+                            return decode_hex_profile(text);
+                        } else if (std::string(type) == "zTXt") {
+                            if (null_pos + 2 < length) { // +1 for null, +1 for compression method
+                                size_t comp_len = length - null_pos - 2;
+                                size_t out_len = 0;
+                                void* uncomp = tinfl_decompress_mem_to_heap(chunk_data.data() + null_pos + 2, comp_len, &out_len, 0);
+                                if (uncomp) {
+                                    std::string text(reinterpret_cast<char*>(uncomp), out_len);
+                                    free(uncomp);
+                                    return decode_hex_profile(text);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (std::string(type) == "IEND") {
+            break;
+        } else {
+            // Skip chunk data and CRC (4 bytes) if not already read
+            file.seekg(length + 4, std::ios::cur);
+            continue;
+        }
+        
+        // Skip CRC for read chunks
+        file.seekg(4, std::ios::cur);
+    }
+    return {};
 }
 
 // ── construction ───────────────────────────────────────────────────────────
@@ -55,6 +160,13 @@ InfoPanel::InfoPanel(int X, int Y, int W, int H, const char* L)
     text_display_->wrap_mode(Fl_Text_Display::WRAP_AT_BOUNDS, 0);
 
     text_buffer_->text("No image selected.\nClick an image to view details.");
+
+    scroll_btn_ = new Fl_Button(X + 5, Y + H - SCROLL_BTN_H - 5, W - 10, SCROLL_BTN_H, "Scroll to Image");
+    scroll_btn_->hide();
+    scroll_btn_->callback([](Fl_Widget* w, void* ud) {
+        auto* panel = static_cast<InfoPanel*>(ud);
+        if (panel->on_scroll_to_image) panel->on_scroll_to_image(panel->current_filepath_);
+    }, this);
 
     end();
 }
@@ -128,6 +240,7 @@ void InfoPanel::rebuild_breadcrumb() {
     if (current_filepath_.empty() || root_dir_.empty()) {
         // No breadcrumb — text display fills the whole panel.
         crumb_h_ = 0;
+        scroll_btn_->hide();
         breadcrumb_bar_->resize(panel_x, panel_y, panel_w, 0);
         text_display_->resize(panel_x + 5, panel_y + 5, panel_w - 10, panel_h - 10);
         text_display_->redraw();
@@ -164,11 +277,15 @@ void InfoPanel::rebuild_breadcrumb() {
 
     if (segments.empty()) {
         crumb_h_ = 0;
+        scroll_btn_->hide();
         breadcrumb_bar_->resize(panel_x, panel_y, panel_w, 0);
         text_display_->resize(panel_x + 5, panel_y + 5, panel_w - 10, panel_h - 10);
         text_display_->redraw();
         return;
     }
+
+    scroll_btn_->show();
+    scroll_btn_->resize(panel_x + 5, panel_y + panel_h - SCROLL_BTN_H - 5, panel_w - 10, SCROLL_BTN_H);
 
     // ── measure & wrap ────────────────────────────────────────────────────
     // ROW_H scales with font size so everything stays proportional.
@@ -273,7 +390,7 @@ void InfoPanel::rebuild_breadcrumb() {
             const std::string& dlabel = layouts[pw.seg_idx].display_label;
             bool is_dir = !abs_path.empty();
             if (is_dir) {
-                auto* d = new CrumbData{this, abs_path};
+                auto* d = new CrumbData{abs_path, this, false};
                 Fl_Button* btn = new Fl_Button(bx, by, pw.w, pw.h);
                 btn->copy_label(dlabel.c_str());
                 btn->box(FL_FLAT_BOX);
@@ -283,17 +400,26 @@ void InfoPanel::rebuild_breadcrumb() {
                 btn->labelfont(FL_HELVETICA);
                 // Tooltip shows the full path so truncated labels remain accessible.
                 btn->tooltip(d->path.c_str());
+                btn->user_data(d);
                 btn->callback([](Fl_Widget* w, void* ud) {
                     auto* d = static_cast<CrumbData*>(ud);
                     if (d->panel->on_dir_clicked) d->panel->on_dir_clicked(d->path);
                 }, d);
             } else {
-                Fl_Box* box = new Fl_Box(bx, by, pw.w, pw.h);
-                box->copy_label(dlabel.c_str());
-                box->box(FL_NO_BOX);
-                box->labelcolor(fl_rgb_color(200, 200, 200));
-                box->labelsize(font_size_);
-                box->labelfont(FL_HELVETICA);
+                auto* d = new CrumbData{current_filepath_, this, true};
+                Fl_Button* btn = new Fl_Button(bx, by, pw.w, pw.h);
+                btn->copy_label(dlabel.c_str());
+                btn->box(FL_FLAT_BOX);
+                btn->color(fl_darker(FL_DARK2));
+                btn->labelcolor(FL_WHITE);
+                btn->labelsize(font_size_);
+                btn->labelfont(FL_HELVETICA);
+                btn->tooltip(d->path.c_str());
+                btn->user_data(d);
+                btn->callback([](Fl_Widget* w, void* ud) {
+                    auto* d = static_cast<CrumbData*>(ud);
+                    if (d->panel->on_file_clicked) d->panel->on_file_clicked(d->path);
+                }, d);
             }
         }
     }
@@ -301,8 +427,9 @@ void InfoPanel::rebuild_breadcrumb() {
 
     // Resize text display to occupy whatever height remains below the breadcrumb.
     int td_y = panel_y + crumb_h_;
-    int td_h = panel_h - crumb_h_;
-    text_display_->resize(panel_x + 5, td_y + 5, panel_w - 10, std::max(td_h - 10, 1));
+    int text_bottom_margin = scroll_btn_->visible() ? SCROLL_BTN_H + 10 : 5;
+    int td_h = panel_h - crumb_h_ - text_bottom_margin;
+    text_display_->resize(panel_x + 5, td_y + 5, panel_w - 10, std::max(td_h, 1));
 
     breadcrumb_bar_->redraw();
     text_display_->redraw();
@@ -337,7 +464,26 @@ void InfoPanel::display_info(const ImageEntry& entry) {
     std::ifstream file(entry.filepath, std::ios::binary);
     if (file.is_open()) {
         TinyEXIF::EXIFInfo exif;
-        if (exif.parseFrom(file) == TinyEXIF::PARSE_SUCCESS) {
+        bool parsed = false;
+
+        // Check file signature to route parsing
+        uint8_t sig[2];
+        if (file.read(reinterpret_cast<char*>(sig), 2)) {
+            file.seekg(0, std::ios::beg); // rewind
+            
+            if (sig[0] == 0xFF && sig[1] == 0xD8) {
+                // JPEG
+                parsed = (exif.parseFrom(file) == TinyEXIF::PARSE_SUCCESS);
+            } else if (sig[0] == 0x89 && sig[1] == 0x50) {
+                // PNG
+                std::vector<uint8_t> png_exif_data = extract_png_exif(file);
+                if (!png_exif_data.empty()) {
+                    parsed = (exif.parseFromEXIFSegment(png_exif_data.data(), png_exif_data.size()) == TinyEXIF::PARSE_SUCCESS);
+                }
+            }
+        }
+
+        if (parsed) {
             bool has_exif = false;
 
             if (!exif.Make.empty() || !exif.Model.empty()) {

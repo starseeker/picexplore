@@ -9,6 +9,7 @@
 #include "scan_coordinator.h"
 #include "thumbnail_pipeline.h"
 #include "info_panel.h"
+#include "full_res_loader.h"
 #include <string>
 
 class MainWindow : public Fl_Double_Window {
@@ -17,6 +18,9 @@ public:
     ~MainWindow();
 
     void start();
+
+    void enter_single_image_mode(size_t raw_idx, const std::string& filepath);
+    void exit_single_image_mode();
 
 private:
     std::string directory_;
@@ -40,8 +44,12 @@ private:
     moodycamel::ConcurrentQueue<UpdateEvent> update_queue_;
     ScanCoordinator* scanner_ = nullptr;
     ThumbnailPipeline* pipeline_ = nullptr;
+    FullResLoader* full_res_loader_ = nullptr;
     class FileWatcher* watcher_ = nullptr;
     class DatabaseManager* db_ = nullptr;
+
+    std::string pre_viewer_filter_;
+    std::string current_selected_filepath_;
 
     bool layout_dirty_ = false;
     double target_height_ = 150.0;

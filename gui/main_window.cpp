@@ -59,14 +59,40 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     // Wire info panel breadcrumb → directory filter
     // Only fires when info panel is already visible (panel must be shown to click it).
     info_panel_->on_dir_clicked = [this](const std::string& dir) {
+        if (!scrollbar_->visible()) {
+            exit_single_image_mode();
+        }
         apply_directory_filter(dir);
     };
 
+    info_panel_->on_file_clicked = [this](const std::string& filepath) {
+        size_t idx = store_.find_by_filepath(filepath);
+        if (idx != (size_t)-1) {
+            enter_single_image_mode(idx, filepath);
+        }
+    };
+
+    info_panel_->on_scroll_to_image = [this](const std::string& filepath) {
+        size_t idx = store_.find_by_filepath(filepath);
+        if (idx != (size_t)-1) {
+            int target_y = viewport_->scroll_to_image(idx);
+            scrollbar_->value(target_y);
+            viewport_->set_scroll_offset(target_y);
+            reprioritize_thumbnails();
+        }
+    };
+
     viewport_->on_image_clicked = [this](const std::string& path) {
+        current_selected_filepath_ = path;
         size_t idx = store_.find_by_filepath(path);
         if (idx != (size_t)-1) {
             info_panel_->display_info(store_.get(idx));
+            viewport_->set_selected_image(idx);
         }
+    };
+
+    viewport_->on_exit_single_image = [this]() {
+        exit_single_image_mode();
     };
 
     end();
@@ -76,6 +102,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
 MainWindow::~MainWindow() {
     if (scanner_) { scanner_->stop(); delete scanner_; }
     if (pipeline_) { pipeline_->stop(); delete pipeline_; }
+    if (full_res_loader_) { delete full_res_loader_; }
     if (watcher_) { watcher_->stop(); delete watcher_; }
     if (db_) { delete db_; }
     Fl::remove_timeout(timer_cb, this);
@@ -86,6 +113,8 @@ void MainWindow::start() {
     
     db_ = new DatabaseManager();
     db_->open(db_path);
+
+    full_res_loader_ = new FullResLoader(update_queue_);
 
     pipeline_ = new ThumbnailPipeline(update_queue_, db_path);
     pipeline_->start(4);
@@ -100,6 +129,38 @@ void MainWindow::start() {
 }
 
 // ── filter helpers ─────────────────────────────────────────────────────────
+
+void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& filepath) {
+    pre_viewer_filter_ = directory_filter_;
+    viewport_->enter_single_image(raw_idx);
+    full_res_loader_->request(raw_idx, filepath);
+    
+    std::string filename = std::filesystem::path(filepath).filename().string();
+    std::string label = "  Viewing: " + filename + "  [Loading full resolution...]";
+    statusbar_->copy_label(label.c_str());
+    statusbar_->redraw();
+    
+    scrollbar_->hide();
+    int vp_h = h() - MENU_H - STATUS_H;
+    int vp_w = w();
+    if (info_panel_visible_) vp_w -= INFO_W;
+    viewport_->resize(0, MENU_H, vp_w, vp_h); // Expand over scrollbar
+}
+
+void MainWindow::exit_single_image_mode() {
+    viewport_->exit_single_image();
+    directory_filter_ = pre_viewer_filter_;
+    full_res_loader_->cancel();
+    
+    scrollbar_->show();
+    int vp_h = h() - MENU_H - STATUS_H;
+    int vp_w = w() - SCROLL_W;
+    if (info_panel_visible_) vp_w -= INFO_W;
+    viewport_->resize(0, MENU_H, vp_w, vp_h);
+    
+    layout_dirty_ = true;
+    update_statusbar();
+}
 
 void MainWindow::apply_directory_filter(const std::string& dir) {
     directory_filter_ = dir;
@@ -168,6 +229,13 @@ void MainWindow::poll_events() {
                                      ev.thumb_rgb.width, ev.thumb_rgb.height);
             changed.push_back(ev.thumb_rgb.image_index);
             need_redraw = true;
+        } else if (ev.type == UpdateEvent::Type::FULL_RES_READY) {
+            viewport_->set_full_res_image(ev.full_res.rgb_data, ev.full_res.width, ev.full_res.height);
+            
+            std::string filename = std::filesystem::path(ev.full_res.filepath).filename().string();
+            std::string label = "  Viewing: " + filename;
+            statusbar_->copy_label(label.c_str());
+            statusbar_->redraw();
         } else if (ev.type == UpdateEvent::Type::IMAGE_DELETED) {
             std::cout << "DELETED: " << ev.deletion.filepath << std::endl;
             store_.remove_image(ev.deletion.filepath);
@@ -362,6 +430,9 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
 
 int MainWindow::handle(int event) {
     if (event == FL_MOUSEWHEEL) {
+        if (!scrollbar_->visible()) {
+            return Fl_Double_Window::handle(event);
+        }
         int dy = Fl::event_dy();
         if (Fl::event_state() & FL_CTRL) {
             if (dy > 0) {

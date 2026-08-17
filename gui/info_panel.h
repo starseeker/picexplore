@@ -4,6 +4,7 @@
 #include <FL/Fl_Text_Display.H>
 #include <FL/Fl_Text_Buffer.H>
 #include <FL/Fl_Box.H>
+#include <FL/Fl_Button.H>
 #include <string>
 #include <functional>
 #include <vector>
@@ -27,6 +28,12 @@ public:
     // Only wired when the info panel is already visible.
     std::function<void(const std::string&)> on_dir_clicked;
 
+    // Called when the filename segment in the breadcrumb is clicked.
+    std::function<void(const std::string&)> on_file_clicked;
+
+    // Called when the scroll-to-image button is clicked.
+    std::function<void(const std::string&)> on_scroll_to_image;
+
     virtual void resize(int X, int Y, int W, int H) override;
 
 private:
@@ -40,6 +47,15 @@ private:
     int              font_size_ = 12;
     std::string      root_dir_;
     std::string      current_filepath_; // path of last selected image
+
+    Fl_Button*       scroll_btn_;
+    static const int SCROLL_BTN_H = 30;
+
+    struct CrumbData {
+        std::string path;
+        InfoPanel* panel;
+        bool is_file = false;
+    };
 
     void clear_breadcrumb();  // frees user_data strings then clears the group
     void rebuild_breadcrumb();

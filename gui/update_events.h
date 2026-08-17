@@ -22,6 +22,7 @@ struct UpdateEvent {
         IMAGE_RENAMED,
         THUMB_READY,
         THUMB_RGB_READY,
+        FULL_RES_READY,
         SCAN_PROGRESS,
         SCAN_COMPLETE
     };
@@ -62,6 +63,15 @@ struct UpdateEvent {
         int width;
         int height;
     } thumb_rgb;
+
+    // Payload for FULL_RES_READY
+    struct {
+        size_t image_index;
+        std::string filepath;
+        std::vector<uint8_t> rgb_data;
+        int width;
+        int height;
+    } full_res;
 
     // Payload for SCAN_PROGRESS
     struct {
@@ -129,6 +139,19 @@ struct UpdateEvent {
         ev.thumb_rgb.rgb_data = rgb;
         ev.thumb_rgb.width = w;
         ev.thumb_rgb.height = h;
+        return ev;
+    }
+
+    static UpdateEvent make_full_res_ready(
+        size_t index, const std::string& filepath,
+        const std::vector<uint8_t>& rgb, int w, int h) {
+        UpdateEvent ev;
+        ev.type = Type::FULL_RES_READY;
+        ev.full_res.image_index = index;
+        ev.full_res.filepath = filepath;
+        ev.full_res.rgb_data = rgb;
+        ev.full_res.width = w;
+        ev.full_res.height = h;
         return ev;
     }
 
