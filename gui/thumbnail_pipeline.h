@@ -16,6 +16,8 @@ struct ThumbRequest {
     ThumbQuality target_quality;
     std::string hash;
     uint64_t generation;
+    int layout_w;
+    int layout_h;
 };
 
 class ThumbnailPipeline {
@@ -27,8 +29,10 @@ public:
     void start(int num_workers = 4);
     void stop();
 
-    void request_thumbnail(size_t image_index, const std::string& filepath, const std::string& hash, ThumbQuality quality, bool urgent, uint64_t generation = 0);
+    void request_thumbnail(size_t image_index, const std::string& filepath, const std::string& hash, ThumbQuality quality, bool urgent, uint64_t generation = 0, int layout_w = 0, int layout_h = 0);
     
+    bool decode_jpeg(const uint8_t* jpeg_data, size_t jpeg_size, std::vector<uint8_t>& rgb_data, int& width, int& height);
+
     void set_generation(uint64_t gen);
     uint64_t get_generation() const;
 

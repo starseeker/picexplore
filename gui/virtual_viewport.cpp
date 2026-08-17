@@ -61,16 +61,14 @@ void VirtualViewport::draw() {
         if (box.y + box.h < view_top) continue;
         if (box.y > view_bottom) break;
 
-        int draw_x = x() + static_cast<int>(box.x);
-        int draw_y = y() + static_cast<int>(box.y) - scroll_offset_;
+        int draw_x = static_cast<int>(x() + box.x);
+        int draw_y = static_cast<int>(y() + box.y - scroll_offset_);
         int draw_w = static_cast<int>(box.w);
         int draw_h = static_cast<int>(box.h);
 
-        std::cout << "Box " << box.image_index << " (y=" << box.y << ", h=" << box.h << ", vt=" << view_top << ", vb=" << view_bottom << ")" << std::endl;
-
         auto& entry = store_.get(box.image_index);
 
-        if (entry.best_quality == ThumbQuality::NONE || entry.decoded.rgb_data.empty()) {
+        if (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty()) {
             fl_color(FL_DARK3);
             fl_rectf(draw_x, draw_y, draw_w, draw_h);
             fl_color(FL_WHITE);
@@ -99,7 +97,7 @@ void VirtualViewport::draw() {
         } else {
             const uint8_t* img_data = store_.get_scaled_image(box.image_index, draw_w, draw_h);
             if (img_data) {
-                fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, draw_w * 3);
+                fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
             }
         }
     }

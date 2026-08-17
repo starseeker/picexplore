@@ -21,6 +21,7 @@ struct UpdateEvent {
         IMAGE_DELETED,
         IMAGE_RENAMED,
         THUMB_READY,
+        THUMB_RGB_READY,
         SCAN_PROGRESS,
         SCAN_COMPLETE
     };
@@ -51,6 +52,16 @@ struct UpdateEvent {
         int width;
         int height;
     } thumb;
+
+    // Payload for THUMB_RGB_READY
+    struct {
+        size_t image_index;
+        std::string filepath;
+        ThumbQuality quality;
+        std::vector<uint8_t> rgb_data;
+        int width;
+        int height;
+    } thumb_rgb;
 
     // Payload for SCAN_PROGRESS
     struct {
@@ -104,6 +115,20 @@ struct UpdateEvent {
         ev.thumb.jpeg_data = jpeg;
         ev.thumb.width = w;
         ev.thumb.height = h;
+        return ev;
+    }
+
+    static UpdateEvent make_thumb_rgb_ready(
+        size_t index, const std::string& filepath, ThumbQuality q,
+        const std::vector<uint8_t>& rgb, int w, int h) {
+        UpdateEvent ev;
+        ev.type = Type::THUMB_RGB_READY;
+        ev.thumb_rgb.image_index = index;
+        ev.thumb_rgb.filepath = filepath;
+        ev.thumb_rgb.quality = q;
+        ev.thumb_rgb.rgb_data = rgb;
+        ev.thumb_rgb.width = w;
+        ev.thumb_rgb.height = h;
         return ev;
     }
 

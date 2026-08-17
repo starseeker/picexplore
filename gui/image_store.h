@@ -60,10 +60,12 @@ public:
     // Rename an image (e.g. from file rename)
     void rename_image(const std::string& old_filepath, const std::string& new_filepath);
 
-    // Update thumbnail data (called from main thread after polling queue)
     void set_thumbnail(size_t index, const std::string& filepath, ThumbQuality quality,
                        const uint8_t* jpeg_data, size_t jpeg_size,
                        int width, int height);
+
+    void set_thumbnail_rgb(size_t index, const std::string& filepath, ThumbQuality quality,
+                           std::vector<uint8_t>&& rgb_data, int width, int height);
 
     // Access
     ImageEntry& get(size_t index);

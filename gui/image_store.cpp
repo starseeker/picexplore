@@ -3,6 +3,7 @@
 #include <setjmp.h>
 #include <algorithm>
 #include "../third_party/stb/stb_image_resize2.h"
+#include <iostream>
 
 ImageStore::ImageStore() {
 }
@@ -177,6 +178,42 @@ void ImageStore::set_thumbnail(size_t index, const std::string& filepath, ThumbQ
     }
 }
 
+void ImageStore::set_thumbnail_rgb(size_t index, const std::string& filepath, ThumbQuality quality,
+                                   std::vector<uint8_t>&& rgb_data, int width, int height) {
+    if (index >= entries_.size()) return;
+    
+    if (entries_[index].filepath != filepath) {
+        index = find_by_filepath(filepath);
+        if (index == static_cast<size_t>(-1)) return;
+    }
+    
+    auto& entry = entries_[index];
+    
+    if (quality < entry.best_quality && entry.scaled.layout_width == width) return;
+
+    entry.best_quality = quality;
+
+    scaled_rgb_memory_used_ -= entry.scaled.rgb_data.size();
+    
+    entry.scaled.rgb_data = std::move(rgb_data);
+    entry.scaled.width = width;
+    entry.scaled.height = height;
+    entry.scaled.layout_width = width;
+    entry.scaled.layout_height = height;
+    
+    scaled_rgb_memory_used_ += entry.scaled.rgb_data.size();
+
+    // We no longer store decoded JPEGs
+    decoded_rgb_memory_used_ -= entry.decoded.rgb_data.size();
+    entry.decoded.rgb_data.clear();
+    entry.decoded.rgb_data.shrink_to_fit();
+    entry.decoded.width = 0;
+    entry.decoded.height = 0;
+
+    evict_memory_if_needed();
+    update_lru(index);
+}
+
 ImageEntry& ImageStore::get(size_t index) {
     update_lru(index);
     return entries_[index];
@@ -188,23 +225,15 @@ const ImageEntry& ImageStore::get(size_t index) const {
 
 const uint8_t* ImageStore::get_scaled_image(size_t index, int draw_w, int draw_h) {
     auto& entry = get(index); // updates LRU
-    if (entry.decoded.rgb_data.empty()) return nullptr;
+    
+    if (entry.scaled.rgb_data.empty()) {
+        return nullptr;
+    }
 
     if (entry.scaled.layout_width != draw_w || entry.scaled.layout_height != draw_h) {
-        scaled_rgb_memory_used_ -= entry.scaled.rgb_data.size();
-        
-        entry.scaled.layout_width = draw_w;
-        entry.scaled.layout_height = draw_h;
-        entry.scaled.width = draw_w;
-        entry.scaled.height = draw_h;
-        entry.scaled.rgb_data.resize(draw_w * draw_h * 3);
-        
-        stbir_resize_uint8_linear(entry.decoded.rgb_data.data(), entry.decoded.width, entry.decoded.height, 0,
-                                  entry.scaled.rgb_data.data(), draw_w, draw_h, 0, STBIR_RGB);
-                                  
-        scaled_rgb_memory_used_ += entry.scaled.rgb_data.size();
-        evict_memory_if_needed();
+        return nullptr;
     }
+    
     return entry.scaled.rgb_data.data();
 }
 

@@ -104,6 +104,11 @@ void MainWindow::poll_events() {
                                  ev.thumb.width, ev.thumb.height);
             changed.push_back(ev.thumb.image_index);
             need_redraw = true;
+        } else if (ev.type == UpdateEvent::Type::THUMB_RGB_READY) {
+            store_.set_thumbnail_rgb(ev.thumb_rgb.image_index, ev.thumb_rgb.filepath, ev.thumb_rgb.quality,
+                                     std::move(ev.thumb_rgb.rgb_data), ev.thumb_rgb.width, ev.thumb_rgb.height);
+            changed.push_back(ev.thumb_rgb.image_index);
+            need_redraw = true;
         } else if (ev.type == UpdateEvent::Type::IMAGE_DELETED) {
             std::cout << "DELETED: " << ev.deletion.filepath << std::endl;
             store_.remove_image(ev.deletion.filepath);
@@ -143,7 +148,11 @@ void MainWindow::poll_events() {
         layout_result_ = layout_engine_.compute(store_.get_aspect_ratios(), viewport_->content_width(), target_height_);
         viewport_->set_layout(&layout_result_);
         
-        scrollbar_->value(viewport_->scroll_offset(), viewport_->h(), 0, layout_result_.total_height);
+        int max_scroll = std::max(0, static_cast<int>(layout_result_.total_height) - viewport_->h());
+        int current_scroll = std::clamp(viewport_->scroll_offset(), 0, max_scroll);
+        
+        viewport_->set_scroll_offset(current_scroll);
+        scrollbar_->value(current_scroll, viewport_->h(), 0, layout_result_.total_height);
         
         layout_dirty_ = false;
         need_redraw = true;
@@ -165,6 +174,11 @@ void MainWindow::reprioritize_thumbnails() {
         const auto& entry = store_.get(idx);
         
         double layout_w = entry.aspect_ratio * target_height_;
+        double layout_h = target_height_;
+        if (idx < layout_result_.boxes.size()) {
+            layout_w = layout_result_.boxes[idx].w;
+            layout_h = layout_result_.boxes[idx].h;
+        }
         
         ThumbQuality needed = ThumbQuality::SMALL;
         if (layout_w < 96) needed = ThumbQuality::SMALL;
@@ -173,12 +187,17 @@ void MainWindow::reprioritize_thumbnails() {
         else if (layout_w < 768) needed = ThumbQuality::XLARGE;
         else needed = ThumbQuality::FULL;
         
-        if (entry.best_quality == ThumbQuality::NONE) {
-            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash, ThumbQuality::SMALL, true, current_generation_);
-        }
+        bool size_mismatch = (entry.scaled.layout_width != static_cast<int>(layout_w) || 
+                              entry.scaled.layout_height != static_cast<int>(layout_h));
         
-        if (entry.best_quality < needed) {
-            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash, needed, false, current_generation_);
+        if (entry.best_quality == ThumbQuality::NONE) {
+            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash, ThumbQuality::SMALL, true, current_generation_, static_cast<int>(layout_w), static_cast<int>(layout_h));
+            if (needed > ThumbQuality::SMALL) {
+                pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash, needed, false, current_generation_, static_cast<int>(layout_w), static_cast<int>(layout_h));
+            }
+        } else if (entry.best_quality < needed || size_mismatch) {
+            ThumbQuality req_quality = std::max(needed, entry.best_quality);
+            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash, req_quality, false, current_generation_, static_cast<int>(layout_w), static_cast<int>(layout_h));
         }
     }
 }
