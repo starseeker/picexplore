@@ -1,6 +1,6 @@
 # picexplore
 
-![PicExplore GUI viewing NARA images](doc/nara_demo.png)
+![PicExplore GUI viewing NARA images](doc/nara_example.png)
 
 Program for exploring what images are present in a filesystem.
 
