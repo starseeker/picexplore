@@ -87,8 +87,13 @@ void VirtualViewport::draw_grid() {
         }
 
         auto& entry = store_.get(box.image_index);
+        const uint8_t* img_data = nullptr;
+        
+        if (entry.best_quality != ThumbQuality::NONE && !entry.scaled.rgb_data.empty()) {
+            img_data = store_.get_scaled_image(box.image_index, draw_w, draw_h);
+        }
 
-        if (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty()) {
+        if (!img_data) {
             fl_color(FL_DARK3);
             fl_rectf(draw_x, draw_y, draw_w, draw_h);
             fl_color(FL_WHITE);
@@ -115,10 +120,7 @@ void VirtualViewport::draw_grid() {
             // Draw text centered and wrapped inside the box, with 10px padding
             fl_draw(text.c_str(), draw_x + 10, draw_y + 10, draw_w - 20, draw_h - 20, FL_ALIGN_CENTER | FL_ALIGN_WRAP, nullptr, 0);
         } else {
-            const uint8_t* img_data = store_.get_scaled_image(box.image_index, draw_w, draw_h);
-            if (img_data) {
-                fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
-            }
+            fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
         }
     }
 

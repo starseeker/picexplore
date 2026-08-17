@@ -213,10 +213,20 @@ void MainWindow::poll_events() {
     while (update_queue_.try_dequeue(ev) && process_count < 200) {
         process_count++;
         if (ev.type == UpdateEvent::Type::IMAGE_DISCOVERED) {
-            store_.add_image(ev.image.filepath, ev.image.aspect_ratio,
-                             ev.image.width, ev.image.height,
-                             ev.image.file_size, ev.image.file_timestamp);
+            size_t idx = store_.add_image(ev.image.filepath, ev.image.aspect_ratio,
+                                          ev.image.width, ev.image.height,
+                                          ev.image.file_size, ev.image.file_timestamp);
+            
+            store_.get(idx).best_quality = ev.image.best_quality;
+            store_.get(idx).content_hash = ev.image.content_hash;
             layout_dirty_ = true;
+            
+            if (ev.image.best_quality == ThumbQuality::NONE) {
+                // Queue a background task to generate the thumbnail so the DB fully populates.
+                // Generation 0 ensures it is not discarded when the user scrolls.
+                pipeline_->request_thumbnail(idx, ev.image.filepath, ev.image.content_hash, 
+                                             ThumbQuality::SMALL, false, 0, 0, 0);
+            }
         } else if (ev.type == UpdateEvent::Type::THUMB_READY) {
             store_.set_thumbnail(ev.thumb.image_index, ev.thumb.filepath, ev.thumb.quality,
                                  ev.thumb.jpeg_data.data(), ev.thumb.jpeg_data.size(),
@@ -297,8 +307,27 @@ void MainWindow::reprioritize_thumbnails() {
     auto visible = viewport_->get_visible_indices();
     store_.mark_visible(visible);
     
+    bool view_changed = false;
+    if (visible.size() != last_visible_.size() || 
+        target_height_ != last_target_height_ ||
+        viewport_->w() != last_viewport_width_) {
+        view_changed = true;
+    } else {
+        for (size_t i = 0; i < visible.size(); ++i) {
+            if (visible[i] != last_visible_[i]) {
+                view_changed = true;
+                break;
+            }
+        }
+    }
+    
+    if (!view_changed) return;
+    
     current_generation_++;
     pipeline_->set_generation(current_generation_);
+    last_visible_ = visible;
+    last_target_height_ = target_height_;
+    last_viewport_width_ = viewport_->w();
     
     for (size_t idx : visible) {
         // idx is a raw store index (box.image_index carries the raw index now)
@@ -337,7 +366,7 @@ void MainWindow::reprioritize_thumbnails() {
         } else if (entry.best_quality < needed || size_mismatch) {
             ThumbQuality req_quality = std::max(needed, entry.best_quality);
             pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
-                                         req_quality, false, current_generation_,
+                                         req_quality, true, current_generation_,
                                          static_cast<int>(layout_w), static_cast<int>(layout_h));
         }
     }

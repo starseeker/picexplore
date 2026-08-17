@@ -51,7 +51,11 @@ private:
     std::string pre_viewer_filter_;
     std::string current_selected_filepath_;
 
-    bool layout_dirty_ = false;
+    bool layout_dirty_ = true;
+    
+    std::vector<size_t> last_visible_;
+    double last_target_height_ = 0.0;
+    int last_viewport_width_ = 0;
     double target_height_ = 150.0;
     uint64_t current_generation_ = 0;
 

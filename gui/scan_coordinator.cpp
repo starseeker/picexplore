@@ -42,9 +42,21 @@ void ScanCoordinator::run() {
         images = db.get_all_images();
         if (!images.empty()) {
             std::cout << "Loading images from database: " << db_path_ << std::endl;
+            
+            // Normalize directory string for safe prefix matching
+            std::string prefix = directory_;
+            if (!prefix.empty() && prefix.back() != '/' && prefix.back() != '\\') {
+                prefix += '/';
+            }
+            
             int found = 0;
             for (const auto& img : images) {
                 if (stop_requested_) break;
+                
+                // Only load images that belong to the currently requested directory
+                if (img.path.find(prefix) != 0 && img.path != directory_) {
+                    continue;
+                }
                 
                 if (!fs::exists(img.path)) {
                     std::cout << "File missing, removing from database: " << img.path << std::endl;
