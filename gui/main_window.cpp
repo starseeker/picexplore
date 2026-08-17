@@ -11,8 +11,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     
     int scroll_w = 20;
     int menu_h = 25;
-    int info_h = 25;
-    int vp_h = h - menu_h - info_h;
+    int vp_h = h - menu_h;
 
     menubar_ = new Fl_Menu_Bar(0, 0, w, menu_h);
     menubar_->add("Sort/Alphabetical (A-Z)", 0, menu_cb, (void*)1);
@@ -31,13 +30,16 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     scrollbar_->type(FL_VERTICAL);
     scrollbar_->callback(scroll_cb, this);
 
-    info_bar_ = new Fl_Output(0, h - info_h, w, info_h);
-    info_bar_->box(FL_FLAT_BOX);
-    info_bar_->color(FL_LIGHT2);
-    info_bar_->textsize(12);
+    info_panel_ = new InfoPanel(w, menu_h, 250, vp_h);
+    info_panel_->hide();
+
+    menubar_->add("View/Information Panel", 0, menu_cb, (void*)10, FL_MENU_TOGGLE);
 
     viewport_->on_image_clicked = [this](const std::string& path) {
-        info_bar_->value(path.c_str());
+        size_t idx = store_.find_by_filepath(path);
+        if (idx != (size_t)-1) {
+            info_panel_->display_info(store_.get(idx));
+        }
     };
 
     end();
@@ -206,13 +208,24 @@ void MainWindow::resize(int X, int Y, int W, int H) {
     Fl_Double_Window::resize(X, Y, W, H);
     int scroll_w = scrollbar_->w();
     int menu_h = menubar_->h();
-    int info_h = info_bar_->h();
-    int vp_h = H - menu_h - info_h;
+    int vp_h = H - menu_h;
+
+    int info_w = 250;
+    int vp_w = W - scroll_w;
+    if (info_panel_visible_) {
+        vp_w -= info_w;
+    }
 
     menubar_->resize(0, 0, W, menu_h);
-    viewport_->resize(0, menu_h, W - scroll_w, vp_h);
-    scrollbar_->resize(W - scroll_w, menu_h, scroll_w, vp_h);
-    info_bar_->resize(0, H - info_h, W, info_h);
+    viewport_->resize(0, menu_h, vp_w, vp_h);
+    scrollbar_->resize(vp_w, menu_h, scroll_w, vp_h);
+    
+    if (info_panel_visible_) {
+        info_panel_->resize(vp_w + scroll_w, menu_h, info_w, vp_h);
+        info_panel_->show();
+    } else {
+        info_panel_->hide();
+    }
     
     layout_dirty_ = true;
 }
@@ -242,6 +255,10 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 7: win->target_height_ = std::min(win->target_height_ * 1.2, 800.0); win->layout_dirty_ = true; break;
         case 8: win->target_height_ = std::max(win->target_height_ / 1.2, 50.0); win->layout_dirty_ = true; break;
         case 9: win->target_height_ = 150.0; win->layout_dirty_ = true; break;
+        case 10: 
+            win->info_panel_visible_ = !win->info_panel_visible_; 
+            win->resize(win->x(), win->y(), win->w(), win->h()); 
+            break;
         default: return;
     }
     

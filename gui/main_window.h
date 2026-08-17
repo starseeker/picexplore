@@ -7,6 +7,7 @@
 #include "virtual_viewport.h"
 #include "scan_coordinator.h"
 #include "thumbnail_pipeline.h"
+#include "info_panel.h"
 #include <string>
 
 class MainWindow : public Fl_Double_Window {
@@ -24,8 +25,9 @@ private:
     
     VirtualViewport* viewport_;
     Fl_Scrollbar* scrollbar_;
-    class Fl_Output* info_bar_;
+    InfoPanel* info_panel_;
     class Fl_Menu_Bar* menubar_;
+    bool info_panel_visible_ = false;
 
     moodycamel::ConcurrentQueue<UpdateEvent> update_queue_;
     ScanCoordinator* scanner_ = nullptr;
