@@ -319,10 +319,20 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
         entries_[i].index = i;
     }
     
-    // Clear LRU and visibility state because indices changed completely
+    // Clear visibility state because indices changed completely
     currently_visible_.clear();
+    
+    // We cannot just clear lru_list_ because the entries still hold memory.
+    // If we clear lru_list_, the eviction engine cannot free the memory of sorted images,
+    // leading to an infinite eviction loop for new images.
     lru_list_.clear();
     lru_map_.clear();
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        if (!entries_[i].decoded.rgb_data.empty() || !entries_[i].scaled.rgb_data.empty()) {
+            lru_list_.push_back(i);
+            lru_map_[i] = std::prev(lru_list_.end());
+        }
+    }
 }
 
 size_t ImageStore::find_by_filepath(const std::string& filepath) const {

@@ -138,6 +138,9 @@ void VirtualViewport::draw_grid() {
 int VirtualViewport::handle(int event) {
     if (view_mode_ == ViewMode::SINGLE_IMAGE) {
         switch (event) {
+            case FL_FOCUS:
+            case FL_UNFOCUS:
+                return 1;
             case FL_MOUSEWHEEL: {
                 int dy = Fl::event_dy();
                 float zoom_factor = (dy < 0) ? 1.1f : 0.9f;
@@ -204,7 +207,11 @@ int VirtualViewport::handle(int event) {
         }
     } else {
         switch (event) {
+            case FL_FOCUS:
+            case FL_UNFOCUS:
+                return 1;
             case FL_PUSH:
+                take_focus();
                 if (layout_ && on_image_clicked) {
                     int mx = Fl::event_x() - x();
                     int my = Fl::event_y() - y() + scroll_offset_;
@@ -214,7 +221,11 @@ int VirtualViewport::handle(int event) {
                             my >= box.y && my <= box.y + box.h) {
                             try {
                                 const auto& entry = store_.get(box.image_index);
-                                on_image_clicked(entry.filepath);
+                                if (Fl::event_clicks() > 0 && on_image_double_clicked) {
+                                    on_image_double_clicked(entry.filepath);
+                                } else {
+                                    on_image_clicked(entry.filepath);
+                                }
                             } catch (...) {}
                             return 1;
                         }

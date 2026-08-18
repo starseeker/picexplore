@@ -26,7 +26,8 @@ struct UpdateEvent {
         THUMB_FAILED,
         FULL_RES_READY,
         SCAN_PROGRESS,
-        SCAN_COMPLETE
+        SCAN_COMPLETE,
+        TILE_GENERATION_PROGRESS
     };
 
     Type type;
@@ -99,7 +100,25 @@ struct UpdateEvent {
         ThumbQuality target_quality;
     } failed;
 
+    // Payload for TILE_GENERATION_PROGRESS
+    struct {
+        size_t image_index;
+        std::string filepath;
+        int current_row;
+        int total_rows;
+    } tile_progress;
+
     // Helper constructors
+    static UpdateEvent make_tile_progress(size_t index, const std::string& filepath, int current, int total) {
+        UpdateEvent ev;
+        ev.type = Type::TILE_GENERATION_PROGRESS;
+        ev.tile_progress.image_index = index;
+        ev.tile_progress.filepath = filepath;
+        ev.tile_progress.current_row = current;
+        ev.tile_progress.total_rows = total;
+        return ev;
+    }
+
     static UpdateEvent make_image_discovered(
         const std::string& path, const std::string& hash,
         int w, int h, double ar, uintmax_t fsize = 0, uintmax_t ftime = 0,

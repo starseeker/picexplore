@@ -34,7 +34,7 @@ public:
 
 private:
     void worker_thread();
-    bool generate_tiles(const std::string& filepath, const std::string& hash);
+    bool generate_tiles(size_t image_index, const std::string& filepath, const std::string& hash);
 
     moodycamel::ConcurrentQueue<UpdateEvent>& update_queue_;
     std::string cache_dir_;

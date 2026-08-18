@@ -88,9 +88,15 @@ void ScanCoordinator::run() {
                                 fs::last_write_time(img.path).time_since_epoch()).count();
                 } catch (...) {}
 
+                int actual_w = 0, actual_h = 0, comp = 0;
+                if (!stbi_info(img.path.c_str(), &actual_w, &actual_h, &comp) || actual_w <= 0 || actual_h <= 0) {
+                    actual_w = img.thumb_width;
+                    actual_h = img.thumb_height;
+                }
+
                 UpdateEvent ev = UpdateEvent::make_image_discovered(
                     img.path, img.hash,
-                    img.thumb_width, img.thumb_height, img.aspect_ratio, 
+                    actual_w, actual_h, img.aspect_ratio, 
                     fsize, ftime,
                     bq, {}, // Skip passing jpeg data to save memory, ThumbnailPipeline will load it
                     img.thumb_width, img.thumb_height

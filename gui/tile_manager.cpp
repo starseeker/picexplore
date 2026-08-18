@@ -98,7 +98,7 @@ void TileManager::worker_thread() {
     while (!stop_requested_) {
         TileRequest req;
         if (request_queue_.try_dequeue(req)) {
-            if (generate_tiles(req.filepath, req.hash)) {
+            if (generate_tiles(req.image_index, req.filepath, req.hash)) {
                 std::lock_guard<std::mutex> lock(ready_mutex_);
                 ready_hashes_.insert(req.hash);
                 // We use empty rgb_data with w=0, h=0 to signal that tiles are ready
@@ -110,7 +110,7 @@ void TileManager::worker_thread() {
     }
 }
 
-bool TileManager::generate_tiles(const std::string& filepath, const std::string& hash) {
+bool TileManager::generate_tiles(size_t image_index, const std::string& filepath, const std::string& hash) {
     std::string out_dir = cache_dir_ + "/" + hash;
     std::filesystem::create_directories(out_dir);
 
@@ -159,6 +159,9 @@ bool TileManager::generate_tiles(const std::string& filepath, const std::string&
 
     for (int ty = 0; ty < rows; ty++) {
         if (stop_requested_) break;
+        
+        // Report progress every row chunk
+        update_queue_.enqueue(UpdateEvent::make_tile_progress(image_index, filepath, ty, rows));
         int current_tile_height = std::min(TILE_SIZE, height - ty * TILE_SIZE);
         
         for (int y = 0; y < current_tile_height; y++) {

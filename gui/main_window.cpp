@@ -99,6 +99,13 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
         }
     };
 
+    viewport_->on_image_double_clicked = [this](const std::string& path) {
+        size_t idx = store_.find_by_filepath(path);
+        if (idx != (size_t)-1) {
+            enter_single_image_mode(idx, path);
+        }
+    };
+
     viewport_->on_exit_single_image = [this]() {
         exit_single_image_mode();
     };
@@ -266,7 +273,7 @@ void MainWindow::poll_events() {
                                  ev.thumb.width, ev.thumb.height);
             changed.push_back(ev.thumb.image_index);
             need_redraw = true;
-            if (was_none) {
+            if (was_none && store_.get(ev.thumb.image_index).best_quality != ThumbQuality::NONE) {
                 db_build_completed_++;
                 update_statusbar();
             }
@@ -277,7 +284,7 @@ void MainWindow::poll_events() {
                                      ev.thumb_rgb.width, ev.thumb_rgb.height, ev.thumb_rgb.generation);
             changed.push_back(ev.thumb_rgb.image_index);
             need_redraw = true;
-            if (was_none) {
+            if (was_none && store_.get(ev.thumb_rgb.image_index).best_quality != ThumbQuality::NONE) {
                 db_build_completed_++;
                 update_statusbar();
             }
@@ -287,7 +294,7 @@ void MainWindow::poll_events() {
             store_.set_thumbnail(ev.failed.image_index, ev.failed.filepath, ThumbQuality::FAILED, nullptr, 0, 0, 0);
             changed.push_back(ev.failed.image_index);
             need_redraw = true;
-            if (was_none) {
+            if (was_none && store_.get(ev.failed.image_index).best_quality != ThumbQuality::NONE) {
                 db_build_completed_++;
                 update_statusbar();
             }
@@ -298,6 +305,15 @@ void MainWindow::poll_events() {
                 
                 std::string filename = std::filesystem::path(ev.full_res.filepath).filename().string();
                 std::string label = "  Viewing: " + filename;
+                statusbar_->copy_label(label.c_str());
+                statusbar_->redraw();
+            }
+        } else if (ev.type == UpdateEvent::Type::TILE_GENERATION_PROGRESS) {
+            if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
+                viewport_->current_single_image() == ev.tile_progress.image_index) {
+                std::string filename = std::filesystem::path(ev.tile_progress.filepath).filename().string();
+                int percent = (ev.tile_progress.current_row * 100) / std::max(1, ev.tile_progress.total_rows);
+                std::string label = "  Viewing: " + filename + "  [Generating Map: " + std::to_string(percent) + "%]";
                 statusbar_->copy_label(label.c_str());
                 statusbar_->redraw();
             }

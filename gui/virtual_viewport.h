@@ -39,6 +39,7 @@ public:
     int content_width() const { return w(); }
 
     std::function<void(const std::string&)> on_image_clicked;
+    std::function<void(const std::string&)> on_image_double_clicked;
     std::function<void()> on_exit_single_image;
 
 protected:
