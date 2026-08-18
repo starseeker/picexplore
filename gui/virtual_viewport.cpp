@@ -34,12 +34,12 @@ void VirtualViewport::set_selected_image(size_t raw_idx) {
     }
 }
 
-std::vector<size_t> VirtualViewport::get_visible_indices() const {
+std::vector<size_t> VirtualViewport::get_visible_indices(int margin_y) const {
     std::vector<size_t> visible;
     if (!layout_) return visible;
 
-    int view_top = scroll_offset_;
-    int view_bottom = scroll_offset_ + h();
+    int view_top = scroll_offset_ - margin_y;
+    int view_bottom = scroll_offset_ + h() + margin_y;
 
     for (const auto& box : layout_->boxes) {
         if (box.y + box.h >= view_top && box.y <= view_bottom) {

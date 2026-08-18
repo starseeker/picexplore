@@ -34,7 +34,7 @@ public:
 
     void apply_updates(const std::vector<size_t>& changed_indices);
 
-    std::vector<size_t> get_visible_indices() const;
+    std::vector<size_t> get_visible_indices(int margin_y = 0) const;
 
     int content_width() const { return w(); }
 

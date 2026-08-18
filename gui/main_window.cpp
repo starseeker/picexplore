@@ -7,6 +7,7 @@
 #include <FL/fl_ask.H>
 #include <filesystem>
 #include <thread>
+#include <unordered_set>
 
 static constexpr int MENU_H   = 25;
 static constexpr int STATUS_H = 20;
@@ -417,8 +418,9 @@ void MainWindow::reprioritize_thumbnails() {
         
         bool size_mismatch = (entry.scaled.layout_width  != static_cast<int>(layout_w) ||
                               entry.scaled.layout_height != static_cast<int>(layout_h));
+        bool needs_upgrade = (entry.scaled.quality < needed);
         
-        bool missing_or_mismatch = (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch);
+        bool missing_or_mismatch = (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch || needs_upgrade);
         
         if (missing_or_mismatch) {
             store_.get(idx).last_requested_generation = current_generation_;
@@ -436,12 +438,45 @@ void MainWindow::reprioritize_thumbnails() {
                                                  needed, false, current_generation_,
                                                  static_cast<int>(layout_w), static_cast<int>(layout_h));
                 }
-            } else if (entry.best_quality < needed || size_mismatch) {
+            } else if (needs_upgrade || size_mismatch) {
                 ThumbQuality req_quality = std::max(needed, entry.best_quality);
                 pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
                                              req_quality, true, current_generation_,
                                              static_cast<int>(layout_w), static_cast<int>(layout_h));
             }
+        }
+    }
+    
+    // Prefetch thumbnails just outside the viewport (e.g. +/- 2 screens)
+    auto prefetch = viewport_->get_visible_indices(viewport_->h() * 2);
+    std::unordered_set<size_t> visible_set(visible.begin(), visible.end());
+    
+    for (size_t idx : prefetch) {
+        if (visible_set.count(idx)) continue;
+        
+        const auto& entry = store_.get(idx);
+        
+        double layout_w = entry.aspect_ratio * target_height_;
+        double layout_h = target_height_;
+        for (const auto& box : layout_result_.boxes) {
+            if (box.image_index == idx) {
+                layout_w = box.w;
+                layout_h = box.h;
+                break;
+            }
+        }
+        
+        // We only prefetch SMALL to save memory and CPU
+        ThumbQuality needed = ThumbQuality::SMALL;
+        bool size_mismatch = (entry.scaled.layout_width  != static_cast<int>(layout_w) ||
+                              entry.scaled.layout_height != static_cast<int>(layout_h));
+        bool missing_or_mismatch = (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch);
+        
+        if (missing_or_mismatch && entry.last_requested_generation < current_generation_) {
+            store_.get(idx).last_requested_generation = current_generation_;
+            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
+                                         needed, false, current_generation_,
+                                         static_cast<int>(layout_w), static_cast<int>(layout_h));
         }
     }
 }
