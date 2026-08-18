@@ -68,8 +68,6 @@ void VirtualViewport::draw_grid() {
     int view_top = scroll_offset_;
     int view_bottom = scroll_offset_ + h();
 
-    std::cout << "VirtualViewport::draw() called! layout_->boxes.size() = " << layout_->boxes.size() << std::endl;
-
     fl_push_clip(x(), y(), w(), h());
 
     for (const auto& box : layout_->boxes) {
@@ -348,25 +346,43 @@ void VirtualViewport::draw_single_image() {
                 fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
             }
         } else {
-            // Custom zoom & pan
+            // Custom zoom & pan: only resample the visible viewport sub-region!
             float target_orig_w = tile_manager_ ? tile_orig_w_ : img_w;
             float target_orig_h = tile_manager_ ? tile_orig_h_ : img_h;
             
             int draw_w = (int)(target_orig_w * zoom_);
             int draw_h = (int)(target_orig_h * zoom_);
-            int draw_x = x() + (int)pan_x_;
-            int draw_y = y() + (int)pan_y_;
+            int screen_x = x() + (int)pan_x_;
+            int screen_y = y() + (int)pan_y_;
 
-            if (draw_w > 0 && draw_h > 0 && (draw_w != img_w || draw_h != img_h)) {
-                std::vector<uint8_t> scaled_data(draw_w * draw_h * 3);
-                stbir_resize_uint8_linear(
-                    img_data, img_w, img_h, 0,
-                    scaled_data.data(), draw_w, draw_h, 0,
-                    (stbir_pixel_layout)3
-                );
-                fl_draw_image(scaled_data.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
-            } else if (draw_w > 0 && draw_h > 0) {
-                fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
+            // Intersection between viewport [x(), y(), w(), h()] and drawn image rect [screen_x, screen_y, draw_w, draw_h]
+            int clip_x0 = std::max(x(), screen_x);
+            int clip_y0 = std::max(y(), screen_y);
+            int clip_x1 = std::min(x() + w(), screen_x + draw_w);
+            int clip_y1 = std::min(y() + h(), screen_y + draw_h);
+
+            if (clip_x1 > clip_x0 && clip_y1 > clip_y0 && draw_w > 0 && draw_h > 0) {
+                int out_w = clip_x1 - clip_x0;
+                int out_h = clip_y1 - clip_y0;
+
+                int subx = clip_x0 - screen_x;
+                int suby = clip_y0 - screen_y;
+
+                double s0 = (double)subx / draw_w;
+                double t0 = (double)suby / draw_h;
+                double s1 = (double)(subx + out_w) / draw_w;
+                double t1 = (double)(suby + out_h) / draw_h;
+
+                std::vector<uint8_t> scaled_data(out_w * out_h * 3);
+                STBIR_RESIZE resize;
+                stbir_resize_init(&resize,
+                                  img_data, img_w, img_h, 0,
+                                  scaled_data.data(), out_w, out_h, 0,
+                                  STBIR_RGB, STBIR_TYPE_UINT8);
+                stbir_set_input_subrect(&resize, s0, t0, s1, t1);
+                stbir_resize_extended(&resize);
+
+                fl_draw_image(scaled_data.data(), clip_x0, clip_y0, out_w, out_h, 3, 0);
             }
         }
 

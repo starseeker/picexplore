@@ -8,14 +8,15 @@
 #include <filesystem>
 #include <thread>
 #include <unordered_set>
+#include <xxhash.h>
 
 static constexpr int MENU_H   = 25;
 static constexpr int STATUS_H = 20;
 static constexpr int SCROLL_W = 20;
 static constexpr int INFO_W   = 250;
 
-MainWindow::MainWindow(int w, int h, const char* title, const std::string& directory)
-    : Fl_Double_Window(w, h, title), directory_(directory) {
+MainWindow::MainWindow(int w, int h, const char* title, const std::string& directory, const std::string& db_path)
+    : Fl_Double_Window(w, h, title), directory_(directory), db_path_(db_path) {
 
     // Create ~/.cache/picexplore for tiles
     const char* home = getenv("HOME");
@@ -124,19 +125,47 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::start() {
-    std::string db_path = "./images.db";
+    namespace fs = std::filesystem;
+    
+    // Resolve database path
+    if (db_path_.empty()) {
+        std::string canon_dir = directory_;
+        try {
+            canon_dir = fs::canonical(directory_).string();
+        } catch (...) {}
+
+        fs::path local_db = fs::path(canon_dir) / "images.db";
+        if (fs::exists(local_db)) {
+            db_path_ = local_db.string();
+        } else if (fs::exists("./images.db")) {
+            db_path_ = "./images.db";
+        } else {
+            const char* home = getenv("HOME");
+            fs::path cache_dbs = home ? (fs::path(home) / ".cache" / "picexplore" / "databases") : fs::path("/tmp/picexplore/databases");
+            try {
+                fs::create_directories(cache_dbs);
+            } catch (...) {}
+
+            XXH64_hash_t h = XXH64(canon_dir.data(), canon_dir.size(), 0);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%016llx.db", (unsigned long long)h);
+            db_path_ = (cache_dbs / buf).string();
+        }
+    }
+
+    std::cout << "Using database: " << db_path_ << std::endl;
     
     db_ = new DatabaseManager();
-    db_->open(db_path);
+    db_->open(db_path_);
 
     full_res_loader_ = new FullResLoader(update_queue_);
 
-    pipeline_ = new ThumbnailPipeline(update_queue_, db_path);
+    pipeline_ = new ThumbnailPipeline(update_queue_, db_path_);
     int num_threads = std::thread::hardware_concurrency();
     if (num_threads < 4) num_threads = 4;
     pipeline_->start(num_threads);
 
-    scanner_ = new ScanCoordinator(directory_, update_queue_, db_path);
+    scanner_ = new ScanCoordinator(directory_, update_queue_, db_path_);
     scanner_->start();
     
     watcher_ = new InotifyWatcher();

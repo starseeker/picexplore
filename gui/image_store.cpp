@@ -2,6 +2,8 @@
 #include <jpeglib.h>
 #include <setjmp.h>
 #include <algorithm>
+#include <filesystem>
+#include <chrono>
 #include "../third_party/stb/stb_image_resize2.h"
 #include <iostream>
 
@@ -302,16 +304,33 @@ std::vector<std::pair<size_t,double>> ImageStore::get_filtered_aspects(const std
 
 
 void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
-    std::sort(entries_.begin(), entries_.end(), [criteria, ascending](const ImageEntry& a, const ImageEntry& b) {
-        bool result = false;
-        if (criteria == SortCriteria::ALPHABETICAL) {
-            result = a.filepath < b.filepath;
-        } else if (criteria == SortCriteria::FILE_SIZE) {
-            result = a.file_size < b.file_size;
-        } else if (criteria == SortCriteria::TIMESTAMP) {
-            result = a.file_timestamp < b.file_timestamp;
+    if (criteria == SortCriteria::FILE_SIZE || criteria == SortCriteria::TIMESTAMP) {
+        for (auto& entry : entries_) {
+            if (entry.file_size == 0 || entry.file_timestamp == 0) {
+                try {
+                    entry.file_size = std::filesystem::file_size(entry.filepath);
+                    entry.file_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::filesystem::last_write_time(entry.filepath).time_since_epoch()).count();
+                } catch (...) {}
+            }
         }
-        return ascending ? result : !result;
+    }
+
+    std::sort(entries_.begin(), entries_.end(), [criteria, ascending](const ImageEntry& a, const ImageEntry& b) {
+        if (criteria == SortCriteria::ALPHABETICAL) {
+            return ascending ? (a.filepath < b.filepath) : (a.filepath > b.filepath);
+        } else if (criteria == SortCriteria::FILE_SIZE) {
+            if (a.file_size != b.file_size) {
+                return ascending ? (a.file_size < b.file_size) : (a.file_size > b.file_size);
+            }
+            return a.filepath < b.filepath;
+        } else if (criteria == SortCriteria::TIMESTAMP) {
+            if (a.file_timestamp != b.file_timestamp) {
+                return ascending ? (a.file_timestamp < b.file_timestamp) : (a.file_timestamp > b.file_timestamp);
+            }
+            return a.filepath < b.filepath;
+        }
+        return a.filepath < b.filepath;
     });
 
     // Reassign indices

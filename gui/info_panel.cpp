@@ -451,10 +451,20 @@ void InfoPanel::display_info(const ImageEntry& entry) {
     ss << "Name: " << filename << "\n";
 
 
+    uintmax_t fsize = entry.file_size;
+    uintmax_t ftime = entry.file_timestamp;
+    if (fsize == 0 || ftime == 0) {
+        try {
+            fsize = std::filesystem::file_size(entry.filepath);
+            ftime = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::filesystem::last_write_time(entry.filepath).time_since_epoch()).count();
+        } catch (...) {}
+    }
+
     if (entry.metadata_known) {
         ss << "Dimensions: " << entry.original_width << " x " << entry.original_height << "\n";
-        ss << "Size: " << format_size(entry.file_size) << "\n";
-        ss << "Modified: " << format_time(entry.file_timestamp) << "\n";
+        ss << "Size: " << format_size(fsize) << "\n";
+        ss << "Modified: " << format_time(ftime) << "\n";
     } else {
         ss << "Metadata: Not yet loaded\n";
     }

@@ -44,7 +44,7 @@ void ScanCoordinator::run() {
     DatabaseManager db;
     bool db_opened = db.open(db_path_);
     std::vector<ImageInfo> images;
-    std::unordered_set<std::string> known_paths;
+    std::unordered_set<std::string> db_paths;
     
     if (db_opened) {
         images = db.get_all_images();
@@ -66,38 +66,18 @@ void ScanCoordinator::run() {
                     continue;
                 }
                 
-                if (!fs::exists(img.path)) {
-                    std::cout << "File missing, removing from database: " << img.path << std::endl;
-                    std::lock_guard<std::mutex> lock(db.get_mutex());
-                    if (db.begin_transaction()) {
-                        db.delete_key(img.hash + ":path");
-                        db.delete_key("file:" + img.path);
-                        db.commit_transaction();
-                    }
-                    continue;
-                }
-                
-                known_paths.insert(img.path);
+                db_paths.insert(img.path);
                 
                 ThumbQuality bq = static_cast<ThumbQuality>(img.best_thumb_size);
                 
-                uintmax_t fsize = 0, ftime = 0;
-                try {
-                    fsize = fs::file_size(img.path);
-                    ftime = std::chrono::duration_cast<std::chrono::seconds>(
-                                fs::last_write_time(img.path).time_since_epoch()).count();
-                } catch (...) {}
-
-                int actual_w = 0, actual_h = 0, comp = 0;
-                if (!stbi_info(img.path.c_str(), &actual_w, &actual_h, &comp) || actual_w <= 0 || actual_h <= 0) {
-                    actual_w = img.thumb_width;
-                    actual_h = img.thumb_height;
-                }
+                int actual_w = img.thumb_width;
+                int actual_h = img.thumb_height;
+                double ar = img.aspect_ratio;
 
                 UpdateEvent ev = UpdateEvent::make_image_discovered(
                     img.path, img.hash,
-                    actual_w, actual_h, img.aspect_ratio, 
-                    fsize, ftime,
+                    actual_w, actual_h, ar, 
+                    0, 0, // Lazy stat on demand
                     bq, {}, // Skip passing jpeg data to save memory, ThumbnailPipeline will load it
                     img.thumb_width, img.thumb_height
                 );
@@ -113,23 +93,50 @@ void ScanCoordinator::run() {
         }
     }
 
+    // Now scan directory for current state
+    std::unordered_set<std::string> disk_paths;
     try {
         for (const auto& entry : fs::recursive_directory_iterator(directory_)) {
             if (stop_requested_) break;
             if (entry.is_regular_file()) {
                 std::string path = entry.path().string();
-                if (known_paths.find(path) != known_paths.end()) continue;
                 
                 auto ext = entry.path().extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                 
                 if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp") {
-                    file_queue_.enqueue(path);
+                    disk_paths.insert(path);
+                    if (db_paths.find(path) == db_paths.end()) {
+                        // New file discovered!
+                        file_queue_.enqueue(path);
+                    }
                 }
             }
         }
     } catch (const fs::filesystem_error& e) {
         std::cerr << "Filesystem error: " << e.what() << std::endl;
+    }
+
+    // Reconcile removed files (in DB from last time, but no longer on disk)
+    if (db_opened) {
+        for (const auto& db_path : db_paths) {
+            if (stop_requested_) break;
+            if (disk_paths.find(db_path) == disk_paths.end()) {
+                std::cout << "File removed from disk, updating database and store: " << db_path << std::endl;
+                
+                std::lock_guard<std::mutex> lock(db.get_mutex());
+                if (db.begin_transaction()) {
+                    std::string hash;
+                    if (db.get_hash_for_path(db_path, hash)) {
+                        db.delete_key(hash + ":path");
+                    }
+                    db.delete_key("file:" + db_path);
+                    db.commit_transaction();
+                }
+                
+                update_queue_.enqueue(UpdateEvent::make_image_deleted(db_path));
+            }
+        }
     }
 
     // End of traversal

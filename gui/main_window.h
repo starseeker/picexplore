@@ -15,7 +15,7 @@
 
 class MainWindow : public Fl_Double_Window {
 public:
-    MainWindow(int w, int h, const char* title, const std::string& directory);
+    MainWindow(int w, int h, const char* title, const std::string& directory, const std::string& db_path = "");
     ~MainWindow();
 
     void start();
@@ -25,6 +25,7 @@ public:
 
 private:
     std::string directory_;
+    std::string db_path_;
     ImageStore store_;
     LayoutEngine layout_engine_;
     LayoutEngine::LayoutResult layout_result_;
