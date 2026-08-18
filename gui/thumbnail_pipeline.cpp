@@ -284,6 +284,11 @@ bool ThumbnailPipeline::decode_jpeg(const uint8_t* jpeg_data, size_t jpeg_size, 
     jpeg_read_header(&cinfo, TRUE);
     
     cinfo.out_color_space = JCS_RGB;
+    
+    // Fast decoding parameters suitable for thumbnails
+    cinfo.dct_method = JDCT_IFAST;
+    cinfo.do_fancy_upsampling = FALSE;
+    
     jpeg_start_decompress(&cinfo);
 
     width = cinfo.output_width;
@@ -345,6 +350,10 @@ bool ThumbnailPipeline::load_jpeg_scaled_file(const std::string& filepath, int t
     cinfo.scale_num = 1;
     cinfo.scale_denom = scale;
     cinfo.out_color_space = JCS_RGB;
+    
+    // Fast decoding parameters suitable for thumbnails
+    cinfo.dct_method = JDCT_IFAST;
+    cinfo.do_fancy_upsampling = FALSE;
     
     jpeg_start_decompress(&cinfo);
 
