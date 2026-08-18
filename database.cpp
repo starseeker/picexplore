@@ -326,7 +326,7 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
 bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std::string& hash,
 	unsigned char* image_data, int width, int height, int channels) {
     // Thumbnail sizes to generate (must match what PDF generator expects)
-    std::vector<int> thumb_sizes = {32, 64, 128, 256, 512, 1024};
+    std::vector<int> thumb_sizes = {32, 64, 128, 256, 512, 1024, 2048};
 
     auto ext = fs::path(filepath).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -581,7 +581,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
     write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, std::string(hash_str));
 
     // Generate and store thumbnails
-    std::vector<int> thumb_sizes = {32, 64, 128, 256, 512, 1024};
+    std::vector<int> thumb_sizes = {32, 64, 128, 256, 512, 1024, 2048};
     auto ext = fs::path(filepath).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
@@ -1037,7 +1037,7 @@ std::string DatabaseManager::extract_hash_from_key(const char* key, size_t key_s
 
 bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) {
     // Find largest thumbnail size available
-    std::vector<int> sizes = {32, 64, 128, 256, 512, 1024};
+    std::vector<int> sizes = {32, 64, 128, 256, 512, 1024, 2048};
     int best_size = 0;
     std::vector<uint8_t> best_data;
 

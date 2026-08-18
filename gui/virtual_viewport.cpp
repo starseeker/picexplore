@@ -167,7 +167,14 @@ int VirtualViewport::handle(int event) {
                 zoom_ *= zoom_factor;
                 
                 // Clamp zoom
-                if (zoom_ < 0.1f) zoom_ = 0.1f;
+                float min_zoom = 0.1f;
+                int img_w = (tile_manager_ && full_res_ready_) ? tile_orig_w_ : full_res_w_;
+                int img_h = (tile_manager_ && full_res_ready_) ? tile_orig_h_ : full_res_h_;
+                if (img_w > 0 && img_h > 0) {
+                    float fit_zoom = std::min((float)w() / img_w, (float)h() / img_h);
+                    if (fit_zoom < min_zoom) min_zoom = fit_zoom;
+                }
+                if (zoom_ < min_zoom) zoom_ = min_zoom;
                 if (zoom_ > 16.0f) zoom_ = 16.0f;
 
                 // Adjust pan to keep cursor at same image pixel
@@ -310,7 +317,63 @@ void VirtualViewport::draw_single_image() {
         } catch (...) {}
     }
 
-    if (tile_manager_ && full_res_ready_ && zoom_ > 0.0f) {
+    bool draw_tiles = (tile_manager_ && full_res_ready_ && zoom_ >= 0.14f);
+
+    if (img_data && img_w > 0 && img_h > 0 && (!draw_tiles || !tile_manager_)) {
+        fl_push_clip(x(), y(), w(), h());
+
+        if (zoom_ == 0.0f) {
+            // Fit to window
+            float target_orig_w = tile_manager_ ? tile_orig_w_ : img_w;
+            float target_orig_h = tile_manager_ ? tile_orig_h_ : img_h;
+            
+            float scale_x = (float)w() / target_orig_w;
+            float scale_y = (float)h() / target_orig_h;
+            float scale = std::min(scale_x, scale_y);
+            
+            int draw_w = (int)(target_orig_w * scale);
+            int draw_h = (int)(target_orig_h * scale);
+            int draw_x = x() + (w() - draw_w) / 2;
+            int draw_y = y() + (h() - draw_h) / 2;
+
+            if (draw_w > 0 && draw_h > 0 && (draw_w != img_w || draw_h != img_h)) { // Need resize
+                std::vector<uint8_t> scaled_data(draw_w * draw_h * 3);
+                stbir_resize_uint8_linear(
+                    img_data, img_w, img_h, 0,
+                    scaled_data.data(), draw_w, draw_h, 0,
+                    (stbir_pixel_layout)3
+                );
+                fl_draw_image(scaled_data.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
+            } else if (draw_w > 0 && draw_h > 0) {
+                fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
+            }
+        } else {
+            // Custom zoom & pan
+            float target_orig_w = tile_manager_ ? tile_orig_w_ : img_w;
+            float target_orig_h = tile_manager_ ? tile_orig_h_ : img_h;
+            
+            int draw_w = (int)(target_orig_w * zoom_);
+            int draw_h = (int)(target_orig_h * zoom_);
+            int draw_x = x() + (int)pan_x_;
+            int draw_y = y() + (int)pan_y_;
+
+            if (draw_w > 0 && draw_h > 0 && (draw_w != img_w || draw_h != img_h)) {
+                std::vector<uint8_t> scaled_data(draw_w * draw_h * 3);
+                stbir_resize_uint8_linear(
+                    img_data, img_w, img_h, 0,
+                    scaled_data.data(), draw_w, draw_h, 0,
+                    (stbir_pixel_layout)3
+                );
+                fl_draw_image(scaled_data.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
+            } else if (draw_w > 0 && draw_h > 0) {
+                fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
+            }
+        }
+
+        fl_pop_clip();
+    }
+
+    if (draw_tiles) {
         fl_push_clip(x(), y(), w(), h());
         
         float scale = zoom_;
@@ -332,7 +395,7 @@ void VirtualViewport::draw_single_image() {
                     int draw_w = tw * scale;
                     int draw_h = th * scale;
                     
-                    if (scale != 1.0f) {
+                    if (draw_w > 0 && draw_h > 0 && scale != 1.0f) {
                         std::vector<uint8_t> scaled_data(draw_w * draw_h * 3);
                         stbir_resize_uint8_linear(
                             rgb.data(), tw, th, 0,
@@ -340,54 +403,12 @@ void VirtualViewport::draw_single_image() {
                             (stbir_pixel_layout)3
                         );
                         fl_draw_image(scaled_data.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
-                    } else {
+                    } else if (draw_w > 0 && draw_h > 0) {
                         fl_draw_image(rgb.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
                     }
                 }
             }
         }
-        fl_pop_clip();
-    } else if (img_data && img_w > 0 && img_h > 0) {
-        fl_push_clip(x(), y(), w(), h());
-
-        if (zoom_ == 0.0f) {
-            // Fit to window
-            float scale_x = (float)w() / img_w;
-            float scale_y = (float)h() / img_h;
-            float scale = std::min(scale_x, scale_y);
-            
-            int draw_w = (int)(img_w * scale);
-            int draw_h = (int)(img_h * scale);
-            int draw_x = x() + (w() - draw_w) / 2;
-            int draw_y = y() + (h() - draw_h) / 2;
-
-            if (scale < 1.0f || scale > 1.0f) { // Need resize
-                std::vector<uint8_t> scaled_data(draw_w * draw_h * 3);
-                stbir_resize_uint8_linear(
-                    img_data, img_w, img_h, 0,
-                    scaled_data.data(), draw_w, draw_h, 0,
-                    (stbir_pixel_layout)3
-                );
-                fl_draw_image(scaled_data.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
-            } else {
-                fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
-            }
-        } else {
-            // Custom zoom & pan
-            int draw_w = (int)(img_w * zoom_);
-            int draw_h = (int)(img_h * zoom_);
-            int draw_x = x() + (int)pan_x_;
-            int draw_y = y() + (int)pan_y_;
-
-            std::vector<uint8_t> scaled_data(draw_w * draw_h * 3);
-            stbir_resize_uint8_linear(
-                img_data, img_w, img_h, 0,
-                scaled_data.data(), draw_w, draw_h, 0,
-                (stbir_pixel_layout)3
-            );
-            fl_draw_image(scaled_data.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
-        }
-
         fl_pop_clip();
     }
 

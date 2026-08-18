@@ -53,7 +53,7 @@ private:
     };
     std::list<CachedTile> tile_cache_;
     std::unordered_map<std::string, std::list<CachedTile>::iterator> tile_cache_map_;
-    const size_t MAX_CACHE_TILES = 100; // ~75 MB
+    const size_t MAX_CACHE_TILES = 2000; // ~1.5 GB
     std::mutex cache_mutex_;
     
     moodycamel::ConcurrentQueue<TileRequest> request_queue_;

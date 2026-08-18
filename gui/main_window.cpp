@@ -153,6 +153,15 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     
     auto& entry = store_.get(raw_idx);
     long long pixels = (long long)entry.original_width * entry.original_height;
+    
+    int screen_dim = std::max(w(), h());
+    int max_overview_size = entry.original_width > 0 ? std::min((int)entry.original_width, 8192) : 8192;
+    ThumbQuality target_quality = static_cast<ThumbQuality>(std::max(max_overview_size, screen_dim));
+    if (static_cast<int>(entry.scaled.quality) < static_cast<int>(target_quality) || entry.scaled.rgb_data.empty()) {
+        entry.last_requested_generation = current_generation_;
+        pipeline_->request_thumbnail(raw_idx, filepath, entry.content_hash, target_quality, true, current_generation_);
+    }
+
     if (pixels > 16384LL * 16384LL || pixels <= 0) { // Fallback <= 0 to tiles if extremely large or unknown
         // For very large images, use tile manager
         std::string label = "  Viewing: " + std::filesystem::path(filepath).filename().string() + "  [Generating Map...]";
@@ -209,6 +218,16 @@ void MainWindow::reset_directory_filter() {
 
 void MainWindow::update_statusbar() {
     std::string label;
+    
+    if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
+        size_t idx = viewport_->current_single_image();
+        std::string filename = std::filesystem::path(store_.get(idx).filepath).filename().string();
+        label = "  Viewing: " + filename;
+        statusbar_->copy_label(label.c_str());
+        statusbar_->redraw();
+        return;
+    }
+
     if (!directory_filter_.empty()) {
         // Show the filter as a path relative to the launch root for brevity
         namespace fs = std::filesystem;
@@ -286,6 +305,10 @@ void MainWindow::poll_events() {
             need_redraw = true;
             if (was_none && store_.get(ev.thumb_rgb.image_index).best_quality != ThumbQuality::NONE) {
                 db_build_completed_++;
+            }
+            // Always call update_statusbar in single image mode to clear any "Generating" text
+            if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
+                viewport_->current_single_image() == ev.thumb_rgb.image_index) {
                 update_statusbar();
             }
         } else if (ev.type == UpdateEvent::Type::THUMB_FAILED) {
@@ -314,6 +337,14 @@ void MainWindow::poll_events() {
                 std::string filename = std::filesystem::path(ev.tile_progress.filepath).filename().string();
                 int percent = (ev.tile_progress.current_row * 100) / std::max(1, ev.tile_progress.total_rows);
                 std::string label = "  Viewing: " + filename + "  [Generating Map: " + std::to_string(percent) + "%]";
+                statusbar_->copy_label(label.c_str());
+                statusbar_->redraw();
+            }
+        } else if (ev.type == UpdateEvent::Type::THUMB_GENERATION_PROGRESS) {
+            if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
+                viewport_->current_single_image() == ev.thumb_progress.image_index) {
+                std::string filename = std::filesystem::path(ev.thumb_progress.filepath).filename().string();
+                std::string label = "  Viewing: " + filename + "  [Generating High-Res Overview: " + std::to_string(ev.thumb_progress.percent) + "%]";
                 statusbar_->copy_label(label.c_str());
                 statusbar_->redraw();
             }
@@ -370,13 +401,17 @@ void MainWindow::poll_events() {
         layout_dirty_ = false;
         need_redraw = true;
         
-        reprioritize_thumbnails();
+        if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
+            reprioritize_thumbnails();
+        }
     } else if (need_redraw) {
         viewport_->apply_updates(changed);
     }
 }
 
 void MainWindow::reprioritize_thumbnails() {
+    if (viewport_->current_mode() != VirtualViewport::ViewMode::GRID) return;
+
     auto visible = viewport_->get_visible_indices();
     store_.mark_visible(visible);
     
@@ -402,6 +437,7 @@ void MainWindow::reprioritize_thumbnails() {
             else if (layout_w < 192) needed = ThumbQuality::MEDIUM;
             else if (layout_w < 384) needed = ThumbQuality::LARGE;
             else if (layout_w < 768) needed = ThumbQuality::XLARGE;
+            else if (layout_w < 1536) needed = static_cast<ThumbQuality>(1024);
             else                     needed = ThumbQuality::FULL;
             
             bool needs_upgrade = (entry.scaled.quality < needed);
@@ -442,7 +478,8 @@ void MainWindow::reprioritize_thumbnails() {
         else if (layout_w < 192) needed = ThumbQuality::MEDIUM;
         else if (layout_w < 384) needed = ThumbQuality::LARGE;
         else if (layout_w < 768) needed = ThumbQuality::XLARGE;
-        else                     needed = ThumbQuality::FULL;
+        else if (layout_w < 1536) needed = static_cast<ThumbQuality>(1024);
+            else                     needed = ThumbQuality::FULL;
         
         bool size_mismatch = (entry.scaled.layout_width  != static_cast<int>(layout_w) ||
                               entry.scaled.layout_height != static_cast<int>(layout_h));
@@ -537,7 +574,9 @@ void MainWindow::resize(int X, int Y, int W, int H) {
 void MainWindow::scroll_cb(Fl_Widget* w, void* data) {
     MainWindow* win = static_cast<MainWindow*>(data);
     win->viewport_->set_scroll_offset(win->scrollbar_->value());
-    win->reprioritize_thumbnails();
+    if (win->viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
+        win->reprioritize_thumbnails();
+    }
 }
 
 void MainWindow::menu_cb(Fl_Widget* w, void* data) {

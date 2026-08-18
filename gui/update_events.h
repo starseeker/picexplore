@@ -13,7 +13,7 @@ enum class ThumbQuality {
     MEDIUM = 128,  // 128px thumbnail
     LARGE = 256,   // 256px thumbnail
     XLARGE = 512,  // 512px thumbnail
-    FULL = 1024    // 1024px thumbnail
+    FULL = 2048    // 1024px thumbnail
 };
 
 struct UpdateEvent {
@@ -23,6 +23,7 @@ struct UpdateEvent {
         IMAGE_RENAMED,
         THUMB_READY,
         THUMB_RGB_READY,
+        THUMB_GENERATION_PROGRESS,
         THUMB_FAILED,
         FULL_RES_READY,
         SCAN_PROGRESS,
@@ -76,6 +77,13 @@ struct UpdateEvent {
         int width;
         int height;
     } full_res;
+
+    // Payload for THUMB_GENERATION_PROGRESS
+    struct {
+        size_t image_index;
+        std::string filepath;
+        int percent;
+    } thumb_progress;
 
     // Payload for SCAN_PROGRESS
     struct {
@@ -160,6 +168,15 @@ struct UpdateEvent {
         ev.thumb.jpeg_data = jpeg_data;
         ev.thumb.width = w;
         ev.thumb.height = h;
+        return ev;
+    }
+
+    static UpdateEvent make_thumb_generation_progress(size_t index, const std::string& filepath, int percent) {
+        UpdateEvent ev;
+        ev.type = Type::THUMB_GENERATION_PROGRESS;
+        ev.thumb_progress.image_index = index;
+        ev.thumb_progress.filepath = filepath;
+        ev.thumb_progress.percent = percent;
         return ev;
     }
 

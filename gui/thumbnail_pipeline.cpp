@@ -164,10 +164,27 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
         }
 
         if (!fast_decoded) {
-            img = stbi_load(req.filepath.c_str(), &w, &h, &channels, 3);
-            if (!img) {
-                // If it's an extreme PNG, try streaming thumbnail generation fallback
-                if (ext == ".png" && generate_png_streaming(req.filepath, target_w, target_h, rgb_decoded, w, h)) {
+            int info_w, info_h, info_c;
+            bool is_massive_png = false;
+            if (ext == ".png" && stbi_info(req.filepath.c_str(), &info_w, &info_h, &info_c)) {
+                if ((long long)info_w * info_h > 25000000LL) {
+                    is_massive_png = true;
+                }
+            }
+
+            if (is_massive_png) {
+                // generate_png_streaming will emit progress as it decodes row by row
+                if (generate_png_streaming(req.image_index, req.filepath, target_w, target_h, rgb_decoded, w, h)) {
+                    fast_decoded = true;
+                }
+            } else {
+                if (static_cast<int>(req.target_quality) >= 2048) {
+                    update_queue_.enqueue(UpdateEvent::make_thumb_generation_progress(req.image_index, req.filepath, 0));
+                }
+                img = stbi_load(req.filepath.c_str(), &w, &h, &channels, 3);
+            }
+            if (!img && !fast_decoded) {
+                if (ext == ".png" && generate_png_streaming(req.image_index, req.filepath, target_w, target_h, rgb_decoded, w, h)) {
                     fast_decoded = true;
                 } else {
                     update_queue_.enqueue(UpdateEvent::make_thumb_failed(req.image_index, req.filepath, req.target_quality));
@@ -355,7 +372,7 @@ bool ThumbnailPipeline::load_jpeg_scaled_file(const std::string& filepath, int t
     return true;
 }
 
-bool ThumbnailPipeline::generate_png_streaming(const std::string& filepath, int max_w, int max_h, std::vector<uint8_t>& out_rgb, int& out_w, int& out_h) {
+bool ThumbnailPipeline::generate_png_streaming(size_t image_index, const std::string& filepath, int max_w, int max_h, std::vector<uint8_t>& out_rgb, int& out_w, int& out_h) {
     FILE *fp = fopen(filepath.c_str(), "rb");
     if (!fp) return false;
     
@@ -415,6 +432,8 @@ bool ThumbnailPipeline::generate_png_streaming(const std::string& filepath, int 
     int row_bytes = png_get_rowbytes(png, info);
     std::vector<png_byte> row(row_bytes);
 
+    int last_percent = -1;
+
     for (int y = 0; y < height; y++) {
         png_read_row(png, row.data(), NULL);
         int ty = (y * out_h) / height;
@@ -431,7 +450,15 @@ bool ThumbnailPipeline::generate_png_streaming(const std::string& filepath, int 
             accum_b[idx] += row[x * 4 + 2];
             accum_count[idx]++;
         }
+        
+        int percent = (y * 100) / height;
+        if (percent != last_percent && percent % 5 == 0) {
+            update_queue_.enqueue(UpdateEvent::make_thumb_generation_progress(image_index, filepath, percent));
+            last_percent = percent;
+        }
     }
+    
+    update_queue_.enqueue(UpdateEvent::make_thumb_generation_progress(image_index, filepath, 100));
 
     png_destroy_read_struct(&png, &info, NULL);
     fclose(fp);
