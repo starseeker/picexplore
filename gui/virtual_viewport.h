@@ -3,8 +3,11 @@
 #include <FL/Fl_Widget.H>
 #include <FL/Fl_Scrollbar.H>
 #include <functional>
+#include <vector>
+#include <string>
 #include "image_store.h"
 #include "layout_engine.h"
+#include "tile_manager.h"
 
 class VirtualViewport : public Fl_Widget {
 public:
@@ -16,9 +19,15 @@ public:
     int scroll_offset() const { return scroll_offset_; }
 
     enum class ViewMode { GRID, SINGLE_IMAGE };
+    ViewMode current_mode() const { return view_mode_; }
+
     void enter_single_image(size_t raw_idx);
     void exit_single_image();
+    size_t current_single_image() const { return single_idx_; }
+    
     void set_full_res_image(const std::vector<uint8_t>& rgb, int w, int h);
+    void set_tile_manager(class TileManager* tm, const std::string& hash, int orig_w, int orig_h);
+
     int scroll_to_image(size_t raw_idx);
 
     void set_selected_image(size_t raw_idx);
@@ -54,6 +63,12 @@ private:
     // Used for panning
     int last_drag_x_ = 0;
     int last_drag_y_ = 0;
+    
+    // Tiled rendering
+    class TileManager* tile_manager_ = nullptr;
+    std::string tile_hash_;
+    int tile_orig_w_ = 0;
+    int tile_orig_h_ = 0;
 
     void draw_single_image();
     void draw_grid();

@@ -10,6 +10,7 @@
 #include "thumbnail_pipeline.h"
 #include "info_panel.h"
 #include "full_res_loader.h"
+#include "tile_manager.h"
 #include <string>
 
 class MainWindow : public Fl_Double_Window {
@@ -28,6 +29,7 @@ private:
     LayoutEngine layout_engine_;
     LayoutEngine::LayoutResult layout_result_;
     
+    TileManager*     tile_manager_ = nullptr;
     VirtualViewport* viewport_;
     Fl_Scrollbar*    scrollbar_;
     InfoPanel*       info_panel_;

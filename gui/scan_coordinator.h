@@ -22,8 +22,12 @@ private:
     std::string db_path_;
     moodycamel::ConcurrentQueue<UpdateEvent>& update_queue_;
 
-    std::thread worker_thread_;
+    std::vector<std::thread> workers_;
     std::atomic<bool> stop_requested_;
 
+    moodycamel::ConcurrentQueue<std::string> file_queue_;
+    std::atomic<int> active_workers_{0};
+
     void run();
+    void scan_worker();
 };

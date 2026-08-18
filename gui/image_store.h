@@ -22,8 +22,12 @@ struct ImageEntry {
     uintmax_t file_size = 0;
     uintmax_t file_timestamp = 0;
 
-    // Thumbnail state
+    // Highest quality we have available
     ThumbQuality best_quality = ThumbQuality::NONE;
+    
+    // Request tracking to prevent queue spam
+    uint64_t last_requested_generation = 0;
+    uint64_t last_fulfilled_generation = 0;
 
     // Decoded RGB cache
     struct DecodedThumb {
@@ -41,6 +45,7 @@ struct ImageEntry {
         int height = 0;
         int layout_width = 0;
         int layout_height = 0;
+        ThumbQuality quality = ThumbQuality::NONE;
     };
     ScaledImage scaled;
 };
@@ -66,7 +71,7 @@ public:
                        int width, int height);
 
     void set_thumbnail_rgb(size_t index, const std::string& filepath, ThumbQuality quality,
-                           std::vector<uint8_t>&& rgb_data, int width, int height);
+                           std::vector<uint8_t>&& rgb_data, int width, int height, uint64_t generation);
 
     // Access
     ImageEntry& get(size_t index);

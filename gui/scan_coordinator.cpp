@@ -22,14 +22,22 @@ ScanCoordinator::~ScanCoordinator() {
 
 void ScanCoordinator::start() {
     stop_requested_ = false;
-    worker_thread_ = std::thread(&ScanCoordinator::run, this);
+    workers_.emplace_back(&ScanCoordinator::run, this);
+    
+    int num_workers = std::thread::hardware_concurrency();
+    if (num_workers < 2) num_workers = 2;
+    active_workers_ = num_workers;
+    for (int i = 0; i < num_workers; ++i) {
+        workers_.emplace_back(&ScanCoordinator::scan_worker, this);
+    }
 }
 
 void ScanCoordinator::stop() {
     stop_requested_ = true;
-    if (worker_thread_.joinable()) {
-        worker_thread_.join();
+    for (auto& w : workers_) {
+        if (w.joinable()) w.join();
     }
+    workers_.clear();
 }
 
 void ScanCoordinator::run() {
@@ -99,46 +107,63 @@ void ScanCoordinator::run() {
         }
     }
 
-    // Always scan directory for new or renamed files
-    int found = 0;
     try {
         for (const auto& entry : fs::recursive_directory_iterator(directory_)) {
             if (stop_requested_) break;
             if (entry.is_regular_file()) {
                 std::string path = entry.path().string();
-                if (known_paths.find(path) != known_paths.end()) {
-                    continue; // Already loaded from DB
-                }
+                if (known_paths.find(path) != known_paths.end()) continue;
                 
                 auto ext = entry.path().extension().string();
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    
-                    if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp") {
-                        int w = 0, h = 0, comp = 0;
-                        if (stbi_info(path.c_str(), &w, &h, &comp) && w > 0 && h > 0) {
-                            double ar = static_cast<double>(w) / h;
-                            uintmax_t fsize = 0, ftime = 0;
-                            try {
-                                fsize = fs::file_size(path);
-                                ftime = std::chrono::duration_cast<std::chrono::seconds>(
-                                            fs::last_write_time(path).time_since_epoch()).count();
-                            } catch (...) {}
-                            UpdateEvent ev = UpdateEvent::make_image_discovered(
-                                path, "", w, h, ar, fsize, ftime, ThumbQuality::NONE
-                            );
-                            update_queue_.enqueue(std::move(ev));
-                            
-                            found++;
-                            if (found % 100 == 0) {
-                                update_queue_.enqueue(UpdateEvent::make_scan_progress(found));
-                            }
-                        }
-                    }
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                
+                if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp") {
+                    file_queue_.enqueue(path);
                 }
             }
-        } catch (const fs::filesystem_error& e) {
-            std::cerr << "Filesystem error: " << e.what() << std::endl;
         }
+    } catch (const fs::filesystem_error& e) {
+        std::cerr << "Filesystem error: " << e.what() << std::endl;
+    }
 
-    update_queue_.enqueue(UpdateEvent::make_scan_complete());
+    // End of traversal
+    active_workers_--;
+}
+
+void ScanCoordinator::scan_worker() {
+    int found = 0;
+    while (!stop_requested_) {
+        std::string path;
+        if (file_queue_.try_dequeue(path)) {
+            int w = 0, h = 0, comp = 0;
+            if (stbi_info(path.c_str(), &w, &h, &comp) && w > 0 && h > 0) {
+                double ar = static_cast<double>(w) / h;
+                uintmax_t fsize = 0, ftime = 0;
+                try {
+                    fsize = fs::file_size(path);
+                    ftime = std::chrono::duration_cast<std::chrono::seconds>(
+                                fs::last_write_time(path).time_since_epoch()).count();
+                } catch (...) {}
+                UpdateEvent ev = UpdateEvent::make_image_discovered(
+                    path, "", w, h, ar, fsize, ftime, ThumbQuality::NONE
+                );
+                update_queue_.enqueue(std::move(ev));
+                
+                found++;
+                if (found % 100 == 0) {
+                    update_queue_.enqueue(UpdateEvent::make_scan_progress(found));
+                }
+            }
+        } else {
+            if (active_workers_ == 0 && file_queue_.size_approx() == 0) {
+                break; // Traversal done and queue empty
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    
+    // Only the last worker to exit sends the complete event
+    if (--active_workers_ == 0) {
+        update_queue_.enqueue(UpdateEvent::make_scan_complete());
+    }
 }

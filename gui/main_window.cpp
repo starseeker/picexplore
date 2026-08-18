@@ -6,6 +6,7 @@
 #include <FL/Fl_Menu_Bar.H>
 #include <FL/fl_ask.H>
 #include <filesystem>
+#include <thread>
 
 static constexpr int MENU_H   = 25;
 static constexpr int STATUS_H = 20;
@@ -14,6 +15,12 @@ static constexpr int INFO_W   = 250;
 
 MainWindow::MainWindow(int w, int h, const char* title, const std::string& directory)
     : Fl_Double_Window(w, h, title), directory_(directory) {
+
+    // Create ~/.cache/picexplore for tiles
+    const char* home = getenv("HOME");
+    std::string cache_dir = home ? std::string(home) + "/.cache/picexplore" : "/tmp/picexplore";
+    tile_manager_ = new TileManager(update_queue_);
+    tile_manager_->init(cache_dir);
 
     int vp_h = h - MENU_H - STATUS_H;
 
@@ -117,7 +124,9 @@ void MainWindow::start() {
     full_res_loader_ = new FullResLoader(update_queue_);
 
     pipeline_ = new ThumbnailPipeline(update_queue_, db_path);
-    pipeline_->start(4);
+    int num_threads = std::thread::hardware_concurrency();
+    if (num_threads < 4) num_threads = 4;
+    pipeline_->start(num_threads);
 
     scanner_ = new ScanCoordinator(directory_, update_queue_, db_path);
     scanner_->start();
@@ -133,11 +142,23 @@ void MainWindow::start() {
 void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& filepath) {
     pre_viewer_filter_ = directory_filter_;
     viewport_->enter_single_image(raw_idx);
-    full_res_loader_->request(raw_idx, filepath);
     
-    std::string filename = std::filesystem::path(filepath).filename().string();
-    std::string label = "  Viewing: " + filename + "  [Loading full resolution...]";
-    statusbar_->copy_label(label.c_str());
+    auto& entry = store_.get(raw_idx);
+    long long pixels = (long long)entry.original_width * entry.original_height;
+    if (pixels > 16384LL * 16384LL || pixels <= 0) { // Fallback <= 0 to tiles if extremely large or unknown
+        // For very large images, use tile manager
+        std::string label = "  Viewing: " + std::filesystem::path(filepath).filename().string() + "  [Generating Map...]";
+        statusbar_->copy_label(label.c_str());
+        viewport_->set_tile_manager(tile_manager_, entry.content_hash, entry.original_width, entry.original_height);
+        tile_manager_->request_tiles(raw_idx, filepath, entry.content_hash);
+    } else {
+        // Normal image
+        viewport_->set_tile_manager(nullptr, "", entry.original_width, entry.original_height);
+        full_res_loader_->request(raw_idx, filepath);
+        std::string filename = std::filesystem::path(filepath).filename().string();
+        std::string label = "  Viewing: " + filename + "  [Loading full resolution...]";
+        statusbar_->copy_label(label.c_str());
+    }
     statusbar_->redraw();
     
     scrollbar_->hide();
@@ -252,20 +273,33 @@ void MainWindow::poll_events() {
             bool was_none = (store_.get(ev.thumb_rgb.image_index).best_quality == ThumbQuality::NONE);
             store_.set_thumbnail_rgb(ev.thumb_rgb.image_index, ev.thumb_rgb.filepath,
                                      ev.thumb_rgb.quality, std::move(ev.thumb_rgb.rgb_data),
-                                     ev.thumb_rgb.width, ev.thumb_rgb.height);
+                                     ev.thumb_rgb.width, ev.thumb_rgb.height, ev.thumb_rgb.generation);
             changed.push_back(ev.thumb_rgb.image_index);
             need_redraw = true;
             if (was_none) {
                 db_build_completed_++;
                 update_statusbar();
             }
+        } else if (ev.type == UpdateEvent::Type::THUMB_FAILED) {
+            bool was_none = (store_.get(ev.failed.image_index).best_quality == ThumbQuality::NONE);
+            // Mark the entry as FAILED in the ImageStore
+            store_.set_thumbnail(ev.failed.image_index, ev.failed.filepath, ThumbQuality::FAILED, nullptr, 0, 0, 0);
+            changed.push_back(ev.failed.image_index);
+            need_redraw = true;
+            if (was_none) {
+                db_build_completed_++;
+                update_statusbar();
+            }
         } else if (ev.type == UpdateEvent::Type::FULL_RES_READY) {
-            viewport_->set_full_res_image(ev.full_res.rgb_data, ev.full_res.width, ev.full_res.height);
-            
-            std::string filename = std::filesystem::path(ev.full_res.filepath).filename().string();
-            std::string label = "  Viewing: " + filename;
-            statusbar_->copy_label(label.c_str());
-            statusbar_->redraw();
+            if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
+                viewport_->current_single_image() == ev.full_res.image_index) {
+                viewport_->set_full_res_image(ev.full_res.rgb_data, ev.full_res.width, ev.full_res.height);
+                
+                std::string filename = std::filesystem::path(ev.full_res.filepath).filename().string();
+                std::string label = "  Viewing: " + filename;
+                statusbar_->copy_label(label.c_str());
+                statusbar_->redraw();
+            }
         } else if (ev.type == UpdateEvent::Type::IMAGE_DELETED) {
             std::cout << "DELETED: " << ev.deletion.filepath << std::endl;
             store_.remove_image(ev.deletion.filepath);
@@ -340,6 +374,14 @@ void MainWindow::reprioritize_thumbnails() {
                 view_changed = true;
                 break;
             }
+            
+            const auto& entry = store_.get(visible[i]);
+            bool size_mismatch = (entry.scaled.layout_width == 0); // basic check before layout recalculation
+            if ((entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch) &&
+                entry.last_requested_generation < current_generation_) {
+                view_changed = true;
+                break;
+            }
         }
     }
     
@@ -376,20 +418,30 @@ void MainWindow::reprioritize_thumbnails() {
         bool size_mismatch = (entry.scaled.layout_width  != static_cast<int>(layout_w) ||
                               entry.scaled.layout_height != static_cast<int>(layout_h));
         
-        if (entry.best_quality == ThumbQuality::NONE) {
-            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
-                                         ThumbQuality::SMALL, true, current_generation_,
-                                         static_cast<int>(layout_w), static_cast<int>(layout_h));
-            if (needed > ThumbQuality::SMALL) {
+        bool missing_or_mismatch = (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch);
+        
+        if (missing_or_mismatch) {
+            store_.get(idx).last_requested_generation = current_generation_;
+            
+            if (entry.best_quality == ThumbQuality::NONE) {
                 pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
-                                             needed, false, current_generation_,
+                                             ThumbQuality::SMALL, true, current_generation_,
+                                             static_cast<int>(layout_w), static_cast<int>(layout_h));
+            } else if (entry.scaled.rgb_data.empty()) {
+                pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
+                                             ThumbQuality::SMALL, true, current_generation_,
+                                             static_cast<int>(layout_w), static_cast<int>(layout_h));
+                if (needed > ThumbQuality::SMALL) {
+                    pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
+                                                 needed, false, current_generation_,
+                                                 static_cast<int>(layout_w), static_cast<int>(layout_h));
+                }
+            } else if (entry.best_quality < needed || size_mismatch) {
+                ThumbQuality req_quality = std::max(needed, entry.best_quality);
+                pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
+                                             req_quality, true, current_generation_,
                                              static_cast<int>(layout_w), static_cast<int>(layout_h));
             }
-        } else if (entry.best_quality < needed || size_mismatch) {
-            ThumbQuality req_quality = std::max(needed, entry.best_quality);
-            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
-                                         req_quality, true, current_generation_,
-                                         static_cast<int>(layout_w), static_cast<int>(layout_h));
         }
     }
 }

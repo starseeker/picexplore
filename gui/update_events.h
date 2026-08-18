@@ -6,6 +6,7 @@
 
 // Thumbnail quality levels
 enum class ThumbQuality {
+    FAILED = -1,   // Failed to generate
     NONE = 0,      // Grey rectangle only
     TINY = 32,     // 32px thumbnail
     SMALL = 64,    // 64px thumbnail
@@ -22,6 +23,7 @@ struct UpdateEvent {
         IMAGE_RENAMED,
         THUMB_READY,
         THUMB_RGB_READY,
+        THUMB_FAILED,
         FULL_RES_READY,
         SCAN_PROGRESS,
         SCAN_COMPLETE
@@ -62,6 +64,7 @@ struct UpdateEvent {
         std::vector<uint8_t> rgb_data;
         int width;
         int height;
+        uint64_t generation;
     } thumb_rgb;
 
     // Payload for FULL_RES_READY
@@ -89,15 +92,19 @@ struct UpdateEvent {
         std::string new_filepath;
     } rename;
 
+    // Payload for THUMB_FAILED
+    struct {
+        size_t image_index;
+        std::string filepath;
+        ThumbQuality target_quality;
+    } failed;
+
     // Helper constructors
     static UpdateEvent make_image_discovered(
         const std::string& path, const std::string& hash,
-        int w, int h, double ar,
-        uintmax_t size = 0, uintmax_t timestamp = 0,
-        ThumbQuality bq = ThumbQuality::NONE,
-        const std::vector<uint8_t>& jpeg = {},
-        int tw = 0, int th = 0) 
-    {
+        int w, int h, double ar, uintmax_t fsize = 0, uintmax_t ftime = 0,
+        ThumbQuality bq = ThumbQuality::NONE, const std::vector<uint8_t>& jpeg_data = {},
+        int thumb_w = 0, int thumb_h = 0) {
         UpdateEvent ev;
         ev.type = Type::IMAGE_DISCOVERED;
         ev.image.filepath = path;
@@ -105,24 +112,33 @@ struct UpdateEvent {
         ev.image.width = w;
         ev.image.height = h;
         ev.image.aspect_ratio = ar;
-        ev.image.file_size = size;
-        ev.image.file_timestamp = timestamp;
+        ev.image.file_size = fsize;
+        ev.image.file_timestamp = ftime;
         ev.image.best_quality = bq;
-        ev.image.jpeg_data = jpeg;
-        ev.image.thumb_width = tw;
-        ev.image.thumb_height = th;
+        ev.image.jpeg_data = jpeg_data;
+        ev.image.thumb_width = thumb_w;
+        ev.image.thumb_height = thumb_h;
+        return ev;
+    }
+
+    static UpdateEvent make_thumb_failed(size_t index, const std::string& filepath, ThumbQuality q) {
+        UpdateEvent ev;
+        ev.type = Type::THUMB_FAILED;
+        ev.failed.image_index = index;
+        ev.failed.filepath = filepath;
+        ev.failed.target_quality = q;
         return ev;
     }
 
     static UpdateEvent make_thumb_ready(
         size_t index, const std::string& filepath, ThumbQuality q,
-        const std::vector<uint8_t>& jpeg, int w, int h) {
+        const std::vector<uint8_t>& jpeg_data, int w, int h) {
         UpdateEvent ev;
         ev.type = Type::THUMB_READY;
         ev.thumb.image_index = index;
         ev.thumb.filepath = filepath;
         ev.thumb.quality = q;
-        ev.thumb.jpeg_data = jpeg;
+        ev.thumb.jpeg_data = jpeg_data;
         ev.thumb.width = w;
         ev.thumb.height = h;
         return ev;
@@ -130,7 +146,7 @@ struct UpdateEvent {
 
     static UpdateEvent make_thumb_rgb_ready(
         size_t index, const std::string& filepath, ThumbQuality q,
-        const std::vector<uint8_t>& rgb, int w, int h) {
+        const std::vector<uint8_t>& rgb, int w, int h, uint64_t generation) {
         UpdateEvent ev;
         ev.type = Type::THUMB_RGB_READY;
         ev.thumb_rgb.image_index = index;
@@ -139,6 +155,7 @@ struct UpdateEvent {
         ev.thumb_rgb.rgb_data = rgb;
         ev.thumb_rgb.width = w;
         ev.thumb_rgb.height = h;
+        ev.thumb_rgb.generation = generation;
         return ev;
     }
 

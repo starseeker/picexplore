@@ -22,6 +22,8 @@ else()
     find_package(PkgConfig)
     if(PkgConfig_FOUND)
         pkg_check_modules(JPEG REQUIRED libjpeg)
+        pkg_check_modules(PNG REQUIRED libpng)
+
     else()
         find_package(JPEG REQUIRED)
         set(JPEG_LIBRARIES ${JPEG_LIBRARIES})

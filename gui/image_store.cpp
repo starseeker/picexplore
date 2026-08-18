@@ -148,6 +148,12 @@ void ImageStore::set_thumbnail(size_t index, const std::string& filepath, ThumbQ
     
     auto& entry = entries_[index];
     
+    // THUMB_READY is a generation=0 background task from ScanCoordinator or initial DB load.
+    // If the UI has explicitly requested a layout-perfect thumbnail, DO NOT allow this
+    // generic background task to overwrite it and clear the scaled layout buffer!
+    // That causes permanent grey rectangles!
+    if (entry.last_requested_generation > 0) return;
+    
     // Only upgrade if it's better or same quality
     if (quality < entry.best_quality) return;
 
@@ -179,7 +185,7 @@ void ImageStore::set_thumbnail(size_t index, const std::string& filepath, ThumbQ
 }
 
 void ImageStore::set_thumbnail_rgb(size_t index, const std::string& filepath, ThumbQuality quality,
-                                   std::vector<uint8_t>&& rgb_data, int width, int height) {
+                                   std::vector<uint8_t>&& rgb_data, int width, int height, uint64_t generation) {
     if (index >= entries_.size()) return;
     
     if (entries_[index].filepath != filepath) {
@@ -189,9 +195,29 @@ void ImageStore::set_thumbnail_rgb(size_t index, const std::string& filepath, Th
     
     auto& entry = entries_[index];
     
-    if (quality < entry.best_quality && entry.scaled.layout_width == width) return;
+    // If the UI requested a thumbnail with a specific generation, but this incoming
+    // thumbnail is from a generic generation=0 background task, DO NOT use it!
+    // It will overwrite the perfect UI layout size with a generic one and cause gray squares!
+    if (generation == 0 && entry.last_requested_generation > 0) return;
+    
+    // If this is an older generation UI request arriving out of order, discard it!
+    if (generation > 0 && generation < entry.last_fulfilled_generation) return;
+    if (generation > 0) {
+        entry.last_fulfilled_generation = generation;
+    }
+    
+    // Only reject if it's a quality downgrade AND the current image is perfectly sized.
+    // If the current image is empty, or the layout doesn't match, we MUST accept the new image
+    // regardless of quality to avoid drawing a grey square.
+    bool layout_matches = (entry.scaled.layout_width > 0 && entry.scaled.layout_width == width);
+    if (!entry.scaled.rgb_data.empty() && layout_matches && quality < entry.scaled.quality) {
+        return;
+    }
 
-    entry.best_quality = quality;
+    // Update the best quality ONLY if it's actually better.
+    if (quality > entry.best_quality) {
+        entry.best_quality = quality;
+    }
 
     scaled_rgb_memory_used_ -= entry.scaled.rgb_data.size();
     
@@ -200,6 +226,7 @@ void ImageStore::set_thumbnail_rgb(size_t index, const std::string& filepath, Th
     entry.scaled.height = height;
     entry.scaled.layout_width = width;
     entry.scaled.layout_height = height;
+    entry.scaled.quality = quality;
     
     scaled_rgb_memory_used_ += entry.scaled.rgb_data.size();
 
@@ -356,6 +383,7 @@ void ImageStore::evict_memory_if_needed() {
                 entry.scaled.height = 0;
                 entry.scaled.layout_width = 0;
                 entry.scaled.layout_height = 0;
+                entry.scaled.quality = ThumbQuality::NONE;
                 
                 auto map_it = lru_map_.find(idx);
                 lru_list_.erase(map_it->second);

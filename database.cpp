@@ -68,10 +68,7 @@ bool DatabaseManager::open(const std::string& db_path) {
     // Check if this is a new database for bulk insert optimization
     bool is_new_db = !std::filesystem::exists(db_path);
 
-    unsigned int flags = MDB_NOSUBDIR;
-    if (is_new_db) {
-	flags |= MDB_NOSYNC; // Use MDB_NOSYNC for faster bulk insert on new DB
-    }
+    unsigned int flags = MDB_NOSUBDIR | MDB_NOSYNC | MDB_NOMETASYNC | MDB_WRITEMAP;
 
     rc = mdb_env_open(env_, db_path.c_str(), flags, 0664);
     if (rc != 0) {

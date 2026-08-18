@@ -12,6 +12,7 @@ add_executable(picexplore_gui
     layout_engine.cpp
     info_panel.cpp
     full_res_loader.cpp
+    tile_manager.cpp
     inotify_watcher.cpp
     ../third_party/miniz/miniz.c
     ../database.cpp
@@ -31,6 +32,7 @@ target_include_directories(picexplore_gui PRIVATE
     ${CONCURRENTQUEUE_DIR}
     ${CMAKE_SOURCE_DIR}/third_party
     ${JPEG_INCLUDE_DIRS}
+    ${PNG_INCLUDE_DIRS}
     .
 )
 
@@ -39,6 +41,7 @@ target_link_libraries(picexplore_gui
     xxhash
     lmdb
     ${JPEG_LIBRARIES}
+    ${PNG_LIBRARIES}
 )
 
 target_compile_options(picexplore_gui PRIVATE -g -O2 -DTINYEXIF_NO_XMP_SUPPORT)
