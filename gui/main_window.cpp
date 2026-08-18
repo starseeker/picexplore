@@ -142,6 +142,8 @@ void MainWindow::start() {
     watcher_ = new InotifyWatcher();
     watcher_->start(directory_, update_queue_);
 
+    update_statusbar();
+
     Fl::add_timeout(0.016, timer_cb, this);
 }
 
@@ -228,6 +230,8 @@ void MainWindow::update_statusbar() {
         return;
     }
 
+    size_t total_images = store_.size();
+
     if (!directory_filter_.empty()) {
         // Show the filter as a path relative to the launch root for brevity
         namespace fs = std::filesystem;
@@ -237,14 +241,24 @@ void MainWindow::update_statusbar() {
         } catch (...) {
             rel = directory_filter_;
         }
-        label = "  Filter: " + rel + "/";
+        auto filtered = store_.get_filtered_aspects(directory_filter_);
+        label = "  Filter: " + rel + "/ (" + std::to_string(filtered.size()) + " of " + std::to_string(total_images) + (total_images == 1 ? " image)" : " images)");
+    } else {
+        if (total_images == 0 && !scan_complete_) {
+            label = "  Scanning...";
+        } else {
+            label = "  " + std::to_string(total_images) + (total_images == 1 ? " image" : " images");
+        }
     }
 
-    if (db_build_total_ > 0 && !(scan_complete_ && db_build_completed_ >= db_build_total_)) {
+    bool building = (db_build_total_ > 0 && !(scan_complete_ && db_build_completed_ >= db_build_total_));
+    if (building) {
         label += "   |   Building Thumbnails: " + std::to_string(db_build_completed_) + " / " + std::to_string(db_build_total_);
         if (!scan_complete_) {
             label += " (Scanning...)";
         }
+    } else if (!scan_complete_ && total_images > 0) {
+        label += "   |   Scanning...";
     }
     
     statusbar_->copy_label(label.c_str());
@@ -261,6 +275,7 @@ void MainWindow::timer_cb(void* data) {
 
 void MainWindow::poll_events() {
     bool need_redraw = false;
+    bool status_dirty = false;
     std::vector<size_t> changed;
     
     UpdateEvent ev;
@@ -275,16 +290,18 @@ void MainWindow::poll_events() {
             store_.get(idx).best_quality = ev.image.best_quality;
             store_.get(idx).content_hash = ev.image.content_hash;
             layout_dirty_ = true;
+            status_dirty = true;
             
             if (ev.image.best_quality == ThumbQuality::NONE) {
                 db_build_total_++;
-                update_statusbar();
                 
                 // Queue a background task to generate the thumbnail so the DB fully populates.
                 // Generation 0 ensures it is not discarded when the user scrolls.
                 pipeline_->request_thumbnail(idx, ev.image.filepath, ev.image.content_hash, 
                                              ThumbQuality::SMALL, false, 0, 0, 0);
             }
+        } else if (ev.type == UpdateEvent::Type::SCAN_PROGRESS) {
+            status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::THUMB_READY) {
             bool was_none = (store_.get(ev.thumb.image_index).best_quality == ThumbQuality::NONE);
             store_.set_thumbnail(ev.thumb.image_index, ev.thumb.filepath, ev.thumb.quality,
@@ -294,7 +311,7 @@ void MainWindow::poll_events() {
             need_redraw = true;
             if (was_none && store_.get(ev.thumb.image_index).best_quality != ThumbQuality::NONE) {
                 db_build_completed_++;
-                update_statusbar();
+                status_dirty = true;
             }
         } else if (ev.type == UpdateEvent::Type::THUMB_RGB_READY) {
             bool was_none = (store_.get(ev.thumb_rgb.image_index).best_quality == ThumbQuality::NONE);
@@ -305,11 +322,12 @@ void MainWindow::poll_events() {
             need_redraw = true;
             if (was_none && store_.get(ev.thumb_rgb.image_index).best_quality != ThumbQuality::NONE) {
                 db_build_completed_++;
+                status_dirty = true;
             }
-            // Always call update_statusbar in single image mode to clear any "Generating" text
+            // Always update statusbar in single image mode to clear any "Generating" text
             if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
                 viewport_->current_single_image() == ev.thumb_rgb.image_index) {
-                update_statusbar();
+                status_dirty = true;
             }
         } else if (ev.type == UpdateEvent::Type::THUMB_FAILED) {
             bool was_none = (store_.get(ev.failed.image_index).best_quality == ThumbQuality::NONE);
@@ -319,7 +337,7 @@ void MainWindow::poll_events() {
             need_redraw = true;
             if (was_none && store_.get(ev.failed.image_index).best_quality != ThumbQuality::NONE) {
                 db_build_completed_++;
-                update_statusbar();
+                status_dirty = true;
             }
         } else if (ev.type == UpdateEvent::Type::FULL_RES_READY) {
             if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
@@ -363,6 +381,7 @@ void MainWindow::poll_events() {
                 }
             }
             layout_dirty_ = true;
+            status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::IMAGE_RENAMED) {
             std::cout << "RENAMED: " << ev.rename.old_filepath
                       << " -> " << ev.rename.new_filepath << std::endl;
@@ -379,11 +398,16 @@ void MainWindow::poll_events() {
                     db_->commit_transaction();
                 }
             }
+            status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::SCAN_COMPLETE) {
             std::cout << "Scan complete." << std::endl;
             scan_complete_ = true;
-            update_statusbar();
+            status_dirty = true;
         }
+    }
+
+    if (status_dirty) {
+        update_statusbar();
     }
 
     if (layout_dirty_) {

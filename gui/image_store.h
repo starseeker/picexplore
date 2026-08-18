@@ -78,6 +78,7 @@ public:
     const ImageEntry& get(size_t index) const;
     const uint8_t* get_scaled_image(size_t index, int target_w, int target_h);
     size_t count() const;
+    size_t size() const { return count(); }
 
     // Aspect ratio list for layout engine
     std::vector<double> get_aspect_ratios() const;
