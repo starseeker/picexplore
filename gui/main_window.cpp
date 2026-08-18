@@ -378,7 +378,19 @@ void MainWindow::reprioritize_thumbnails() {
             
             const auto& entry = store_.get(visible[i]);
             bool size_mismatch = (entry.scaled.layout_width == 0); // basic check before layout recalculation
-            if ((entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch) &&
+            
+            // Re-calculate basic needed quality for the check
+            double layout_w = entry.aspect_ratio * target_height_;
+            ThumbQuality needed = ThumbQuality::SMALL;
+            if (layout_w < 96)       needed = ThumbQuality::SMALL;
+            else if (layout_w < 192) needed = ThumbQuality::MEDIUM;
+            else if (layout_w < 384) needed = ThumbQuality::LARGE;
+            else if (layout_w < 768) needed = ThumbQuality::XLARGE;
+            else                     needed = ThumbQuality::FULL;
+            
+            bool needs_upgrade = (entry.scaled.quality < needed);
+            
+            if ((entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch || needs_upgrade) &&
                 entry.last_requested_generation < current_generation_) {
                 view_changed = true;
                 break;
@@ -425,11 +437,7 @@ void MainWindow::reprioritize_thumbnails() {
         if (missing_or_mismatch) {
             store_.get(idx).last_requested_generation = current_generation_;
             
-            if (entry.best_quality == ThumbQuality::NONE) {
-                pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
-                                             ThumbQuality::SMALL, true, current_generation_,
-                                             static_cast<int>(layout_w), static_cast<int>(layout_h));
-            } else if (entry.scaled.rgb_data.empty()) {
+            if (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty()) {
                 pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
                                              ThumbQuality::SMALL, true, current_generation_,
                                              static_cast<int>(layout_w), static_cast<int>(layout_h));
