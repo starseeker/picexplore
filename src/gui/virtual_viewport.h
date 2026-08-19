@@ -39,6 +39,12 @@ public:
 
     int content_width() const { return w(); }
 
+    void set_show_minimap(bool show) {
+        show_minimap_ = show;
+        redraw();
+    }
+    bool show_minimap() const { return show_minimap_; }
+
     std::function<void(const std::string&)> on_image_clicked;
     std::function<void(const std::string&)> on_image_double_clicked;
     std::function<void()> on_exit_single_image;
@@ -72,6 +78,19 @@ private:
     std::string tile_hash_;
     int tile_orig_w_ = 0;
     int tile_orig_h_ = 0;
+
+    // Minimap / Navigator
+    struct MinimapGeometry {
+        int box_x = 0, box_y = 0, box_w = 0, box_h = 0;
+        int img_x = 0, img_y = 0, img_w = 0, img_h = 0;
+        int proxy_x = 0, proxy_y = 0, proxy_w = 0, proxy_h = 0;
+        bool is_valid = false;
+    };
+
+    MinimapGeometry compute_minimap_geometry(float target_orig_w, float target_orig_h) const;
+    void draw_minimap(float target_orig_w, float target_orig_h, const uint8_t* thumb_data, int thumb_w, int thumb_h);
+    bool minimap_dragging_ = false;
+    bool show_minimap_ = true;
 
     void draw_single_image();
     void draw_grid();

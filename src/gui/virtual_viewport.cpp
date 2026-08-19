@@ -232,18 +232,82 @@ int VirtualViewport::handle(int event) {
             }
             case FL_PUSH:
                 if (Fl::event_button() == FL_LEFT_MOUSE) {
+                    float target_orig_w = (tile_manager_ && tile_orig_w_ > 0) ? (float)tile_orig_w_ : ((full_res_ready_ && full_res_w_ > 0) ? (float)full_res_w_ : 0.0f);
+                    if (target_orig_w == 0.0f) {
+                        try {
+                            const auto& entry = store_.get(single_idx_);
+                            target_orig_w = entry.original_width > 0 ? entry.original_width : entry.scaled.width;
+                        } catch (...) {}
+                    }
+                    float target_orig_h = (tile_manager_ && tile_orig_h_ > 0) ? (float)tile_orig_h_ : ((full_res_ready_ && full_res_h_ > 0) ? (float)full_res_h_ : 0.0f);
+                    if (target_orig_h == 0.0f) {
+                        try {
+                            const auto& entry = store_.get(single_idx_);
+                            target_orig_h = entry.original_height > 0 ? entry.original_height : entry.scaled.height;
+                        } catch (...) {}
+                    }
+                    MinimapGeometry geom = compute_minimap_geometry(target_orig_w, target_orig_h);
+                    int mx = Fl::event_x();
+                    int my = Fl::event_y();
+                    if (geom.is_valid && mx >= geom.box_x && mx <= geom.box_x + geom.box_w &&
+                        my >= geom.box_y && my <= geom.box_y + geom.box_h) {
+                        minimap_dragging_ = true;
+                        if (zoom_ == 0.0f) {
+                            float fit_scale = std::min((float)w() / target_orig_w, (float)h() / target_orig_h);
+                            zoom_ = std::max(fit_scale * 2.0f, 1.0f);
+                        }
+                        float frac_x = std::max(0.0f, std::min(1.0f, (float)(mx - geom.img_x) / geom.img_w));
+                        float frac_y = std::max(0.0f, std::min(1.0f, (float)(my - geom.img_y) / geom.img_h));
+                        pan_x_ = (w() / 2.0f) - frac_x * target_orig_w * zoom_;
+                        pan_y_ = (h() / 2.0f) - frac_y * target_orig_h * zoom_;
+                        redraw();
+                        return 1;
+                    }
+                    minimap_dragging_ = false;
                     last_drag_x_ = Fl::event_x();
                     last_drag_y_ = Fl::event_y();
                     return 1;
                 }
                 return 1;
             case FL_DRAG:
-                if (zoom_ != 0.0f) {
+                if (minimap_dragging_) {
+                    float target_orig_w = (tile_manager_ && tile_orig_w_ > 0) ? (float)tile_orig_w_ : ((full_res_ready_ && full_res_w_ > 0) ? (float)full_res_w_ : 0.0f);
+                    if (target_orig_w == 0.0f) {
+                        try {
+                            const auto& entry = store_.get(single_idx_);
+                            target_orig_w = entry.original_width > 0 ? entry.original_width : entry.scaled.width;
+                        } catch (...) {}
+                    }
+                    float target_orig_h = (tile_manager_ && tile_orig_h_ > 0) ? (float)tile_orig_h_ : ((full_res_ready_ && full_res_h_ > 0) ? (float)full_res_h_ : 0.0f);
+                    if (target_orig_h == 0.0f) {
+                        try {
+                            const auto& entry = store_.get(single_idx_);
+                            target_orig_h = entry.original_height > 0 ? entry.original_height : entry.scaled.height;
+                        } catch (...) {}
+                    }
+                    MinimapGeometry geom = compute_minimap_geometry(target_orig_w, target_orig_h);
+                    if (geom.is_valid) {
+                        int mx = Fl::event_x();
+                        int my = Fl::event_y();
+                        float frac_x = std::max(0.0f, std::min(1.0f, (float)(mx - geom.img_x) / geom.img_w));
+                        float frac_y = std::max(0.0f, std::min(1.0f, (float)(my - geom.img_y) / geom.img_h));
+                        pan_x_ = (w() / 2.0f) - frac_x * target_orig_w * zoom_;
+                        pan_y_ = (h() / 2.0f) - frac_y * target_orig_h * zoom_;
+                        redraw();
+                        return 1;
+                    }
+                } else if (zoom_ != 0.0f) {
                     pan_x_ += (Fl::event_x() - last_drag_x_);
                     pan_y_ += (Fl::event_y() - last_drag_y_);
                     last_drag_x_ = Fl::event_x();
                     last_drag_y_ = Fl::event_y();
                     redraw();
+                    return 1;
+                }
+                return 1;
+            case FL_RELEASE:
+                if (minimap_dragging_) {
+                    minimap_dragging_ = false;
                     return 1;
                 }
                 return 1;
@@ -501,4 +565,106 @@ void VirtualViewport::draw_single_image() {
         else text += std::to_string((int)(zoom_ * 100)) + "%";
         fl_draw(text.c_str(), x() + 10, y() + h() - 10);
     }
+
+    // Draw minimap / navigator overlay
+    if (show_minimap_) {
+        float target_orig_w = (orig_w > 0) ? (float)orig_w : (float)img_w;
+        float target_orig_h = (orig_h > 0) ? (float)orig_h : (float)img_h;
+        if (tile_manager_ && tile_orig_w_ > 0 && tile_orig_h_ > 0) {
+            target_orig_w = (float)tile_orig_w_;
+            target_orig_h = (float)tile_orig_h_;
+        }
+        draw_minimap(target_orig_w, target_orig_h, img_data, img_w, img_h);
+    }
+}
+
+VirtualViewport::MinimapGeometry VirtualViewport::compute_minimap_geometry(float target_orig_w, float target_orig_h) const {
+    MinimapGeometry geom;
+    if (!show_minimap_ || target_orig_w <= 0.0f || target_orig_h <= 0.0f || w() <= 240 || h() <= 180) {
+        return geom;
+    }
+
+    const int max_box_w = 180;
+    const int max_box_h = 140;
+    const int pad = 4;
+    const int margin = 16;
+
+    float aspect = target_orig_w / target_orig_h;
+    int mini_w, mini_h;
+    if (aspect >= (float)max_box_w / max_box_h) {
+        mini_w = max_box_w;
+        mini_h = std::max(1, (int)(max_box_w / aspect));
+    } else {
+        mini_h = max_box_h;
+        mini_w = std::max(1, (int)(max_box_h * aspect));
+    }
+
+    geom.img_w = mini_w;
+    geom.img_h = mini_h;
+    geom.box_w = mini_w + pad * 2;
+    geom.box_h = mini_h + pad * 2;
+    geom.box_x = x() + w() - geom.box_w - margin;
+    geom.box_y = y() + h() - geom.box_h - margin;
+    geom.img_x = geom.box_x + pad;
+    geom.img_y = geom.box_y + pad;
+
+    if (zoom_ == 0.0f) {
+        geom.proxy_x = geom.img_x;
+        geom.proxy_y = geom.img_y;
+        geom.proxy_w = geom.img_w;
+        geom.proxy_h = geom.img_h;
+    } else {
+        float sub_x0 = -pan_x_ / zoom_;
+        float sub_y0 = -pan_y_ / zoom_;
+        float sub_x1 = sub_x0 + (float)w() / zoom_;
+        float sub_y1 = sub_y0 + (float)h() / zoom_;
+
+        float px0 = geom.img_x + (sub_x0 / target_orig_w) * geom.img_w;
+        float py0 = geom.img_y + (sub_y0 / target_orig_h) * geom.img_h;
+        float px1 = geom.img_x + (sub_x1 / target_orig_w) * geom.img_w;
+        float py1 = geom.img_y + (sub_y1 / target_orig_h) * geom.img_h;
+
+        int cx0 = std::max(geom.img_x, (int)std::floor(px0));
+        int cy0 = std::max(geom.img_y, (int)std::floor(py0));
+        int cx1 = std::min(geom.img_x + geom.img_w, (int)std::ceil(px1));
+        int cy1 = std::min(geom.img_y + geom.img_h, (int)std::ceil(py1));
+
+        geom.proxy_x = cx0;
+        geom.proxy_y = cy0;
+        geom.proxy_w = std::max(4, cx1 - cx0);
+        geom.proxy_h = std::max(4, cy1 - cy0);
+    }
+
+    geom.is_valid = true;
+    return geom;
+}
+
+void VirtualViewport::draw_minimap(float target_orig_w, float target_orig_h, const uint8_t* thumb_data, int thumb_w, int thumb_h) {
+    MinimapGeometry geom = compute_minimap_geometry(target_orig_w, target_orig_h);
+    if (!geom.is_valid) return;
+
+    // 1. Draw container background (dark slate HUD box)
+    fl_color(fl_rgb_color(15, 23, 42)); // Slate 900
+    fl_rectf(geom.box_x, geom.box_y, geom.box_w, geom.box_h);
+
+    // 2. Draw thumbnail image
+    if (thumb_data && thumb_w > 0 && thumb_h > 0 && geom.img_w > 0 && geom.img_h > 0) {
+        std::vector<uint8_t> mini_rgb(geom.img_w * geom.img_h * 3);
+        stbir_resize_uint8_linear(
+            thumb_data, thumb_w, thumb_h, 0,
+            mini_rgb.data(), geom.img_w, geom.img_h, 0,
+            (stbir_pixel_layout)3
+        );
+        fl_draw_image(mini_rgb.data(), geom.img_x, geom.img_y, geom.img_w, geom.img_h, 3, 0);
+    }
+
+    // 3. Draw container border
+    fl_color(fl_rgb_color(71, 85, 105)); // Slate 600
+    fl_rect(geom.box_x, geom.box_y, geom.box_w, geom.box_h);
+
+    // 4. Draw Viewport Proxy Box (High-contrast Sky Blue outline with 2px stroke)
+    fl_color(fl_rgb_color(56, 189, 248)); // Tailwind Sky-400 (#38BDF8)
+    fl_line_style(FL_SOLID, 2);
+    fl_rect(geom.proxy_x, geom.proxy_y, geom.proxy_w, geom.proxy_h);
+    fl_line_style(0); // Reset line style
 }

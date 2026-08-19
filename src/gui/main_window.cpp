@@ -39,6 +39,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     menubar_->add("View/Zoom In (Ctrl+Wheel Up)",    FL_CTRL | '=', menu_cb, (void*)7);
     menubar_->add("View/Zoom Out (Ctrl+Wheel Down)", FL_CTRL | '-', menu_cb, (void*)8);
     menubar_->add("View/Reset Zoom",                 FL_CTRL | '0', menu_cb, (void*)9);
+    menubar_->add("View/Navigator (Minimap)",        0,             menu_cb, (void*)19, FL_MENU_TOGGLE | FL_MENU_VALUE);
     menubar_->add("View/Information Panel",          0,             menu_cb, (void*)10, FL_MENU_TOGGLE);
 
     menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO);
@@ -216,6 +217,17 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     viewport_->enter_single_image(raw_idx);
     
     auto& entry = store_.get(raw_idx);
+    if (!entry.metadata_known || entry.original_width <= 2048 || entry.original_height <= 2048) {
+        int true_w = 0, true_h = 0;
+        if (get_image_info(filepath, &true_w, &true_h) && true_w > 0 && true_h > 0) {
+            if ((long long)true_w * true_h > (long long)entry.original_width * entry.original_height) {
+                entry.original_width = true_w;
+                entry.original_height = true_h;
+                entry.aspect_ratio = (double)true_w / true_h;
+                entry.metadata_known = true;
+            }
+        }
+    }
     long long pixels = (long long)entry.original_width * entry.original_height;
     
     int screen_dim = std::max(w(), h());
@@ -241,7 +253,7 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
         pipeline_->request_thumbnail(raw_idx, filepath, entry.content_hash, target_quality, true, current_generation_);
     }
 
-    if (pixels > 16384LL * 16384LL || pixels <= 0) { // Fallback <= 0 to tiles if extremely large or unknown
+    if (pixels > 8192LL * 8192LL || entry.original_width > 8192 || entry.original_height > 8192 || pixels <= 0) {
         // For very large images, use tile manager
         std::string label = "  Viewing: " + std::filesystem::path(filepath).filename().string() + "  [Generating Map...]";
         statusbar_->copy_label(label.c_str());
@@ -793,6 +805,12 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
             break;
         }
         case 16: win->reset_directory_filter(); break;
+        case 19: {
+            const Fl_Menu_Item* m = win->menubar_->mvalue();
+            bool enabled = m ? (m->value() != 0) : true;
+            win->viewport_->set_show_minimap(enabled);
+            break;
+        }
         default: return;
     }
     

@@ -62,6 +62,8 @@ void FullResLoader::worker_thread() {
             decoded = load_webp_file(filepath, 0, 0, rgb_data, width, height);
         } else if (ext == ".tif" || ext == ".tiff") {
             decoded = load_tiff_file(filepath, 0, 0, rgb_data, width, height);
+        } else if (ext == ".png") {
+            decoded = load_png_file(filepath, 0, 0, rgb_data, width, height);
         } else {
             int channels = 0;
             unsigned char* data = stbi_load(filepath.c_str(), &width, &height, &channels, 3);
