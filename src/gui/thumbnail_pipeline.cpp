@@ -143,20 +143,12 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
             target_h = static_cast<int>(req.target_quality);
         }
 
-        std::vector<uint8_t> rgb_out;
         if (target_found) {
             std::vector<uint8_t> rgb_decoded;
-            int dec_w, dec_h;
+            int dec_w = 0, dec_h = 0;
             if (decode_jpeg(jpeg_data.data(), jpeg_data.size(), rgb_decoded, dec_w, dec_h)) {
-                if (dec_w == target_w && dec_h == target_h) {
-                    rgb_out = rgb_decoded;
-                } else {
-                    rgb_out.resize(target_w * target_h * 3);
-                    stbir_resize_uint8_linear(rgb_decoded.data(), dec_w, dec_h, 0,
-                                              rgb_out.data(), target_w, target_h, 0, STBIR_RGB);
-                }
                 update_queue_.enqueue(UpdateEvent::make_thumb_rgb_ready(
-                    req.image_index, req.filepath, hash, found_quality, std::vector<uint8_t>(rgb_out), target_w, target_h, req.generation
+                    req.image_index, req.filepath, hash, found_quality, std::vector<uint8_t>(rgb_decoded), dec_w, dec_h, req.generation
                 ));
                 
                 // If the cached thumbnail in LMDB is already of equal or higher quality, we're done!

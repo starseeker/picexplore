@@ -31,6 +31,7 @@ public:
     int scroll_to_image(size_t raw_idx);
 
     void set_selected_image(size_t raw_idx);
+    size_t get_selected_image() const { return selected_idx_; }
 
     void apply_updates(const std::vector<size_t>& changed_indices);
 

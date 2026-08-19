@@ -79,9 +79,10 @@ void VirtualViewport::draw_grid() {
         int draw_w = static_cast<int>(box.w);
         int draw_h = static_cast<int>(box.h);
 
-        if (box.image_index == selected_idx_) {
-            fl_color(fl_rgb_color(100, 180, 255));
-            fl_rectf(draw_x - 2, draw_y - 2, draw_w + 4, draw_h + 4);
+        bool is_selected = (box.image_index == selected_idx_);
+        if (is_selected) {
+            fl_color(fl_rgb_color(60, 160, 255));
+            fl_rectf(draw_x - 3, draw_y - 3, draw_w + 6, draw_h + 6);
         }
 
         auto& entry = store_.get(box.image_index);
@@ -92,10 +93,17 @@ void VirtualViewport::draw_grid() {
         }
 
         if (!img_data) {
-            fl_color(FL_DARK3);
-            fl_rectf(draw_x, draw_y, draw_w, draw_h);
-            fl_color(FL_WHITE);
-            fl_rect(draw_x, draw_y, draw_w, draw_h);
+            if (is_selected) {
+                fl_color(fl_rgb_color(35, 75, 125));
+                fl_rectf(draw_x, draw_y, draw_w, draw_h);
+                fl_color(fl_rgb_color(100, 200, 255));
+                fl_rect(draw_x, draw_y, draw_w, draw_h);
+            } else {
+                fl_color(FL_DARK3);
+                fl_rectf(draw_x, draw_y, draw_w, draw_h);
+                fl_color(FL_WHITE);
+                fl_rect(draw_x, draw_y, draw_w, draw_h);
+            }
 
             // Draw placeholder text
             std::filesystem::path p(entry.filepath);
@@ -126,7 +134,21 @@ void VirtualViewport::draw_grid() {
             // Draw text centered and wrapped inside the box, with 10px padding
             fl_draw(text.c_str(), draw_x + 10, draw_y + 10, draw_w - 20, draw_h - 20, FL_ALIGN_CENTER | FL_ALIGN_WRAP, nullptr, 0);
         } else {
-            fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
+            if (is_selected) {
+                // Tint whole image with a light blue overlay (blend 25% light blue: 120, 185, 255)
+                std::vector<uint8_t> tinted(draw_w * draw_h * 3);
+                for (size_t i = 0; i < (size_t)draw_w * draw_h; ++i) {
+                    uint8_t r = img_data[i * 3 + 0];
+                    uint8_t g = img_data[i * 3 + 1];
+                    uint8_t b = img_data[i * 3 + 2];
+                    tinted[i * 3 + 0] = static_cast<uint8_t>((r * 3 + 120) / 4);
+                    tinted[i * 3 + 1] = static_cast<uint8_t>((g * 3 + 185) / 4);
+                    tinted[i * 3 + 2] = static_cast<uint8_t>((b * 3 + 255) / 4);
+                }
+                fl_draw_image(tinted.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
+            } else {
+                fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
+            }
         }
     }
 
@@ -149,8 +171,20 @@ int VirtualViewport::handle(int event) {
 
                 if (zoom_ == 0.0f) {
                     // Switch from fit-to-window to explicit zoom
-                    int img_w = (tile_manager_ && full_res_ready_) ? tile_orig_w_ : full_res_w_;
-                    int img_h = (tile_manager_ && full_res_ready_) ? tile_orig_h_ : full_res_h_;
+                    int img_w = 0, img_h = 0;
+                    if (tile_manager_ && tile_orig_w_ > 0 && tile_orig_h_ > 0) {
+                        img_w = tile_orig_w_;
+                        img_h = tile_orig_h_;
+                    } else if (full_res_ready_ && full_res_w_ > 0 && full_res_h_ > 0) {
+                        img_w = full_res_w_;
+                        img_h = full_res_h_;
+                    } else {
+                        try {
+                            const auto& entry = store_.get(single_idx_);
+                            img_w = entry.original_width > 0 ? entry.original_width : entry.scaled.width;
+                            img_h = entry.original_height > 0 ? entry.original_height : entry.scaled.height;
+                        } catch (...) {}
+                    }
                     
                     if (img_w == 0 || img_h == 0) return 1;
                     float scale_x = (float)w() / img_w;
@@ -166,8 +200,20 @@ int VirtualViewport::handle(int event) {
                 
                 // Clamp zoom
                 float min_zoom = 0.1f;
-                int img_w = (tile_manager_ && full_res_ready_) ? tile_orig_w_ : full_res_w_;
-                int img_h = (tile_manager_ && full_res_ready_) ? tile_orig_h_ : full_res_h_;
+                int img_w = 0, img_h = 0;
+                if (tile_manager_ && tile_orig_w_ > 0 && tile_orig_h_ > 0) {
+                    img_w = tile_orig_w_;
+                    img_h = tile_orig_h_;
+                } else if (full_res_ready_ && full_res_w_ > 0 && full_res_h_ > 0) {
+                    img_w = full_res_w_;
+                    img_h = full_res_h_;
+                } else {
+                    try {
+                        const auto& entry = store_.get(single_idx_);
+                        img_w = entry.original_width > 0 ? entry.original_width : entry.scaled.width;
+                        img_h = entry.original_height > 0 ? entry.original_height : entry.scaled.height;
+                    } catch (...) {}
+                }
                 if (img_w > 0 && img_h > 0) {
                     float fit_zoom = std::min((float)w() / img_w, (float)h() / img_h);
                     if (fit_zoom < min_zoom) min_zoom = fit_zoom;
@@ -220,10 +266,11 @@ int VirtualViewport::handle(int event) {
                 if (layout_ && on_image_clicked) {
                     int mx = Fl::event_x() - x();
                     int my = Fl::event_y() - y() + scroll_offset_;
-                    
+                    bool hit = false;
                     for (const auto& box : layout_->boxes) {
                         if (mx >= box.x && mx <= box.x + box.w &&
                             my >= box.y && my <= box.y + box.h) {
+                            hit = true;
                             try {
                                 const auto& entry = store_.get(box.image_index);
                                 if (Fl::event_clicks() > 0 && on_image_double_clicked) {
@@ -234,6 +281,9 @@ int VirtualViewport::handle(int event) {
                             } catch (...) {}
                             return 1;
                         }
+                    }
+                    if (!hit) {
+                        on_image_clicked("");
                     }
                 }
                 return 1; // Consume clicks so they don't propagate incorrectly
@@ -299,20 +349,24 @@ void VirtualViewport::draw_single_image() {
     int img_w = 0, img_h = 0;
     const uint8_t* img_data = nullptr;
 
-    if (full_res_ready_ && !full_res_rgb_.empty()) {
-        img_w = full_res_w_;
-        img_h = full_res_h_;
-        img_data = full_res_rgb_.data();
-    } else {
-        // Fallback to highest quality thumbnail available
-        try {
-            const auto& entry = store_.get(single_idx_);
+    int orig_w = 0, orig_h = 0;
+    try {
+        const auto& entry = store_.get(single_idx_);
+        orig_w = entry.original_width;
+        orig_h = entry.original_height;
+        if (!full_res_ready_ || full_res_rgb_.empty()) {
             if (!entry.scaled.rgb_data.empty()) {
                 img_data = entry.scaled.rgb_data.data();
                 img_w = entry.scaled.width;
                 img_h = entry.scaled.height;
             }
-        } catch (...) {}
+        }
+    } catch (...) {}
+
+    if (full_res_ready_ && !full_res_rgb_.empty()) {
+        img_w = full_res_w_;
+        img_h = full_res_h_;
+        img_data = full_res_rgb_.data();
     }
 
     bool draw_tiles = (tile_manager_ && full_res_ready_ && zoom_ >= 0.14f);
@@ -320,17 +374,21 @@ void VirtualViewport::draw_single_image() {
     if (img_data && img_w > 0 && img_h > 0 && (!draw_tiles || !tile_manager_)) {
         fl_push_clip(x(), y(), w(), h());
 
+        float target_orig_w = (orig_w > 0) ? (float)orig_w : (float)img_w;
+        float target_orig_h = (orig_h > 0) ? (float)orig_h : (float)img_h;
+        if (tile_manager_ && tile_orig_w_ > 0 && tile_orig_h_ > 0) {
+            target_orig_w = (float)tile_orig_w_;
+            target_orig_h = (float)tile_orig_h_;
+        }
+
         if (zoom_ == 0.0f) {
             // Fit to window
-            float target_orig_w = tile_manager_ ? tile_orig_w_ : img_w;
-            float target_orig_h = tile_manager_ ? tile_orig_h_ : img_h;
-            
             float scale_x = (float)w() / target_orig_w;
             float scale_y = (float)h() / target_orig_h;
             float scale = std::min(scale_x, scale_y);
             
-            int draw_w = (int)(target_orig_w * scale);
-            int draw_h = (int)(target_orig_h * scale);
+            int draw_w = std::max(1, (int)(target_orig_w * scale));
+            int draw_h = std::max(1, (int)(target_orig_h * scale));
             int draw_x = x() + (w() - draw_w) / 2;
             int draw_y = y() + (h() - draw_h) / 2;
 
@@ -347,8 +405,6 @@ void VirtualViewport::draw_single_image() {
             }
         } else {
             // Custom zoom & pan: only resample the visible viewport sub-region!
-            float target_orig_w = tile_manager_ ? tile_orig_w_ : img_w;
-            float target_orig_h = tile_manager_ ? tile_orig_h_ : img_h;
             
             int draw_w = (int)(target_orig_w * zoom_);
             int draw_h = (int)(target_orig_h * zoom_);

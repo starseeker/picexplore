@@ -263,7 +263,22 @@ const uint8_t* ImageStore::get_scaled_image(size_t index, int draw_w, int draw_h
     }
 
     if (entry.scaled.layout_width != draw_w || entry.scaled.layout_height != draw_h) {
-        return nullptr;
+        if (entry.scaled.width > 0 && entry.scaled.height > 0 && draw_w > 0 && draw_h > 0) {
+            std::vector<uint8_t> resized(draw_w * draw_h * 3);
+            stbir_resize_uint8_linear(entry.scaled.rgb_data.data(),
+                                      entry.scaled.width, entry.scaled.height, 0,
+                                      resized.data(), draw_w, draw_h, 0, STBIR_RGB);
+            scaled_rgb_memory_used_ -= entry.scaled.rgb_data.size();
+            entry.scaled.rgb_data = std::move(resized);
+            entry.scaled.width = draw_w;
+            entry.scaled.height = draw_h;
+            entry.scaled.layout_width = draw_w;
+            entry.scaled.layout_height = draw_h;
+            scaled_rgb_memory_used_ += entry.scaled.rgb_data.size();
+            evict_memory_if_needed();
+        } else {
+            return nullptr;
+        }
     }
     
     return entry.scaled.rgb_data.data();

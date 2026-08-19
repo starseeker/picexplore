@@ -31,8 +31,13 @@ public:
     // Called when the filename segment in the breadcrumb is clicked.
     std::function<void(const std::string&)> on_file_clicked;
 
-    // Called when the scroll-to-image button is clicked.
+    // Called when the scroll-to-image button is clicked in grid mode.
     std::function<void(const std::string&)> on_scroll_to_image;
+
+    // Called when the exit-image-view button is clicked in single image mode.
+    std::function<void()> on_exit_image_view;
+
+    void set_single_image_mode(bool single_image);
 
     virtual void resize(int X, int Y, int W, int H) override;
 
@@ -47,9 +52,10 @@ private:
     int              font_size_ = 12;
     std::string      root_dir_;
     std::string      current_filepath_; // path of last selected image
+    bool             is_single_image_mode_ = false;
 
-    Fl_Button*       scroll_btn_;
-    static const int SCROLL_BTN_H = 30;
+    Fl_Button*       action_btn_;
+    static const int ACTION_BTN_H = 30;
 
     struct CrumbData {
         std::string path;
@@ -59,4 +65,5 @@ private:
 
     void clear_breadcrumb();  // frees user_data strings then clears the group
     void rebuild_breadcrumb();
+    void update_action_button();
 };

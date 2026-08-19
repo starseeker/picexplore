@@ -36,6 +36,7 @@ private:
     InfoPanel*       info_panel_;
     class Fl_Menu_Bar* menubar_;
     Fl_Box*          statusbar_;
+    Fl_Box*          statusbar_hint_;
     
     bool info_panel_visible_ = false;
 
@@ -49,6 +50,7 @@ private:
     void apply_directory_filter(const std::string& dir);
     void reset_directory_filter();
     void update_statusbar();
+    void recompute_layout();
 
     moodycamel::ConcurrentQueue<UpdateEvent> update_queue_;
     ScanCoordinator* scanner_ = nullptr;

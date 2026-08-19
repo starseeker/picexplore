@@ -161,11 +161,15 @@ InfoPanel::InfoPanel(int X, int Y, int W, int H, const char* L)
 
     text_buffer_->text("No image selected.\nClick an image to view details.");
 
-    scroll_btn_ = new Fl_Button(X + 5, Y + H - SCROLL_BTN_H - 5, W - 10, SCROLL_BTN_H, "Scroll to Image");
-    scroll_btn_->hide();
-    scroll_btn_->callback([](Fl_Widget* w, void* ud) {
+    action_btn_ = new Fl_Button(X + 5, Y + H - ACTION_BTN_H - 5, W - 10, ACTION_BTN_H, "Scroll to Image");
+    action_btn_->hide();
+    action_btn_->callback([](Fl_Widget* w, void* ud) {
         auto* panel = static_cast<InfoPanel*>(ud);
-        if (panel->on_scroll_to_image) panel->on_scroll_to_image(panel->current_filepath_);
+        if (panel->is_single_image_mode_) {
+            if (panel->on_exit_image_view) panel->on_exit_image_view();
+        } else {
+            if (panel->on_scroll_to_image) panel->on_scroll_to_image(panel->current_filepath_);
+        }
     }, this);
 
     end();
@@ -201,10 +205,40 @@ void InfoPanel::set_root_dir(const std::string& root) {
         root_dir_.pop_back();
 }
 
+void InfoPanel::set_single_image_mode(bool single_image) {
+    is_single_image_mode_ = single_image;
+    update_action_button();
+}
+
+void InfoPanel::update_action_button() {
+    int panel_x = x(), panel_y = y(), panel_w = w(), panel_h = h();
+    if (is_single_image_mode_) {
+        action_btn_->copy_label("Exit Image View");
+        action_btn_->show();
+        action_btn_->resize(panel_x + 5, panel_y + panel_h - ACTION_BTN_H - 5, panel_w - 10, ACTION_BTN_H);
+    } else {
+        action_btn_->copy_label("Scroll to Image");
+        if (current_filepath_.empty() || root_dir_.empty()) {
+            action_btn_->hide();
+        } else {
+            action_btn_->show();
+            action_btn_->resize(panel_x + 5, panel_y + panel_h - ACTION_BTN_H - 5, panel_w - 10, ACTION_BTN_H);
+        }
+    }
+
+    int td_y = panel_y + crumb_h_;
+    int text_bottom_margin = action_btn_->visible() ? ACTION_BTN_H + 10 : 5;
+    int td_h = panel_h - crumb_h_ - text_bottom_margin;
+    text_display_->resize(panel_x + 5, td_y + 5, panel_w - 10, std::max(td_h, 1));
+    action_btn_->redraw();
+    text_display_->redraw();
+}
+
 void InfoPanel::clear_info() {
     current_filepath_.clear();
     clear_breadcrumb();
     text_buffer_->text("No image selected.\nClick an image to view details.");
+    update_action_button();
 }
 
 // ── breadcrumb ─────────────────────────────────────────────────────────────
@@ -240,10 +274,8 @@ void InfoPanel::rebuild_breadcrumb() {
     if (current_filepath_.empty() || root_dir_.empty()) {
         // No breadcrumb — text display fills the whole panel.
         crumb_h_ = 0;
-        scroll_btn_->hide();
         breadcrumb_bar_->resize(panel_x, panel_y, panel_w, 0);
-        text_display_->resize(panel_x + 5, panel_y + 5, panel_w - 10, panel_h - 10);
-        text_display_->redraw();
+        update_action_button();
         return;
     }
 
@@ -277,15 +309,12 @@ void InfoPanel::rebuild_breadcrumb() {
 
     if (segments.empty()) {
         crumb_h_ = 0;
-        scroll_btn_->hide();
         breadcrumb_bar_->resize(panel_x, panel_y, panel_w, 0);
-        text_display_->resize(panel_x + 5, panel_y + 5, panel_w - 10, panel_h - 10);
-        text_display_->redraw();
+        update_action_button();
         return;
     }
 
-    scroll_btn_->show();
-    scroll_btn_->resize(panel_x + 5, panel_y + panel_h - SCROLL_BTN_H - 5, panel_w - 10, SCROLL_BTN_H);
+    update_action_button();
 
     // ── measure & wrap ────────────────────────────────────────────────────
     // ROW_H scales with font size so everything stays proportional.
@@ -427,7 +456,7 @@ void InfoPanel::rebuild_breadcrumb() {
 
     // Resize text display to occupy whatever height remains below the breadcrumb.
     int td_y = panel_y + crumb_h_;
-    int text_bottom_margin = scroll_btn_->visible() ? SCROLL_BTN_H + 10 : 5;
+    int text_bottom_margin = action_btn_->visible() ? ACTION_BTN_H + 10 : 5;
     int td_h = panel_h - crumb_h_ - text_bottom_margin;
     text_display_->resize(panel_x + 5, td_y + 5, panel_w - 10, std::max(td_h, 1));
 

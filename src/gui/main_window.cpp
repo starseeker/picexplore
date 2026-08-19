@@ -67,6 +67,15 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     statusbar_->labelfont(FL_HELVETICA);
     statusbar_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
 
+    statusbar_hint_ = new Fl_Box(w - 220, MENU_H + vp_h, 220, STATUS_H, "");
+    statusbar_hint_->box(FL_FLAT_BOX);
+    statusbar_hint_->color(fl_darker(FL_DARK2));
+    statusbar_hint_->labelcolor(fl_rgb_color(150, 190, 240));
+    statusbar_hint_->labelsize(12);
+    statusbar_hint_->labelfont(FL_HELVETICA);
+    statusbar_hint_->align(FL_ALIGN_RIGHT | FL_ALIGN_INSIDE);
+    statusbar_hint_->hide();
+
     // Wire info panel breadcrumb → directory filter
     // Only fires when info panel is already visible (panel must be shown to click it).
     info_panel_->on_dir_clicked = [this](const std::string& dir) {
@@ -93,12 +102,29 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
         }
     };
 
+    info_panel_->on_exit_image_view = [this]() {
+        exit_single_image_mode();
+    };
+
     viewport_->on_image_clicked = [this](const std::string& path) {
-        current_selected_filepath_ = path;
+        if (path.empty()) {
+            current_selected_filepath_.clear();
+            viewport_->set_selected_image((size_t)-1);
+            info_panel_->clear_info();
+            return;
+        }
         size_t idx = store_.find_by_filepath(path);
         if (idx != (size_t)-1) {
-            info_panel_->display_info(store_.get(idx));
-            viewport_->set_selected_image(idx);
+            if (viewport_->get_selected_image() == idx) {
+                // Clicking already selected image unselects it
+                current_selected_filepath_.clear();
+                viewport_->set_selected_image((size_t)-1);
+                info_panel_->clear_info();
+            } else {
+                current_selected_filepath_ = path;
+                info_panel_->display_info(store_.get(idx));
+                viewport_->set_selected_image(idx);
+            }
         }
     };
 
@@ -225,28 +251,42 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
         std::string label = "  Viewing: " + filename + "  [Loading full resolution...]";
         statusbar_->copy_label(label.c_str());
     }
-    statusbar_->redraw();
     
-    scrollbar_->hide();
     int vp_h = h() - MENU_H - STATUS_H;
     int vp_w = w();
     if (info_panel_visible_) vp_w -= INFO_W;
+
+    statusbar_->resize(0, MENU_H + vp_h, w() - 220, STATUS_H);
+    statusbar_hint_->resize(w() - 220, MENU_H + vp_h, 220, STATUS_H);
+    statusbar_hint_->copy_label("Esc: Exit Image View  ");
+    statusbar_hint_->show();
+    statusbar_->redraw();
+    statusbar_hint_->redraw();
+
+    scrollbar_->hide();
+    info_panel_->set_single_image_mode(true);
     viewport_->resize(0, MENU_H, vp_w, vp_h); // Expand over scrollbar
 }
 
 void MainWindow::exit_single_image_mode() {
     viewport_->exit_single_image();
+    info_panel_->set_single_image_mode(false);
     directory_filter_ = pre_viewer_filter_;
     full_res_loader_->cancel();
     
-    scrollbar_->show();
     int vp_h = h() - MENU_H - STATUS_H;
+    statusbar_hint_->copy_label("");
+    statusbar_hint_->hide();
+    statusbar_->resize(0, MENU_H + vp_h, w(), STATUS_H);
+
+    scrollbar_->show();
     int vp_w = w() - SCROLL_W;
     if (info_panel_visible_) vp_w -= INFO_W;
     viewport_->resize(0, MENU_H, vp_w, vp_h);
     
-    layout_dirty_ = true;
+    last_visible_.clear();
     update_statusbar();
+    recompute_layout();
 }
 
 void MainWindow::apply_directory_filter(const std::string& dir) {
@@ -298,13 +338,13 @@ void MainWindow::update_statusbar() {
         }
     }
 
-    bool building = (db_build_total_ > 0 && !(scan_complete_ && db_build_completed_ >= db_build_total_));
+    bool building = (db_build_total_ > 0 && db_build_completed_ < db_build_total_);
     if (building) {
-        label += "   |   Building Thumbnails: " + std::to_string(db_build_completed_) + " / " + std::to_string(db_build_total_);
+        label += "   |   Building Thumbnails: " + std::to_string(std::min(db_build_completed_, db_build_total_)) + " / " + std::to_string(db_build_total_);
         if (!scan_complete_) {
             label += " (Scanning...)";
         }
-    } else if (!scan_complete_ && total_images > 0) {
+    } else if (!scan_complete_) {
         label += "   |   Scanning...";
     }
     
@@ -356,7 +396,7 @@ void MainWindow::poll_events() {
                                  ev.thumb.width, ev.thumb.height);
             changed.push_back(ev.thumb.image_index);
             need_redraw = true;
-            if (was_none && store_.get(ev.thumb.image_index).best_quality != ThumbQuality::NONE) {
+            if (was_none && db_build_completed_ < db_build_total_) {
                 db_build_completed_++;
                 status_dirty = true;
             }
@@ -371,7 +411,7 @@ void MainWindow::poll_events() {
                                      ev.thumb_rgb.width, ev.thumb_rgb.height, ev.thumb_rgb.generation);
             changed.push_back(ev.thumb_rgb.image_index);
             need_redraw = true;
-            if (was_none && store_.get(ev.thumb_rgb.image_index).best_quality != ThumbQuality::NONE) {
+            if (ev.thumb_rgb.generation == 0 && was_none && db_build_completed_ < db_build_total_) {
                 db_build_completed_++;
                 status_dirty = true;
             }
@@ -386,7 +426,7 @@ void MainWindow::poll_events() {
             store_.set_thumbnail(ev.failed.image_index, ev.failed.filepath, ThumbQuality::FAILED, nullptr, 0, 0, 0);
             changed.push_back(ev.failed.image_index);
             need_redraw = true;
-            if (was_none && store_.get(ev.failed.image_index).best_quality != ThumbQuality::NONE) {
+            if (was_none && db_build_completed_ < db_build_total_) {
                 db_build_completed_++;
                 status_dirty = true;
             }
@@ -462,25 +502,28 @@ void MainWindow::poll_events() {
     }
 
     if (layout_dirty_) {
-        // Use get_filtered_aspects so the layout carries real raw store indices.
-        auto indexed = store_.get_filtered_aspects(directory_filter_);
-        layout_result_ = layout_engine_.compute(indexed, viewport_->content_width(), target_height_);
-        viewport_->set_layout(&layout_result_);
-        
-        int max_scroll = std::max(0, static_cast<int>(layout_result_.total_height) - viewport_->h());
-        int current_scroll = std::clamp(viewport_->scroll_offset(), 0, max_scroll);
-        
-        viewport_->set_scroll_offset(current_scroll);
-        scrollbar_->value(current_scroll, viewport_->h(), 0, layout_result_.total_height);
-        
-        layout_dirty_ = false;
-        need_redraw = true;
-        
-        if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
-            reprioritize_thumbnails();
-        }
+        recompute_layout();
     } else if (need_redraw) {
         viewport_->apply_updates(changed);
+    }
+}
+
+void MainWindow::recompute_layout() {
+    auto indexed = store_.get_filtered_aspects(directory_filter_);
+    layout_result_ = layout_engine_.compute(indexed, viewport_->content_width(), target_height_);
+    viewport_->set_layout(&layout_result_);
+    
+    int max_scroll = std::max(0, static_cast<int>(layout_result_.total_height) - viewport_->h());
+    int current_scroll = std::clamp(viewport_->scroll_offset(), 0, max_scroll);
+    
+    viewport_->set_scroll_offset(current_scroll);
+    scrollbar_->value(current_scroll, viewport_->h(), 0, layout_result_.total_height);
+    
+    layout_dirty_ = false;
+    viewport_->redraw();
+    
+    if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
+        reprioritize_thumbnails();
     }
 }
 
@@ -503,10 +546,11 @@ void MainWindow::reprioritize_thumbnails() {
             }
             
             const auto& entry = store_.get(visible[i]);
-            bool size_mismatch = (entry.scaled.layout_width == 0); // basic check before layout recalculation
+            double layout_w = entry.aspect_ratio * target_height_;
+            bool size_mismatch = (entry.scaled.layout_width == 0 ||
+                                  std::abs(entry.scaled.layout_width - (int)layout_w) > 5);
             
             // Re-calculate basic needed quality for the check
-            double layout_w = entry.aspect_ratio * target_height_;
             ThumbQuality needed = ThumbQuality::SMALL;
             if (layout_w < 96)       needed = ThumbQuality::SMALL;
             else if (layout_w < 192) needed = ThumbQuality::MEDIUM;
@@ -620,7 +664,14 @@ void MainWindow::resize(int X, int Y, int W, int H) {
     menubar_->resize(0, 0, W, MENU_H);
     viewport_->resize(0, MENU_H, vp_w, vp_h);
     scrollbar_->resize(vp_w, MENU_H, SCROLL_W, vp_h);
-    statusbar_->resize(0, MENU_H + vp_h, W, STATUS_H);
+
+    if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
+        statusbar_->resize(0, MENU_H + vp_h, W - 220, STATUS_H);
+        statusbar_hint_->resize(W - 220, MENU_H + vp_h, 220, STATUS_H);
+    } else {
+        statusbar_->resize(0, MENU_H + vp_h, W, STATUS_H);
+        statusbar_hint_->resize(W - 220, MENU_H + vp_h, 220, STATUS_H);
+    }
 
     if (info_panel_visible_) {
         info_panel_->resize(vp_w + SCROLL_W, MENU_H, info_w, vp_h);
@@ -629,7 +680,11 @@ void MainWindow::resize(int X, int Y, int W, int H) {
         info_panel_->hide();
     }
     
-    layout_dirty_ = true;
+    if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
+        recompute_layout();
+    } else {
+        layout_dirty_ = true;
+    }
 }
 
 // ── callbacks ──────────────────────────────────────────────────────────────
