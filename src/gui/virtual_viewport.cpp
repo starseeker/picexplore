@@ -251,6 +251,12 @@ int VirtualViewport::handle(int event) {
                 if (Fl::event_key() == FL_Escape) {
                     if (on_exit_single_image) on_exit_single_image();
                     return 1;
+                } else if (Fl::event_key() == FL_Left) {
+                    if (on_navigate_single_image) on_navigate_single_image(-1);
+                    return 1;
+                } else if (Fl::event_key() == FL_Right) {
+                    if (on_navigate_single_image) on_navigate_single_image(1);
+                    return 1;
                 }
                 return Fl_Widget::handle(event);
             default:

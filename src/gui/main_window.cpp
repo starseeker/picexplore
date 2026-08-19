@@ -139,6 +139,10 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
         exit_single_image_mode();
     };
 
+    viewport_->on_navigate_single_image = [this](int delta) {
+        navigate_single_image(delta);
+    };
+
     end();
     resizable(viewport_);
 }
@@ -256,9 +260,9 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     int vp_w = w();
     if (info_panel_visible_) vp_w -= INFO_W;
 
-    statusbar_->resize(0, MENU_H + vp_h, w() - 220, STATUS_H);
-    statusbar_hint_->resize(w() - 220, MENU_H + vp_h, 220, STATUS_H);
-    statusbar_hint_->copy_label("Esc: Exit Image View  ");
+    statusbar_->resize(0, MENU_H + vp_h, w() - 280, STATUS_H);
+    statusbar_hint_->resize(w() - 280, MENU_H + vp_h, 280, STATUS_H);
+    statusbar_hint_->copy_label("Left/Right: Prev/Next  |  Esc: Exit  ");
     statusbar_hint_->show();
     statusbar_->redraw();
     statusbar_hint_->redraw();
@@ -266,6 +270,39 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     scrollbar_->hide();
     info_panel_->set_single_image_mode(true);
     viewport_->resize(0, MENU_H, vp_w, vp_h); // Expand over scrollbar
+}
+
+void MainWindow::navigate_single_image(int delta) {
+    if (viewport_->current_mode() != VirtualViewport::ViewMode::SINGLE_IMAGE) return;
+    if (layout_result_.boxes.empty()) return;
+
+    size_t current_idx = viewport_->current_single_image();
+    
+    int current_pos = -1;
+    for (size_t i = 0; i < layout_result_.boxes.size(); ++i) {
+        if (layout_result_.boxes[i].image_index == current_idx) {
+            current_pos = static_cast<int>(i);
+            break;
+        }
+    }
+
+    if (current_pos == -1) {
+        current_pos = 0;
+    }
+
+    int next_pos = current_pos + delta;
+    if (next_pos < 0 || next_pos >= static_cast<int>(layout_result_.boxes.size())) {
+        // Stop at boundaries rather than wrapping around
+        return;
+    }
+
+    size_t next_raw_idx = layout_result_.boxes[next_pos].image_index;
+    const auto& next_entry = store_.get(next_raw_idx);
+
+    current_selected_filepath_ = next_entry.filepath;
+    viewport_->set_selected_image(next_raw_idx);
+    info_panel_->display_info(next_entry);
+    enter_single_image_mode(next_raw_idx, next_entry.filepath);
 }
 
 void MainWindow::exit_single_image_mode() {
@@ -287,6 +324,14 @@ void MainWindow::exit_single_image_mode() {
     last_visible_.clear();
     update_statusbar();
     recompute_layout();
+
+    size_t sel = viewport_->get_selected_image();
+    if (sel != (size_t)-1) {
+        int target_y = viewport_->scroll_to_image(sel);
+        viewport_->set_scroll_offset(target_y);
+        scrollbar_->value(target_y);
+        reprioritize_thumbnails();
+    }
 }
 
 void MainWindow::apply_directory_filter(const std::string& dir) {

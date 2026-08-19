@@ -53,7 +53,7 @@ void ScanCoordinator::run() {
             std::cout << "Loading images from database: " << db_path_ << std::endl;
             
             // Normalize directory string for safe prefix matching
-            std::string prefix = directory_;
+            std::string prefix = fs::path(directory_).lexically_normal().string();
             if (!prefix.empty() && prefix.back() != '/' && prefix.back() != '\\') {
                 prefix += '/';
             }
@@ -62,12 +62,13 @@ void ScanCoordinator::run() {
             for (const auto& img : images) {
                 if (stop_requested_) break;
                 
+                std::string norm_path = fs::path(img.path).lexically_normal().string();
                 // Only load images that belong to the currently requested directory
-                if (img.path.find(prefix) != 0 && img.path != directory_) {
+                if (norm_path.find(prefix) != 0 && norm_path != fs::path(directory_).lexically_normal().string()) {
                     continue;
                 }
                 
-                db_paths.insert(img.path);
+                db_paths.insert(norm_path);
                 
                 ThumbQuality bq = static_cast<ThumbQuality>(img.best_thumb_size);
                 
@@ -76,7 +77,7 @@ void ScanCoordinator::run() {
                 double ar = img.aspect_ratio;
 
                 UpdateEvent ev = UpdateEvent::make_image_discovered(
-                    img.path, img.hash,
+                    norm_path, img.hash,
                     actual_w, actual_h, ar, 
                     0, 0, // Lazy stat on demand
                     bq, {}, // Skip passing jpeg data to save memory, ThumbnailPipeline will load it
@@ -100,7 +101,7 @@ void ScanCoordinator::run() {
         for (const auto& entry : fs::recursive_directory_iterator(directory_)) {
             if (stop_requested_) break;
             if (entry.is_regular_file()) {
-                std::string path = entry.path().string();
+                std::string path = fs::path(entry.path()).lexically_normal().string();
                 
                 if (is_image_file(path)) {
                     disk_paths.insert(path);

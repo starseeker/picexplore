@@ -24,6 +24,7 @@ public:
 
     void enter_single_image_mode(size_t raw_idx, const std::string& filepath);
     void exit_single_image_mode();
+    void navigate_single_image(int delta);
 
 private:
     std::string directory_;

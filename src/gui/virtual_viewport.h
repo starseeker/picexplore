@@ -42,6 +42,7 @@ public:
     std::function<void(const std::string&)> on_image_clicked;
     std::function<void(const std::string&)> on_image_double_clicked;
     std::function<void()> on_exit_single_image;
+    std::function<void(int)> on_navigate_single_image;
 
 protected:
     void draw() override;

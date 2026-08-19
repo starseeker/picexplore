@@ -1,4 +1,5 @@
 #include "image_store.h"
+#include "utils.h"
 #include <jpeglib.h>
 #include <setjmp.h>
 #include <algorithm>
@@ -17,6 +18,30 @@ ImageStore::~ImageStore() {
 size_t ImageStore::add_image(const std::string& filepath, double aspect_ratio,
                              int width, int height,
                              uintmax_t file_size, uintmax_t file_timestamp) {
+    auto it = path_to_index_.find(filepath);
+    if (it != path_to_index_.end()) {
+        size_t idx = it->second;
+        auto& entry = entries_[idx];
+        if (aspect_ratio > 0.0) {
+            entry.aspect_ratio = aspect_ratio;
+        }
+        if (width > 0 && height > 0) {
+            // Upgrade original dimensions if incoming info has higher resolution (e.g. true original size vs thumbnail)
+            if ((long long)width * height > (long long)entry.original_width * entry.original_height) {
+                entry.original_width = width;
+                entry.original_height = height;
+                entry.metadata_known = true;
+            }
+        }
+        if (file_size > 0) {
+            entry.file_size = file_size;
+        }
+        if (file_timestamp > 0) {
+            entry.file_timestamp = file_timestamp;
+        }
+        return idx;
+    }
+
     size_t idx = entries_.size();
     ImageEntry entry;
     entry.filepath = filepath;
@@ -30,6 +55,7 @@ size_t ImageStore::add_image(const std::string& filepath, double aspect_ratio,
         entry.metadata_known = true;
     }
     entries_.push_back(entry);
+    path_to_index_[filepath] = idx;
     return idx;
 }
 
@@ -103,6 +129,7 @@ void ImageStore::remove_image(const std::string& filepath) {
     }
     
     entries_.erase(entries_.begin() + index);
+    path_to_index_.clear();
     
     std::unordered_map<size_t, std::list<size_t>::iterator> new_lru_map;
     for (auto list_it = lru_list_.begin(); list_it != lru_list_.end(); ) {
@@ -126,15 +153,18 @@ void ImageStore::remove_image(const std::string& filepath) {
     }
     currently_visible_ = std::move(new_visible);
     
-    for (size_t i = index; i < entries_.size(); ++i) {
+    for (size_t i = 0; i < entries_.size(); ++i) {
         entries_[i].index = i;
+        path_to_index_[entries_[i].filepath] = i;
     }
 }
 
 void ImageStore::rename_image(const std::string& old_filepath, const std::string& new_filepath) {
     size_t index = find_by_filepath(old_filepath);
     if (index == static_cast<size_t>(-1)) return;
+    path_to_index_.erase(old_filepath);
     entries_[index].filepath = new_filepath;
+    path_to_index_[new_filepath] = index;
 }
 
 
@@ -342,8 +372,8 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
     } else if (criteria == SortCriteria::PIXEL_AREA) {
         for (auto& entry : entries_) {
             if (entry.original_width <= 0 || entry.original_height <= 0) {
-                int w = 0, h = 0, c = 0;
-                if (stbi_info(entry.filepath.c_str(), &w, &h, &c)) {
+                int w = 0, h = 0;
+                if (get_image_info(entry.filepath, &w, &h)) {
                     entry.original_width = w;
                     entry.original_height = h;
                     if (h > 0) entry.aspect_ratio = (double)w / h;
@@ -376,9 +406,11 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
         return a.filepath < b.filepath;
     });
 
-    // Reassign indices
+    // Reassign indices and rebuild path_to_index_ map
+    path_to_index_.clear();
     for (size_t i = 0; i < entries_.size(); ++i) {
         entries_[i].index = i;
+        path_to_index_[entries_[i].filepath] = i;
     }
     
     // Clear visibility state because indices changed completely
@@ -398,8 +430,9 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
 }
 
 size_t ImageStore::find_by_filepath(const std::string& filepath) const {
-    for (size_t i = 0; i < entries_.size(); ++i) {
-        if (entries_[i].filepath == filepath) return i;
+    auto it = path_to_index_.find(filepath);
+    if (it != path_to_index_.end()) {
+        return it->second;
     }
     return static_cast<size_t>(-1);
 }

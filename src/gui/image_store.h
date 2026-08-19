@@ -104,6 +104,7 @@ public:
 
 private:
     std::vector<ImageEntry> entries_;
+    std::unordered_map<std::string, size_t> path_to_index_;
 
     // To manage memory budget, we track LRU of DecodedThumb and ScaledImage
     std::vector<size_t> currently_visible_;
