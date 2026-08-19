@@ -198,9 +198,11 @@ void ImageStore::set_thumbnail_rgb(size_t index, const std::string& filepath, Th
     auto& entry = entries_[index];
     
     // If the UI requested a thumbnail with a specific generation, but this incoming
-    // thumbnail is from a generic generation=0 background task, DO NOT use it!
-    // It will overwrite the perfect UI layout size with a generic one and cause gray squares!
-    if (generation == 0 && entry.last_requested_generation > 0) return;
+    // thumbnail is from a generic generation=0 background task, only reject it if
+    // we ALREADY have a thumbnail of equal or higher quality.
+    if (generation == 0 && entry.last_requested_generation > 0 && !entry.scaled.rgb_data.empty() && quality <= entry.scaled.quality) {
+        return;
+    }
     
     // If this is an older generation UI request arriving out of order, discard it!
     if (generation > 0 && generation < entry.last_fulfilled_generation) return;

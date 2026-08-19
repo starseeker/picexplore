@@ -343,7 +343,7 @@ void MainWindow::poll_events() {
                 // Queue a background task to generate the thumbnail so the DB fully populates.
                 // Generation 0 ensures it is not discarded when the user scrolls.
                 pipeline_->request_thumbnail(idx, ev.image.filepath, ev.image.content_hash, 
-                                             ThumbQuality::SMALL, false, 0, 0, 0);
+                                             ThumbQuality::LARGE, false, 0, 0, 0);
             }
         } else if (ev.type == UpdateEvent::Type::SCAN_PROGRESS) {
             status_dirty = true;
@@ -359,7 +359,11 @@ void MainWindow::poll_events() {
                 status_dirty = true;
             }
         } else if (ev.type == UpdateEvent::Type::THUMB_RGB_READY) {
-            bool was_none = (store_.get(ev.thumb_rgb.image_index).best_quality == ThumbQuality::NONE);
+            auto& entry = store_.get(ev.thumb_rgb.image_index);
+            if (entry.content_hash.empty() && !ev.thumb_rgb.content_hash.empty()) {
+                entry.content_hash = ev.thumb_rgb.content_hash;
+            }
+            bool was_none = (entry.best_quality == ThumbQuality::NONE);
             store_.set_thumbnail_rgb(ev.thumb_rgb.image_index, ev.thumb_rgb.filepath,
                                      ev.thumb_rgb.quality, std::move(ev.thumb_rgb.rgb_data),
                                      ev.thumb_rgb.width, ev.thumb_rgb.height, ev.thumb_rgb.generation);
@@ -558,22 +562,10 @@ void MainWindow::reprioritize_thumbnails() {
         
         if (missing_or_mismatch) {
             store_.get(idx).last_requested_generation = current_generation_;
-            
-            if (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty()) {
-                pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
-                                             ThumbQuality::SMALL, true, current_generation_,
-                                             static_cast<int>(layout_w), static_cast<int>(layout_h));
-                if (needed > ThumbQuality::SMALL) {
-                    pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
-                                                 needed, false, current_generation_,
-                                                 static_cast<int>(layout_w), static_cast<int>(layout_h));
-                }
-            } else if (needs_upgrade || size_mismatch) {
-                ThumbQuality req_quality = std::max(needed, entry.best_quality);
-                pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
-                                             req_quality, true, current_generation_,
-                                             static_cast<int>(layout_w), static_cast<int>(layout_h));
-            }
+            ThumbQuality req_quality = std::max(needed, entry.best_quality);
+            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
+                                         req_quality, true, current_generation_,
+                                         static_cast<int>(layout_w), static_cast<int>(layout_h));
         }
     }
     
@@ -596,8 +588,8 @@ void MainWindow::reprioritize_thumbnails() {
             }
         }
         
-        // We only prefetch SMALL to save memory and CPU
-        ThumbQuality needed = ThumbQuality::SMALL;
+        // Prefetch base thumbnails
+        ThumbQuality needed = ThumbQuality::LARGE;
         bool size_mismatch = (entry.scaled.layout_width  != static_cast<int>(layout_w) ||
                               entry.scaled.layout_height != static_cast<int>(layout_h));
         bool missing_or_mismatch = (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch);

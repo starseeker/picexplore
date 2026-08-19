@@ -105,21 +105,34 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
 
         std::vector<uint8_t> jpeg_data;
         bool target_found = false;
+        ThumbQuality found_quality = ThumbQuality::NONE;
+
         if (!hash.empty() && db_.is_open()) {
             std::lock_guard<std::mutex> lock(db_.get_mutex());
             if (db_.begin_transaction()) {
+                // 1. Try exact target quality first
                 std::string key = hash + ":" + std::to_string(static_cast<int>(req.target_quality));
                 if (db_.get_key_data(key, jpeg_data)) {
                     target_found = true;
+                    found_quality = req.target_quality;
+                } else {
+                    // 2. Try best available quality in DB: check sizes from largest down to smallest
+                    std::vector<int> candidate_sizes = {2048, 1024, 512, 256, 128, 64, 32};
+                    for (int sz : candidate_sizes) {
+                        std::string cand_key = hash + ":" + std::to_string(sz);
+                        if (db_.get_key_data(cand_key, jpeg_data)) {
+                            target_found = true;
+                            found_quality = static_cast<ThumbQuality>(sz);
+                            break;
+                        }
+                    }
                 }
                 db_.abort_transaction();
             }
         }
 
-        if (target_found && req.generation == 0) {
+        if (target_found && req.generation == 0 && found_quality >= req.target_quality) {
             // This is a low-priority background scan task, and the thumbnail is already in the DB.
-            // The UI didn't explicitly request this RGB data, so we don't need to send it.
-            // This prevents a race condition where a lagging background task overwrites a perfectly-sized UI thumbnail.
             return true;
         }
 
@@ -136,16 +149,22 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
             int dec_w, dec_h;
             if (decode_jpeg(jpeg_data.data(), jpeg_data.size(), rgb_decoded, dec_w, dec_h)) {
                 if (dec_w == target_w && dec_h == target_h) {
-                    rgb_out = std::move(rgb_decoded);
+                    rgb_out = rgb_decoded;
                 } else {
                     rgb_out.resize(target_w * target_h * 3);
                     stbir_resize_uint8_linear(rgb_decoded.data(), dec_w, dec_h, 0,
                                               rgb_out.data(), target_w, target_h, 0, STBIR_RGB);
                 }
                 update_queue_.enqueue(UpdateEvent::make_thumb_rgb_ready(
-                    req.image_index, req.filepath, req.target_quality, rgb_out, target_w, target_h, req.generation
+                    req.image_index, req.filepath, hash, found_quality, std::vector<uint8_t>(rgb_out), target_w, target_h, req.generation
                 ));
-                return true;
+                
+                // If the cached thumbnail in LMDB is already of equal or higher quality, we're done!
+                if (static_cast<int>(found_quality) >= static_cast<int>(req.target_quality)) {
+                    return true;
+                }
+                // Otherwise (found_quality < req.target_quality): we emitted the fast placeholder,
+                // now continue below to generate the sharp full target_quality from the original file!
             }
         }
         int w = 0, h = 0, channels = 0;
@@ -249,7 +268,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
         }
 
         update_queue_.enqueue(UpdateEvent::make_thumb_rgb_ready(
-            req.image_index, req.filepath, req.target_quality, resized, target_w, target_h, req.generation
+            req.image_index, req.filepath, hash, req.target_quality, std::move(resized), target_w, target_h, req.generation
         ));
         return true;
     } catch (...) {
@@ -351,7 +370,12 @@ bool ThumbnailPipeline::load_jpeg_scaled_file(const std::string& filepath, int t
     
     cinfo.scale_num = 1;
     cinfo.scale_denom = scale;
-    cinfo.out_color_space = JCS_RGB;
+    bool is_cmyk = (cinfo.jpeg_color_space == JCS_CMYK || cinfo.jpeg_color_space == JCS_YCCK);
+    if (is_cmyk) {
+        cinfo.out_color_space = JCS_CMYK;
+    } else {
+        cinfo.out_color_space = JCS_RGB;
+    }
     
     // Fast decoding parameters suitable for thumbnails
     cinfo.dct_method = JDCT_IFAST;
@@ -363,12 +387,6 @@ bool ThumbnailPipeline::load_jpeg_scaled_file(const std::string& filepath, int t
     out_h = cinfo.output_height;
     int channels = cinfo.output_components;
     
-    if (channels != 3) {
-        jpeg_destroy_decompress(&cinfo);
-        fclose(infile);
-        return false;
-    }
-
     rgb_data.resize(out_w * out_h * channels);
     int row_stride = out_w * channels;
 
@@ -380,6 +398,30 @@ bool ThumbnailPipeline::load_jpeg_scaled_file(const std::string& filepath, int t
     jpeg_finish_decompress(&cinfo);
     jpeg_destroy_decompress(&cinfo);
     fclose(infile);
+
+    if (is_cmyk && channels == 4) {
+        std::vector<uint8_t> rgb_converted(out_w * out_h * 3);
+        for (size_t i = 0; i < (size_t)out_w * out_h; i++) {
+            uint8_t c = rgb_data[i * 4 + 0];
+            uint8_t m = rgb_data[i * 4 + 1];
+            uint8_t y = rgb_data[i * 4 + 2];
+            uint8_t k = rgb_data[i * 4 + 3];
+            rgb_converted[i * 3 + 0] = (c * k) / 255;
+            rgb_converted[i * 3 + 1] = (m * k) / 255;
+            rgb_converted[i * 3 + 2] = (y * k) / 255;
+        }
+        rgb_data = std::move(rgb_converted);
+    } else if (channels == 1) {
+        std::vector<uint8_t> rgb_converted(out_w * out_h * 3);
+        for (size_t i = 0; i < (size_t)out_w * out_h; i++) {
+            uint8_t g = rgb_data[i];
+            rgb_converted[i * 3 + 0] = g;
+            rgb_converted[i * 3 + 1] = g;
+            rgb_converted[i * 3 + 2] = g;
+        }
+        rgb_data = std::move(rgb_converted);
+    }
+
     return true;
 }
 

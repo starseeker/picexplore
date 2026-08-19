@@ -62,6 +62,7 @@ struct UpdateEvent {
     struct {
         size_t image_index;
         std::string filepath;
+        std::string content_hash;
         ThumbQuality quality;
         std::vector<uint8_t> rgb_data;
         int width;
@@ -181,14 +182,31 @@ struct UpdateEvent {
     }
 
     static UpdateEvent make_thumb_rgb_ready(
-        size_t index, const std::string& filepath, ThumbQuality q,
-        const std::vector<uint8_t>& rgb, int w, int h, uint64_t generation) {
+        size_t index, const std::string& filepath, const std::string& hash,
+        ThumbQuality q, const std::vector<uint8_t>& rgb, int w, int h, uint64_t generation) {
         UpdateEvent ev;
         ev.type = Type::THUMB_RGB_READY;
         ev.thumb_rgb.image_index = index;
         ev.thumb_rgb.filepath = filepath;
+        ev.thumb_rgb.content_hash = hash;
         ev.thumb_rgb.quality = q;
         ev.thumb_rgb.rgb_data = rgb;
+        ev.thumb_rgb.width = w;
+        ev.thumb_rgb.height = h;
+        ev.thumb_rgb.generation = generation;
+        return ev;
+    }
+
+    static UpdateEvent make_thumb_rgb_ready(
+        size_t index, const std::string& filepath, const std::string& hash,
+        ThumbQuality q, std::vector<uint8_t>&& rgb, int w, int h, uint64_t generation) {
+        UpdateEvent ev;
+        ev.type = Type::THUMB_RGB_READY;
+        ev.thumb_rgb.image_index = index;
+        ev.thumb_rgb.filepath = filepath;
+        ev.thumb_rgb.content_hash = hash;
+        ev.thumb_rgb.quality = q;
+        ev.thumb_rgb.rgb_data = std::move(rgb);
         ev.thumb_rgb.width = w;
         ev.thumb_rgb.height = h;
         ev.thumb_rgb.generation = generation;
