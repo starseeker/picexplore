@@ -1,19 +1,13 @@
 #include "inotify_watcher.h"
+#include "utils.h"
 #include <sys/inotify.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <filesystem>
 #include <iostream>
 #include <algorithm>
-#include "../third_party/stb/stb_image.h"
 
 namespace fs = std::filesystem;
-
-static bool is_image_file(const std::string& path) {
-    auto ext = fs::path(path).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    return (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp");
-}
 
 InotifyWatcher::InotifyWatcher() {}
 
@@ -111,8 +105,8 @@ void InotifyWatcher::watch_thread_func() {
             if (!is_image_file(full_path)) continue;
             
             if (event->mask & IN_CLOSE_WRITE) {
-                int w = 0, h = 0, comp = 0;
-                if (stbi_info(full_path.c_str(), &w, &h, &comp) && w > 0 && h > 0) {
+                int w = 0, h = 0;
+                if (get_image_info(full_path, &w, &h) && w > 0 && h > 0) {
                     double ar = static_cast<double>(w) / h;
                     uintmax_t fsize = 0, ftime = 0;
                     try {
@@ -131,8 +125,8 @@ void InotifyWatcher::watch_thread_func() {
                     update_queue_->enqueue(UpdateEvent::make_image_renamed(rit->second, full_path));
                     pending_renames_.erase(rit);
                 } else {
-                    int w = 0, h = 0, comp = 0;
-                    if (stbi_info(full_path.c_str(), &w, &h, &comp) && w > 0 && h > 0) {
+                    int w = 0, h = 0;
+                    if (get_image_info(full_path, &w, &h) && w > 0 && h > 0) {
                         double ar = static_cast<double>(w) / h;
                         update_queue_->enqueue(UpdateEvent::make_image_discovered(full_path, "", w, h, ar));
                     }

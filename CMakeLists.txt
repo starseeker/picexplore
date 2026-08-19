@@ -25,13 +25,21 @@ else()
     if(PkgConfig_FOUND)
         pkg_check_modules(JPEG REQUIRED libjpeg)
         pkg_check_modules(PNG REQUIRED libpng)
+        pkg_check_modules(WEBP REQUIRED libwebp)
+        pkg_check_modules(TIFF REQUIRED libtiff-4)
     else()
         find_package(JPEG REQUIRED)
         find_package(PNG REQUIRED)
+        find_package(WebP REQUIRED)
+        find_package(TIFF REQUIRED)
         set(JPEG_LIBRARIES ${JPEG_LIBRARIES})
         set(JPEG_INCLUDE_DIRS ${JPEG_INCLUDE_DIR})
         set(PNG_LIBRARIES ${PNG_LIBRARIES})
         set(PNG_INCLUDE_DIRS ${PNG_INCLUDE_DIR})
+        set(WEBP_LIBRARIES ${WEBP_LIBRARIES})
+        set(WEBP_INCLUDE_DIRS ${WEBP_INCLUDE_DIRS})
+        set(TIFF_LIBRARIES ${TIFF_LIBRARIES})
+        set(TIFF_INCLUDE_DIRS ${TIFF_INCLUDE_DIR})
     endif()
 endif()
 
@@ -92,6 +100,8 @@ target_include_directories(picexplore PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party
     ${JPEG_INCLUDE_DIRS}
     ${PNG_INCLUDE_DIRS}
+    ${WEBP_INCLUDE_DIRS}
+    ${TIFF_INCLUDE_DIRS}
 )
 
 target_link_libraries(picexplore
@@ -100,6 +110,8 @@ target_link_libraries(picexplore
     lmdb
     ${JPEG_LIBRARIES}
     ${PNG_LIBRARIES}
+    ${WEBP_LIBRARIES}
+    ${TIFF_LIBRARIES}
 )
 
 target_compile_definitions(picexplore PRIVATE

@@ -158,13 +158,21 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
         unsigned char* img = nullptr;
         std::vector<uint8_t> rgb_decoded;
 
-        // Fast-path: use libjpeg-turbo with downscaling for JPEG files
+        // Fast-path: use specialized decoders for JPEG, WebP, TIFF
         std::string ext = std::filesystem::path(req.filepath).extension().string();
         for (char& c : ext) c = std::tolower(c);
         
         bool fast_decoded = false;
         if (ext == ".jpg" || ext == ".jpeg") {
             if (load_jpeg_scaled_file(req.filepath, target_w, target_h, rgb_decoded, w, h)) {
+                fast_decoded = true;
+            }
+        } else if (ext == ".webp") {
+            if (load_webp_file(req.filepath, target_w, target_h, rgb_decoded, w, h)) {
+                fast_decoded = true;
+            }
+        } else if (ext == ".tif" || ext == ".tiff") {
+            if (load_tiff_file(req.filepath, target_w, target_h, rgb_decoded, w, h)) {
                 fast_decoded = true;
             }
         }

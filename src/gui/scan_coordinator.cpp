@@ -1,4 +1,5 @@
 #include "scan_coordinator.h"
+#include "utils.h"
 #include <filesystem>
 #include <iostream>
 #include <algorithm>
@@ -101,10 +102,7 @@ void ScanCoordinator::run() {
             if (entry.is_regular_file()) {
                 std::string path = entry.path().string();
                 
-                auto ext = entry.path().extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                
-                if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp") {
+                if (is_image_file(path)) {
                     disk_paths.insert(path);
                     if (db_paths.find(path) == db_paths.end()) {
                         // New file discovered!
@@ -148,8 +146,8 @@ void ScanCoordinator::scan_worker() {
     while (!stop_requested_) {
         std::string path;
         if (file_queue_.try_dequeue(path)) {
-            int w = 0, h = 0, comp = 0;
-            if (stbi_info(path.c_str(), &w, &h, &comp) && w > 0 && h > 0) {
+            int w = 0, h = 0;
+            if (get_image_info(path, &w, &h) && w > 0 && h > 0) {
                 double ar = static_cast<double>(w) / h;
                 uintmax_t fsize = 0, ftime = 0;
                 try {

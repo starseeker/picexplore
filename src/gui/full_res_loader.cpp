@@ -1,6 +1,9 @@
 #include "full_res_loader.h"
+#include "utils.h"
 #include "stb_image.h"
 #include <iostream>
+#include <filesystem>
+#include <algorithm>
 
 FullResLoader::FullResLoader(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue)
     : update_queue_(update_queue) {
@@ -47,14 +50,29 @@ void FullResLoader::worker_thread() {
             has_request_ = false;
         }
 
-        // Decode
-        int width, height, channels;
-        unsigned char* data = stbi_load(filepath.c_str(), &width, &height, &channels, 3);
+        // Decode full resolution image
+        int width = 0, height = 0;
+        std::vector<uint8_t> rgb_data;
+        bool decoded = false;
+
+        std::string ext = std::filesystem::path(filepath).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+        if (ext == ".webp") {
+            decoded = load_webp_file(filepath, 0, 0, rgb_data, width, height);
+        } else if (ext == ".tif" || ext == ".tiff") {
+            decoded = load_tiff_file(filepath, 0, 0, rgb_data, width, height);
+        } else {
+            int channels = 0;
+            unsigned char* data = stbi_load(filepath.c_str(), &width, &height, &channels, 3);
+            if (data) {
+                rgb_data.assign(data, data + (width * height * 3));
+                stbi_image_free(data);
+                decoded = true;
+            }
+        }
         
-        if (data) {
-            std::vector<uint8_t> rgb_data(data, data + (width * height * 3));
-            stbi_image_free(data);
-            
+        if (decoded) {
             // Re-check if cancelled during decode
             bool cancelled = false;
             {
@@ -67,7 +85,7 @@ void FullResLoader::worker_thread() {
             
             if (!cancelled) {
                 update_queue_.enqueue(UpdateEvent::make_full_res_ready(
-                    image_index, filepath, rgb_data, width, height));
+                    image_index, filepath, std::move(rgb_data), width, height));
             }
         } else {
             std::cerr << "FullResLoader failed to decode: " << filepath << std::endl;
