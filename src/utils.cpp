@@ -168,6 +168,51 @@ bool is_image_file(const std::string& filepath) {
             ext == ".tga" || ext == ".webp" || ext == ".tif" || ext == ".tiff");
 }
 
+bool is_cache_or_db_path(const std::string& path, const std::string& db_path) {
+    if (path.empty()) return false;
+
+    namespace fs = std::filesystem;
+    std::string norm_path = fs::path(path).lexically_normal().string();
+
+    // 1. Check known PicExplore cache directories
+    const char* home = getenv("HOME");
+    if (home) {
+        std::string user_cache = (fs::path(home) / ".cache" / "picexplore").lexically_normal().string();
+        if (norm_path == user_cache || norm_path.rfind(user_cache + "/", 0) == 0) {
+            return true;
+        }
+    }
+    std::string tmp_cache = fs::path("/tmp/picexplore").lexically_normal().string();
+    if (norm_path == tmp_cache || norm_path.rfind(tmp_cache + "/", 0) == 0) {
+        return true;
+    }
+
+    // 2. Check explicitly configured database path
+    if (!db_path.empty()) {
+        std::string norm_db = fs::path(db_path).lexically_normal().string();
+        if (norm_path == norm_db || norm_path.rfind(norm_db + "/", 0) == 0) {
+            return true;
+        }
+        std::string db_dir = fs::path(norm_db).parent_path().string();
+        if (!db_dir.empty() && (norm_path == db_dir || norm_path.rfind(db_dir + "/", 0) == 0)) {
+            std::string dir_name = fs::path(db_dir).filename().string();
+            if (dir_name == "databases" || dir_name == "picexplore" || dir_name == ".picexplore") {
+                return true;
+            }
+        }
+    }
+
+    // 3. Check known database and lock filenames
+    std::string filename = fs::path(norm_path).filename().string();
+    if (filename == "images.db" || filename == "images.db-lock" ||
+        filename == "data.mdb" || filename == "lock.mdb" ||
+        filename == ".picexplore" || filename == "picexplore") {
+        return true;
+    }
+
+    return false;
+}
+
 #include <webp/decode.h>
 #include <tiffio.h>
 #include <fstream>

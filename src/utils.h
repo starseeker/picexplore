@@ -72,6 +72,7 @@ class StatusReporter {
 // Utility functions
 std::vector<uint8_t> encode_jpeg(const unsigned char* rgb_data, int width, int height, int quality = 90);
 bool is_image_file(const std::string& filepath);
+bool is_cache_or_db_path(const std::string& path, const std::string& db_path = "");
 bool get_image_info(const std::string& filepath, int* width, int* height);
 bool load_webp_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h);
 bool load_tiff_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h);

@@ -47,6 +47,8 @@ void InotifyWatcher::stop() {
 }
 
 void InotifyWatcher::add_watch_recursive(const std::string& path) {
+    if (is_cache_or_db_path(path)) return;
+
     int wd = inotify_add_watch(inotify_fd_, path.c_str(), 
         IN_CLOSE_WRITE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE);
     if (wd == -1) {
@@ -58,7 +60,10 @@ void InotifyWatcher::add_watch_recursive(const std::string& path) {
     try {
         for (const auto& entry : fs::directory_iterator(path)) {
             if (entry.is_directory() && !fs::is_symlink(entry)) {
-                add_watch_recursive(entry.path().string());
+                std::string subpath = fs::path(entry.path()).lexically_normal().string();
+                if (!is_cache_or_db_path(subpath)) {
+                    add_watch_recursive(subpath);
+                }
             }
         }
     } catch (...) {}
@@ -93,8 +98,10 @@ void InotifyWatcher::watch_thread_func() {
             if (it == wd_to_path_.end()) continue;
             
             std::string dir_path = it->second;
-            std::string full_path = (fs::path(dir_path) / event->name).string();
+            std::string full_path = fs::path(dir_path + "/" + event->name).lexically_normal().string();
             
+            if (is_cache_or_db_path(full_path)) continue;
+
             if (event->mask & IN_ISDIR) {
                 if (event->mask & (IN_CREATE | IN_MOVED_TO)) {
                     add_watch_recursive(full_path);

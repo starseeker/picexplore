@@ -839,10 +839,20 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
     // Count total image files first
     std::vector<std::string> image_files;
     try {
-	for (const auto& entry : fs::recursive_directory_iterator(directory)) {
-	    if (entry.is_regular_file() && is_image_file(entry.path().string())) {
-		image_files.push_back(entry.path().string());
+	fs::recursive_directory_iterator it(directory), end;
+	while (it != end) {
+	    const auto& entry = *it;
+	    std::string path = fs::path(entry.path()).lexically_normal().string();
+	    if (entry.is_directory()) {
+		if (is_cache_or_db_path(path)) {
+		    it.disable_recursion_pending();
+		}
+	    } else if (entry.is_regular_file()) {
+		if (!is_cache_or_db_path(path) && is_image_file(path)) {
+		    image_files.push_back(path);
+		}
 	    }
+	    ++it;
 	}
     } catch (const fs::filesystem_error& ex) {
 	return -1;
@@ -915,10 +925,20 @@ int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, 
     // Count total image files first
     std::vector<std::string> image_files;
     try {
-	for (const auto& entry : fs::recursive_directory_iterator(directory)) {
-	    if (entry.is_regular_file() && is_image_file(entry.path().string())) {
-		image_files.push_back(entry.path().string());
+	fs::recursive_directory_iterator it(directory), end;
+	while (it != end) {
+	    const auto& entry = *it;
+	    std::string path = fs::path(entry.path()).lexically_normal().string();
+	    if (entry.is_directory()) {
+		if (is_cache_or_db_path(path)) {
+		    it.disable_recursion_pending();
+		}
+	    } else if (entry.is_regular_file()) {
+		if (!is_cache_or_db_path(path) && is_image_file(path)) {
+		    image_files.push_back(path);
+		}
 	    }
+	    ++it;
 	}
     } catch (const fs::filesystem_error& ex) {
 	return -1;

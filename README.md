@@ -4,7 +4,7 @@
 
 Program for exploring what images are present in a filesystem.
 
-Fast identification and display of JPEG, PNG, BMP, and TGA images with thumbnail generation and PDF gallery creation.
+Fast identification and display of a variety of image formats with thumbnail generation and PDF gallery creation.
 
 ## Complete Workflow
 

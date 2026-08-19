@@ -98,12 +98,17 @@ void ScanCoordinator::run() {
     // Now scan directory for current state
     std::unordered_set<std::string> disk_paths;
     try {
-        for (const auto& entry : fs::recursive_directory_iterator(directory_)) {
-            if (stop_requested_) break;
-            if (entry.is_regular_file()) {
-                std::string path = fs::path(entry.path()).lexically_normal().string();
-                
-                if (is_image_file(path)) {
+        fs::recursive_directory_iterator it(directory_), end;
+        while (it != end && !stop_requested_) {
+            const auto& entry = *it;
+            std::string path = fs::path(entry.path()).lexically_normal().string();
+
+            if (entry.is_directory()) {
+                if (is_cache_or_db_path(path, db_path_)) {
+                    it.disable_recursion_pending();
+                }
+            } else if (entry.is_regular_file()) {
+                if (!is_cache_or_db_path(path, db_path_) && is_image_file(path)) {
                     disk_paths.insert(path);
                     if (db_paths.find(path) == db_paths.end()) {
                         // New file discovered!
@@ -111,6 +116,7 @@ void ScanCoordinator::run() {
                     }
                 }
             }
+            ++it;
         }
     } catch (const fs::filesystem_error& e) {
         std::cerr << "Filesystem error: " << e.what() << std::endl;
