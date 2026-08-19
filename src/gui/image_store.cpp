@@ -205,9 +205,13 @@ void ImageStore::set_thumbnail_rgb(size_t index, const std::string& filepath, Th
         return;
     }
     
-    // If this is an older generation UI request arriving out of order, discard it!
-    if (generation > 0 && generation < entry.last_fulfilled_generation) return;
-    if (generation > 0) {
+    // If this is an older generation UI request arriving out of order, only discard if
+    // we already have an equal or higher quality image. If this older generation is a
+    // sharp upgrade (e.g. completed high-res decode), we should definitely accept it!
+    if (generation > 0 && generation < entry.last_fulfilled_generation && !entry.scaled.rgb_data.empty() && quality <= entry.scaled.quality) {
+        return;
+    }
+    if (generation > entry.last_fulfilled_generation) {
         entry.last_fulfilled_generation = generation;
     }
     
@@ -274,6 +278,9 @@ const uint8_t* ImageStore::get_scaled_image(size_t index, int draw_w, int draw_h
             entry.scaled.height = draw_h;
             entry.scaled.layout_width = draw_w;
             entry.scaled.layout_height = draw_h;
+            int orig_q = static_cast<int>(entry.scaled.quality);
+            int new_q = std::min(orig_q, std::max(draw_w, draw_h));
+            entry.scaled.quality = static_cast<ThumbQuality>(new_q);
             scaled_rgb_memory_used_ += entry.scaled.rgb_data.size();
             evict_memory_if_needed();
         } else {

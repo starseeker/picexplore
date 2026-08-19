@@ -338,9 +338,10 @@ void MainWindow::update_statusbar() {
         }
     }
 
-    bool building = (db_build_total_ > 0 && db_build_completed_ < db_build_total_);
+    int completed = db_build_total_ - static_cast<int>(pending_db_build_.size());
+    bool building = (!pending_db_build_.empty());
     if (building) {
-        label += "   |   Building Thumbnails: " + std::to_string(std::min(db_build_completed_, db_build_total_)) + " / " + std::to_string(db_build_total_);
+        label += "   |   Building Thumbnails: " + std::to_string(std::max(0, completed)) + " / " + std::to_string(db_build_total_);
         if (!scan_complete_) {
             label += " (Scanning...)";
         }
@@ -380,6 +381,7 @@ void MainWindow::poll_events() {
             status_dirty = true;
             
             if (ev.image.best_quality == ThumbQuality::NONE) {
+                pending_db_build_.insert(idx);
                 db_build_total_++;
                 
                 // Queue a background task to generate the thumbnail so the DB fully populates.
@@ -390,14 +392,12 @@ void MainWindow::poll_events() {
         } else if (ev.type == UpdateEvent::Type::SCAN_PROGRESS) {
             status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::THUMB_READY) {
-            bool was_none = (store_.get(ev.thumb.image_index).best_quality == ThumbQuality::NONE);
             store_.set_thumbnail(ev.thumb.image_index, ev.thumb.filepath, ev.thumb.quality,
                                  ev.thumb.jpeg_data.data(), ev.thumb.jpeg_data.size(),
                                  ev.thumb.width, ev.thumb.height);
             changed.push_back(ev.thumb.image_index);
             need_redraw = true;
-            if (was_none && db_build_completed_ < db_build_total_) {
-                db_build_completed_++;
+            if (pending_db_build_.erase(ev.thumb.image_index) > 0) {
                 status_dirty = true;
             }
         } else if (ev.type == UpdateEvent::Type::THUMB_RGB_READY) {
@@ -405,14 +405,12 @@ void MainWindow::poll_events() {
             if (entry.content_hash.empty() && !ev.thumb_rgb.content_hash.empty()) {
                 entry.content_hash = ev.thumb_rgb.content_hash;
             }
-            bool was_none = (entry.best_quality == ThumbQuality::NONE);
             store_.set_thumbnail_rgb(ev.thumb_rgb.image_index, ev.thumb_rgb.filepath,
                                      ev.thumb_rgb.quality, std::move(ev.thumb_rgb.rgb_data),
                                      ev.thumb_rgb.width, ev.thumb_rgb.height, ev.thumb_rgb.generation);
             changed.push_back(ev.thumb_rgb.image_index);
             need_redraw = true;
-            if (ev.thumb_rgb.generation == 0 && was_none && db_build_completed_ < db_build_total_) {
-                db_build_completed_++;
+            if (pending_db_build_.erase(ev.thumb_rgb.image_index) > 0) {
                 status_dirty = true;
             }
             // Always update statusbar in single image mode to clear any "Generating" text
@@ -421,13 +419,11 @@ void MainWindow::poll_events() {
                 status_dirty = true;
             }
         } else if (ev.type == UpdateEvent::Type::THUMB_FAILED) {
-            bool was_none = (store_.get(ev.failed.image_index).best_quality == ThumbQuality::NONE);
             // Mark the entry as FAILED in the ImageStore
             store_.set_thumbnail(ev.failed.image_index, ev.failed.filepath, ThumbQuality::FAILED, nullptr, 0, 0, 0);
             changed.push_back(ev.failed.image_index);
             need_redraw = true;
-            if (was_none && db_build_completed_ < db_build_total_) {
-                db_build_completed_++;
+            if (pending_db_build_.erase(ev.failed.image_index) > 0) {
                 status_dirty = true;
             }
         } else if (ev.type == UpdateEvent::Type::FULL_RES_READY) {
@@ -502,13 +498,24 @@ void MainWindow::poll_events() {
     }
 
     if (layout_dirty_) {
-        recompute_layout();
+        recompute_layout(true);
     } else if (need_redraw) {
         viewport_->apply_updates(changed);
     }
+
+    if (reprioritize_pending_) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_resize_time_).count();
+        if (elapsed >= 50) {
+            reprioritize_pending_ = false;
+            if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
+                reprioritize_thumbnails();
+            }
+        }
+    }
 }
 
-void MainWindow::recompute_layout() {
+void MainWindow::recompute_layout(bool reprioritize) {
     auto indexed = store_.get_filtered_aspects(directory_filter_);
     layout_result_ = layout_engine_.compute(indexed, viewport_->content_width(), target_height_);
     viewport_->set_layout(&layout_result_);
@@ -522,7 +529,7 @@ void MainWindow::recompute_layout() {
     layout_dirty_ = false;
     viewport_->redraw();
     
-    if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
+    if (reprioritize && viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
         reprioritize_thumbnails();
     }
 }
@@ -552,12 +559,12 @@ void MainWindow::reprioritize_thumbnails() {
             
             // Re-calculate basic needed quality for the check
             ThumbQuality needed = ThumbQuality::SMALL;
-            if (layout_w < 96)       needed = ThumbQuality::SMALL;
-            else if (layout_w < 192) needed = ThumbQuality::MEDIUM;
-            else if (layout_w < 384) needed = ThumbQuality::LARGE;
-            else if (layout_w < 768) needed = ThumbQuality::XLARGE;
-            else if (layout_w < 1536) needed = static_cast<ThumbQuality>(1024);
-            else                     needed = ThumbQuality::FULL;
+            if (layout_w <= 64)       needed = ThumbQuality::SMALL;
+            else if (layout_w <= 128) needed = ThumbQuality::MEDIUM;
+            else if (layout_w <= 256) needed = ThumbQuality::LARGE;
+            else if (layout_w <= 512) needed = ThumbQuality::XLARGE;
+            else if (layout_w <= 1024) needed = static_cast<ThumbQuality>(1024);
+            else                      needed = ThumbQuality::FULL;
             
             bool needs_upgrade = (entry.scaled.quality < needed);
             
@@ -593,12 +600,12 @@ void MainWindow::reprioritize_thumbnails() {
         }
         
         ThumbQuality needed = ThumbQuality::SMALL;
-        if (layout_w < 96)       needed = ThumbQuality::SMALL;
-        else if (layout_w < 192) needed = ThumbQuality::MEDIUM;
-        else if (layout_w < 384) needed = ThumbQuality::LARGE;
-        else if (layout_w < 768) needed = ThumbQuality::XLARGE;
-        else if (layout_w < 1536) needed = static_cast<ThumbQuality>(1024);
-            else                     needed = ThumbQuality::FULL;
+        if (layout_w <= 64)       needed = ThumbQuality::SMALL;
+        else if (layout_w <= 128) needed = ThumbQuality::MEDIUM;
+        else if (layout_w <= 256) needed = ThumbQuality::LARGE;
+        else if (layout_w <= 512) needed = ThumbQuality::XLARGE;
+        else if (layout_w <= 1024) needed = static_cast<ThumbQuality>(1024);
+        else                      needed = ThumbQuality::FULL;
         
         bool size_mismatch = (entry.scaled.layout_width  != static_cast<int>(layout_w) ||
                               entry.scaled.layout_height != static_cast<int>(layout_h));
@@ -681,7 +688,9 @@ void MainWindow::resize(int X, int Y, int W, int H) {
     }
     
     if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
-        recompute_layout();
+        recompute_layout(false);
+        reprioritize_pending_ = true;
+        last_resize_time_ = std::chrono::steady_clock::now();
     } else {
         layout_dirty_ = true;
     }

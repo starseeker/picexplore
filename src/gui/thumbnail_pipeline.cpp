@@ -77,7 +77,7 @@ void ThumbnailPipeline::worker_thread() {
         }
 
         if (got_req) {
-            if (req.generation > 0 && req.generation < current_generation_) {
+            if (req.generation > 0 && current_generation_ > req.generation + 2) {
                 pending_requests_--;
                 continue;
             }
@@ -129,11 +129,6 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
                 }
                 db_.abort_transaction();
             }
-        }
-
-        if (target_found && req.generation == 0 && found_quality >= req.target_quality) {
-            // This is a low-priority background scan task, and the thumbnail is already in the DB.
-            return true;
         }
 
         int target_w = req.layout_w;

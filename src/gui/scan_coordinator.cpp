@@ -140,7 +140,7 @@ void ScanCoordinator::run() {
     }
 
     // End of traversal
-    active_workers_--;
+    traversal_done_ = true;
 }
 
 void ScanCoordinator::scan_worker() {
@@ -168,7 +168,7 @@ void ScanCoordinator::scan_worker() {
                 }
             }
         } else {
-            if (active_workers_ == 0 && file_queue_.size_approx() == 0) {
+            if (traversal_done_ && file_queue_.size_approx() == 0) {
                 break; // Traversal done and queue empty
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));

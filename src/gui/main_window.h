@@ -12,6 +12,8 @@
 #include "full_res_loader.h"
 #include "tile_manager.h"
 #include <string>
+#include <unordered_set>
+#include <chrono>
 
 class MainWindow : public Fl_Double_Window {
 public:
@@ -42,7 +44,7 @@ private:
 
     // Database build progress tracking
     int db_build_total_ = 0;
-    int db_build_completed_ = 0;
+    std::unordered_set<size_t> pending_db_build_;
     bool scan_complete_ = false;
 
     // Directory filter (empty string = no filter = show all)
@@ -50,7 +52,7 @@ private:
     void apply_directory_filter(const std::string& dir);
     void reset_directory_filter();
     void update_statusbar();
-    void recompute_layout();
+    void recompute_layout(bool reprioritize = true);
 
     moodycamel::ConcurrentQueue<UpdateEvent> update_queue_;
     ScanCoordinator* scanner_ = nullptr;
@@ -69,6 +71,8 @@ private:
     int last_viewport_width_ = 0;
     double target_height_ = 150.0;
     uint64_t current_generation_ = 0;
+    bool reprioritize_pending_ = false;
+    std::chrono::steady_clock::time_point last_resize_time_;
 
     static void timer_cb(void* data);
     void poll_events();

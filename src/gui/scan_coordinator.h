@@ -27,6 +27,7 @@ private:
 
     moodycamel::ConcurrentQueue<std::string> file_queue_;
     std::atomic<int> active_workers_{0};
+    std::atomic<bool> traversal_done_{false};
 
     void run();
     void scan_worker();
