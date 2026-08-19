@@ -1,5 +1,5 @@
 /*
- * pdf.h - PDF generation logic for picscan
+ * pdf.h - PDF generation logic for picexplore
  *
  * Copyright (c) 2025 Clifford Yapp
  *
@@ -26,9 +26,9 @@
 
 #include <string>
 #include <vector>
-#include "database.h"
-#include "utils.h"
-#include "justified_layout.hpp"
+#include "../database.h"
+#include "../utils.h"
+#include "../justified_layout.hpp"
 
 // PDF and layout configuration options
 struct PDFOptions {
@@ -82,11 +82,5 @@ class PDFGenerator {
 		int x, int y, int box_width, int box_height);
 };
 
-// Local Variables:
-// tab-width: 8
-// mode: C++
-// c-basic-offset: 4
-// indent-tabs-mode: t
-// c-file-style: "stroustrup"
-// End:
-// ex: shiftwidth=4 tabstop=8 cino=N-s
+int run_headless_pdf(const std::string& pdf_path, const std::string& directory,
+                     const std::string& db_path, const PDFOptions& options, bool verbose);

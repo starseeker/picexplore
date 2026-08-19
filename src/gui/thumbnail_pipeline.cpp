@@ -194,14 +194,16 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
         }
 
         if (hash.empty() && img) {
-            XXH64_hash_t hval = XXH64(img, w * h * 3, 0);
-            char hash_str[17];
-            snprintf(hash_str, sizeof(hash_str), "%016llx", (unsigned long long)hval);
+            XXH128_hash_t hval = XXH3_128bits(img, w * h * 3);
+            char hash_str[33];
+            snprintf(hash_str, sizeof(hash_str), "%016llx%016llx",
+                     (unsigned long long)hval.high64, (unsigned long long)hval.low64);
             hash = hash_str;
         } else if (hash.empty() && fast_decoded) {
-            XXH64_hash_t hval = XXH64(rgb_decoded.data(), w * h * 3, 0);
-            char hash_str[17];
-            snprintf(hash_str, sizeof(hash_str), "%016llx", (unsigned long long)hval);
+            XXH128_hash_t hval = XXH3_128bits(rgb_decoded.data(), w * h * 3);
+            char hash_str[33];
+            snprintf(hash_str, sizeof(hash_str), "%016llx%016llx",
+                     (unsigned long long)hval.high64, (unsigned long long)hval.low64);
             hash = hash_str;
         }
         double ar = static_cast<double>(w) / h;

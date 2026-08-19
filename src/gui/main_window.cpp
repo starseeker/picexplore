@@ -146,9 +146,10 @@ void MainWindow::start() {
                 fs::create_directories(cache_dbs);
             } catch (...) {}
 
-            XXH64_hash_t h = XXH64(canon_dir.data(), canon_dir.size(), 0);
-            char buf[32];
-            snprintf(buf, sizeof(buf), "%016llx.db", (unsigned long long)h);
+            XXH128_hash_t h = XXH3_128bits(canon_dir.data(), canon_dir.size());
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%016llx%016llx.db",
+                     (unsigned long long)h.high64, (unsigned long long)h.low64);
             db_path_ = (cache_dbs / buf).string();
         }
     }
@@ -187,6 +188,21 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     
     int screen_dim = std::max(w(), h());
     int max_overview_size = entry.original_width > 0 ? std::min((int)entry.original_width, 8192) : 8192;
+    if (entry.content_hash.empty()) {
+        std::string key = filepath;
+        try {
+            key = std::filesystem::canonical(filepath).string();
+            key += ":" + std::to_string(std::filesystem::file_size(filepath));
+            key += ":" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+                std::filesystem::last_write_time(filepath).time_since_epoch()).count());
+        } catch (...) {}
+        XXH128_hash_t h = XXH3_128bits(key.data(), key.size());
+        char buf[33];
+        snprintf(buf, sizeof(buf), "%016llx%016llx",
+                 (unsigned long long)h.high64, (unsigned long long)h.low64);
+        entry.content_hash = buf;
+    }
+
     ThumbQuality target_quality = static_cast<ThumbQuality>(std::max(max_overview_size, screen_dim));
     if (static_cast<int>(entry.scaled.quality) < static_cast<int>(target_quality) || entry.scaled.rgb_data.empty()) {
         entry.last_requested_generation = current_generation_;

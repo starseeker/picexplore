@@ -35,7 +35,7 @@
 #include <limits>
 #include <memory> // Needed for simple-svg
 #include "simple_svg_1.0.0.hpp"
-#include "../justified_layout.hpp"
+#include "justified_layout.hpp"
 
 namespace {
 

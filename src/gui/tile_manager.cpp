@@ -2,8 +2,29 @@
 #include <iostream>
 #include <png.h>
 #include <cstring>
+#include <chrono>
+#include <xxhash.h>
 #include "../third_party/stb/stb_image_write.h"
 #include "../third_party/stb/stb_image.h"
+
+static std::string resolve_tile_hash(const std::string& hash, const std::string& filepath) {
+    if (!hash.empty()) return hash;
+
+    // Fallback: Compute deterministic 128-bit hash from canonical path + file size + mtime
+    std::string key = filepath;
+    try {
+        key = std::filesystem::canonical(filepath).string();
+        key += ":" + std::to_string(std::filesystem::file_size(filepath));
+        key += ":" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+            std::filesystem::last_write_time(filepath).time_since_epoch()).count());
+    } catch (...) {}
+
+    XXH128_hash_t h = XXH3_128bits(key.data(), key.size());
+    char buf[33];
+    snprintf(buf, sizeof(buf), "%016llx%016llx",
+             (unsigned long long)h.high64, (unsigned long long)h.low64);
+    return std::string(buf);
+}
 
 TileManager::TileManager(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue)
     : update_queue_(update_queue) {
@@ -23,9 +44,11 @@ void TileManager::init(const std::string& cache_dir) {
 }
 
 void TileManager::request_tiles(size_t image_index, const std::string& filepath, const std::string& hash) {
+    std::string eff_hash = resolve_tile_hash(hash, filepath);
+
     {
         std::lock_guard<std::mutex> lock(ready_mutex_);
-        if (ready_hashes_.count(hash)) {
+        if (ready_hashes_.count(eff_hash)) {
             // Already generated!
             update_queue_.enqueue(UpdateEvent::make_full_res_ready(image_index, filepath, {}, 0, 0)); // Using empty rgb as tiled signal
             return;
@@ -33,10 +56,10 @@ void TileManager::request_tiles(size_t image_index, const std::string& filepath,
     }
     
     // Check if it already exists on disk
-    std::string marker_path = cache_dir_ + "/" + hash + "/ready.marker";
+    std::string marker_path = cache_dir_ + "/" + eff_hash + "/ready.marker";
     if (std::filesystem::exists(marker_path)) {
         std::lock_guard<std::mutex> lock(ready_mutex_);
-        ready_hashes_.insert(hash);
+        ready_hashes_.insert(eff_hash);
         update_queue_.enqueue(UpdateEvent::make_full_res_ready(image_index, filepath, {}, 0, 0));
         return;
     }
@@ -44,7 +67,7 @@ void TileManager::request_tiles(size_t image_index, const std::string& filepath,
     TileRequest req;
     req.image_index = image_index;
     req.filepath = filepath;
-    req.hash = hash;
+    req.hash = eff_hash;
     request_queue_.enqueue(req);
 }
 
@@ -111,7 +134,8 @@ void TileManager::worker_thread() {
 }
 
 bool TileManager::generate_tiles(size_t image_index, const std::string& filepath, const std::string& hash) {
-    std::string out_dir = cache_dir_ + "/" + hash;
+    std::string eff_hash = resolve_tile_hash(hash, filepath);
+    std::string out_dir = cache_dir_ + "/" + eff_hash;
     std::filesystem::create_directories(out_dir);
 
     FILE *fp = fopen(filepath.c_str(), "rb");

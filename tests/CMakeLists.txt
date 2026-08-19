@@ -1,5 +1,6 @@
 # Original executable
 add_executable(justified_layout_test justified_layout_test.cpp)
+target_include_directories(justified_layout_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(justified_layout_test PRIVATE -g)
 
 # Local Variables:

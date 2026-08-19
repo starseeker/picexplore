@@ -1,5 +1,5 @@
 /*
- * pdf.cpp - PDF generation logic for picscan
+ * pdf.cpp - PDF generation logic for picexplore
  *
  * Copyright (c) 2025 Clifford Yapp
  *
@@ -26,10 +26,14 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <iostream>
+#include <filesystem>
 
 #include "stb_image.h"
 #include "stb_image_resize2.h"
 #include "pdfimg.hpp"
+
+namespace fs = std::filesystem;
 
 PDFGenerator::PDFGenerator() {
 }
@@ -286,11 +290,67 @@ bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std:
     return success;
 }
 
-// Local Variables:
-// tab-width: 8
-// mode: C++
-// c-basic-offset: 4
-// indent-tabs-mode: t
-// c-file-style: "stroustrup"
-// End:
-// ex: shiftwidth=4 tabstop=8 cino=N-s
+int run_headless_pdf(const std::string& pdf_path, const std::string& directory,
+                     const std::string& db_path, const PDFOptions& options, bool verbose) {
+    Timer timer;
+    StatusReporter reporter(10);
+    reporter.start();
+
+    DatabaseManager db;
+    if (!db.open(db_path)) {
+        std::cerr << "Error: Failed to open database: " << db_path << std::endl;
+        reporter.stop();
+        return 1;
+    }
+
+    if (verbose) {
+        std::cout << "Using database: " << db_path << std::endl;
+    }
+
+    bool scan_needed = !directory.empty();
+    if (scan_needed) {
+        if (!fs::exists(directory) || !fs::is_directory(directory)) {
+            std::cerr << "Error: Directory does not exist: " << directory << std::endl;
+            reporter.stop();
+            return 1;
+        }
+        std::cout << "Scanning directory: " << directory << std::endl;
+        int processed = db.scan_directory_parallel(directory, timer, reporter);
+        if (processed < 0) {
+            std::cerr << "Error: Failed to scan directory" << std::endl;
+            reporter.stop();
+            return 1;
+        }
+        std::cout << "Processed " << processed << " images" << std::endl;
+    }
+
+    timer.start("Database Query");
+    reporter.update_status("Loading images from database...");
+    std::vector<ImageInfo> images = db.get_all_images();
+    timer.stop("Database Query");
+
+    if (images.empty()) {
+        std::cerr << "Error: No images found in database";
+        if (!scan_needed) {
+            std::cerr << " (try scanning a directory first)";
+        }
+        std::cerr << std::endl;
+        reporter.stop();
+        return 1;
+    }
+
+    std::cout << "Generating PDF with " << images.size() << " images: " << pdf_path << std::endl;
+
+    PDFGenerator pdf_gen;
+    if (!pdf_gen.generate_pdf(images, pdf_path, timer, reporter, options)) {
+        std::cerr << "Error: Failed to generate PDF" << std::endl;
+        reporter.stop();
+        return 1;
+    }
+
+    std::cout << "Successfully generated PDF: " << pdf_path << std::endl;
+    reporter.stop();
+    timer.print_summary();
+    std::cout << "\nPDF export completed successfully!" << std::endl;
+    return 0;
+}

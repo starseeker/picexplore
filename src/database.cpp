@@ -547,11 +547,12 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	channels = 3;
     }
 
-    // Compute content hash
+    // Compute content hash using fast SIMD-vectorized 128-bit hash
     size_t data_size = width * height * channels;
-    XXH64_hash_t hash = XXH64(image_data, data_size, 0);
-    char hash_str[17];
-    snprintf(hash_str, sizeof(hash_str), "%016llx", (unsigned long long)hash);
+    XXH128_hash_t hash = XXH3_128bits(image_data, data_size);
+    char hash_str[33];
+    snprintf(hash_str, sizeof(hash_str), "%016llx%016llx",
+             (unsigned long long)hash.high64, (unsigned long long)hash.low64);
 
     // Check if this hash already exists (duplicate detection)
     std::string path_key = std::string(hash_str) + ":path";
@@ -970,11 +971,12 @@ int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, 
 	timer.stop("Image Loading");
 	timer.start("Hash Computation");
 
-	// Compute content hash
+	// Compute content hash using fast SIMD-vectorized 128-bit hash
 	size_t data_size = width * height * channels;
-	XXH64_hash_t hash = XXH64(image_data, data_size, 0);
-	char hash_str[17];
-	snprintf(hash_str, sizeof(hash_str), "%016llx", (unsigned long long)hash);
+	XXH128_hash_t hash = XXH3_128bits(image_data, data_size);
+	char hash_str[33];
+	snprintf(hash_str, sizeof(hash_str), "%016llx%016llx",
+	         (unsigned long long)hash.high64, (unsigned long long)hash.low64);
 
 	timer.stop("Hash Computation");
 
