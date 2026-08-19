@@ -20,22 +20,25 @@ if(WIN32)
     set(JPEG_LIBRARIES ${JPEG_LIBRARY})
     set(JPEG_INCLUDE_DIRS ${JPEG_INCLUDE_DIR})
 else()
-    # Unix-like systems: Use pkg-config or find_package
     find_package(PkgConfig)
     if(PkgConfig_FOUND)
         pkg_check_modules(JPEG REQUIRED libjpeg)
         pkg_check_modules(PNG REQUIRED libpng)
+        pkg_check_modules(ZLIB REQUIRED zlib)
         pkg_check_modules(WEBP REQUIRED libwebp)
         pkg_check_modules(TIFF REQUIRED libtiff-4)
     else()
         find_package(JPEG REQUIRED)
         find_package(PNG REQUIRED)
+        find_package(ZLIB REQUIRED)
         find_package(WebP REQUIRED)
         find_package(TIFF REQUIRED)
         set(JPEG_LIBRARIES ${JPEG_LIBRARIES})
         set(JPEG_INCLUDE_DIRS ${JPEG_INCLUDE_DIR})
         set(PNG_LIBRARIES ${PNG_LIBRARIES})
         set(PNG_INCLUDE_DIRS ${PNG_INCLUDE_DIR})
+        set(ZLIB_LIBRARIES ${ZLIB_LIBRARIES})
+        set(ZLIB_INCLUDE_DIRS ${ZLIB_INCLUDE_DIRS})
         set(WEBP_LIBRARIES ${WEBP_LIBRARIES})
         set(WEBP_INCLUDE_DIRS ${WEBP_INCLUDE_DIRS})
         set(TIFF_LIBRARIES ${TIFF_LIBRARIES})
@@ -48,7 +51,6 @@ set(XXHASH_DIR ${CMAKE_SOURCE_DIR}/third_party/xxHash)
 set(STB_DIR ${CMAKE_SOURCE_DIR}/third_party/stb)
 set(LMDB_DIR ${CMAKE_SOURCE_DIR}/third_party/lmdb/libraries/liblmdb)
 set(CXXOPTS_DIR ${CMAKE_SOURCE_DIR}/third_party/cxxopts)
-set(STRUETYPE_DIR ${CMAKE_SOURCE_DIR}/third_party/struetype)
 set(CONCURRENTQUEUE_DIR ${CMAKE_SOURCE_DIR}/third_party/concurrentqueue)
 
 # xxHash - compile the source
@@ -80,7 +82,6 @@ add_executable(picexplore
     src/gui/inotify_watcher.cpp
     src/database.cpp
     src/utils.cpp
-    third_party/miniz/miniz.c
     third_party/TinyEXIF.cpp
 )
 
@@ -94,12 +95,11 @@ target_include_directories(picexplore PRIVATE
     ${STB_DIR}
     ${LMDB_DIR}
     ${CXXOPTS_DIR}/include
-    ${STRUETYPE_DIR}
-    ${STRUETYPE_DIR}/examples
     ${CONCURRENTQUEUE_DIR}
     ${CMAKE_SOURCE_DIR}/third_party
     ${JPEG_INCLUDE_DIRS}
     ${PNG_INCLUDE_DIRS}
+    ${ZLIB_INCLUDE_DIRS}
     ${WEBP_INCLUDE_DIRS}
     ${TIFF_INCLUDE_DIRS}
 )
@@ -110,6 +110,7 @@ target_link_libraries(picexplore
     lmdb
     ${JPEG_LIBRARIES}
     ${PNG_LIBRARIES}
+    ${ZLIB_LIBRARIES}
     ${WEBP_LIBRARIES}
     ${TIFF_LIBRARIES}
 )

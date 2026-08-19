@@ -7,7 +7,7 @@
 #include <fstream>
 #include <filesystem>
 #include <cstring>
-#include "../third_party/miniz/miniz.h"
+#include <zlib.h>
 #include "../third_party/TinyEXIF.h"
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -107,12 +107,19 @@ static std::vector<uint8_t> extract_png_exif(std::ifstream& file) {
                         } else if (std::string(type) == "zTXt") {
                             if (null_pos + 2 < length) { // +1 for null, +1 for compression method
                                 size_t comp_len = length - null_pos - 2;
-                                size_t out_len = 0;
-                                void* uncomp = tinfl_decompress_mem_to_heap(chunk_data.data() + null_pos + 2, comp_len, &out_len, 0);
-                                if (uncomp) {
-                                    std::string text(reinterpret_cast<char*>(uncomp), out_len);
-                                    free(uncomp);
-                                    return decode_hex_profile(text);
+                                uLongf dest_len = comp_len * 4 + 1024;
+                                std::vector<uint8_t> uncomp(dest_len);
+                                while (true) {
+                                    int res = uncompress(uncomp.data(), &dest_len, chunk_data.data() + null_pos + 2, comp_len);
+                                    if (res == Z_OK) {
+                                        std::string text(reinterpret_cast<char*>(uncomp.data()), dest_len);
+                                        return decode_hex_profile(text);
+                                    } else if (res == Z_BUF_ERROR) {
+                                        dest_len *= 2;
+                                        uncomp.resize(dest_len);
+                                    } else {
+                                        break;
+                                    }
                                 }
                             }
                         }
