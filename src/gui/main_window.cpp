@@ -26,7 +26,14 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
 
     int vp_h = h - MENU_H - STATUS_H;
 
+    color(fl_rgb_color(38, 38, 38));
+    box(FL_FLAT_BOX);
+
     menubar_ = new Fl_Menu_Bar(0, 0, w, MENU_H);
+    menubar_->box(FL_FLAT_BOX);
+    menubar_->color(fl_rgb_color(28, 28, 28));
+    menubar_->textcolor(fl_rgb_color(220, 220, 220));
+    menubar_->selection_color(fl_rgb_color(60, 160, 255));
     menubar_->add("Sort/Alphabetical (A-Z)",    0, menu_cb, (void*)1);
     menubar_->add("Sort/Alphabetical (Z-A)",    0, menu_cb, (void*)2);
     menubar_->add("Sort/File Size (Smallest)",  0, menu_cb, (void*)3);
@@ -62,7 +69,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     // Status bar at the very bottom
     statusbar_ = new Fl_Box(0, MENU_H + vp_h, w, STATUS_H, "");
     statusbar_->box(FL_FLAT_BOX);
-    statusbar_->color(fl_darker(FL_DARK2));
+    statusbar_->color(fl_rgb_color(28, 28, 28));
     statusbar_->labelcolor(fl_rgb_color(180, 180, 180));
     statusbar_->labelsize(12);
     statusbar_->labelfont(FL_HELVETICA);
@@ -70,7 +77,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
 
     statusbar_hint_ = new Fl_Box(w - 220, MENU_H + vp_h, 220, STATUS_H, "");
     statusbar_hint_->box(FL_FLAT_BOX);
-    statusbar_hint_->color(fl_darker(FL_DARK2));
+    statusbar_hint_->color(fl_rgb_color(28, 28, 28));
     statusbar_hint_->labelcolor(fl_rgb_color(150, 190, 240));
     statusbar_hint_->labelsize(12);
     statusbar_hint_->labelfont(FL_HELVETICA);
@@ -145,7 +152,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     };
 
     end();
-    resizable(viewport_);
+    resizable(this);
 }
 
 MainWindow::~MainWindow() {
@@ -567,7 +574,7 @@ void MainWindow::poll_events() {
     if (reprioritize_pending_) {
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_resize_time_).count();
-        if (elapsed >= 50) {
+        if (elapsed >= 150) {
             reprioritize_pending_ = false;
             if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
                 reprioritize_thumbnails();
@@ -717,9 +724,17 @@ void MainWindow::reprioritize_thumbnails() {
     }
 }
 
-// ── resize ─────────────────────────────────────────────────────────────────
+// ── draw & resize ──────────────────────────────────────────────────────────
+
+void MainWindow::draw() {
+    fl_color(color());
+    fl_rectf(0, 0, w(), h());
+    draw_children();
+}
 
 void MainWindow::resize(int X, int Y, int W, int H) {
+    bool is_a_resize = (W != w() || H != h());
+
     Fl_Double_Window::resize(X, Y, W, H);
     int vp_h = H - MENU_H - STATUS_H;
 
@@ -748,6 +763,15 @@ void MainWindow::resize(int X, int Y, int W, int H) {
         info_panel_->hide();
     }
     
+    init_sizes();
+
+    if (is_a_resize) {
+        damage(FL_DAMAGE_ALL);
+        viewport_->damage(FL_DAMAGE_ALL);
+        menubar_->damage(FL_DAMAGE_ALL);
+        statusbar_->damage(FL_DAMAGE_ALL);
+    }
+
     if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
         recompute_layout(false);
         reprioritize_pending_ = true;
@@ -763,7 +787,8 @@ void MainWindow::scroll_cb(Fl_Widget* w, void* data) {
     MainWindow* win = static_cast<MainWindow*>(data);
     win->viewport_->set_scroll_offset(win->scrollbar_->value());
     if (win->viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
-        win->reprioritize_thumbnails();
+        win->reprioritize_pending_ = true;
+        win->last_resize_time_ = std::chrono::steady_clock::now();
     }
 }
 

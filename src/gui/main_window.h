@@ -26,6 +26,11 @@ public:
     void exit_single_image_mode();
     void navigate_single_image(int delta);
 
+    void resize(int X, int Y, int W, int H) override;
+
+protected:
+    void draw() override;
+
 private:
     std::string directory_;
     std::string db_path_;
@@ -79,7 +84,6 @@ private:
     void poll_events();
     
     void reprioritize_thumbnails();
-    void resize(int X, int Y, int W, int H) override;
     
     static void scroll_cb(Fl_Widget* w, void* data);
     static void menu_cb(Fl_Widget* w, void* data);

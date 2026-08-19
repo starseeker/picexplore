@@ -86,8 +86,7 @@ public:
     // Filtered aspect ratios for layout engine.
     // Returns {raw_store_index, aspect_ratio} pairs.
     // If dir is empty, returns all images (equivalent to get_aspect_ratios with indices).
-    // If dir is set, returns only images whose filepath starts with dir + "/" or equals dir.
-    std::vector<std::pair<size_t,double>> get_filtered_aspects(const std::string& dir) const;
+    const std::vector<std::pair<size_t,double>>& get_filtered_aspects(const std::string& dir) const;
 
     enum class SortCriteria {
         ALPHABETICAL,
@@ -105,6 +104,10 @@ public:
 private:
     std::vector<ImageEntry> entries_;
     std::unordered_map<std::string, size_t> path_to_index_;
+
+    mutable std::vector<std::pair<size_t, double>> all_aspects_cache_;
+    mutable std::vector<std::pair<size_t, double>> filtered_aspects_cache_;
+    mutable bool aspects_dirty_ = true;
 
     // To manage memory budget, we track LRU of DecodedThumb and ScaledImage
     std::vector<size_t> currently_visible_;

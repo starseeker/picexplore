@@ -56,6 +56,7 @@ size_t ImageStore::add_image(const std::string& filepath, double aspect_ratio,
     }
     entries_.push_back(entry);
     path_to_index_[filepath] = idx;
+    aspects_dirty_ = true;
     return idx;
 }
 
@@ -157,6 +158,7 @@ void ImageStore::remove_image(const std::string& filepath) {
         entries_[i].index = i;
         path_to_index_[entries_[i].filepath] = i;
     }
+    aspects_dirty_ = true;
 }
 
 void ImageStore::rename_image(const std::string& old_filepath, const std::string& new_filepath) {
@@ -165,6 +167,7 @@ void ImageStore::rename_image(const std::string& old_filepath, const std::string
     path_to_index_.erase(old_filepath);
     entries_[index].filepath = new_filepath;
     path_to_index_[new_filepath] = index;
+    aspects_dirty_ = true;
 }
 
 
@@ -290,34 +293,10 @@ const ImageEntry& ImageStore::get(size_t index) const {
 }
 
 const uint8_t* ImageStore::get_scaled_image(size_t index, int draw_w, int draw_h) {
-    auto& entry = get(index); // updates LRU
-    
+    auto& entry = get(index);
     if (entry.scaled.rgb_data.empty()) {
         return nullptr;
     }
-
-    if (entry.scaled.layout_width != draw_w || entry.scaled.layout_height != draw_h) {
-        if (entry.scaled.width > 0 && entry.scaled.height > 0 && draw_w > 0 && draw_h > 0) {
-            std::vector<uint8_t> resized(draw_w * draw_h * 3);
-            stbir_resize_uint8_linear(entry.scaled.rgb_data.data(),
-                                      entry.scaled.width, entry.scaled.height, 0,
-                                      resized.data(), draw_w, draw_h, 0, STBIR_RGB);
-            scaled_rgb_memory_used_ -= entry.scaled.rgb_data.size();
-            entry.scaled.rgb_data = std::move(resized);
-            entry.scaled.width = draw_w;
-            entry.scaled.height = draw_h;
-            entry.scaled.layout_width = draw_w;
-            entry.scaled.layout_height = draw_h;
-            int orig_q = static_cast<int>(entry.scaled.quality);
-            int new_q = std::min(orig_q, std::max(draw_w, draw_h));
-            entry.scaled.quality = static_cast<ThumbQuality>(new_q);
-            scaled_rgb_memory_used_ += entry.scaled.rgb_data.size();
-            evict_memory_if_needed();
-        } else {
-            return nullptr;
-        }
-    }
-    
     return entry.scaled.rgb_data.data();
 }
 
@@ -333,28 +312,30 @@ std::vector<double> ImageStore::get_aspect_ratios() const {
     return ratios;
 }
 
-std::vector<std::pair<size_t,double>> ImageStore::get_filtered_aspects(const std::string& dir) const {
-    std::vector<std::pair<size_t,double>> result;
-    result.reserve(entries_.size());
-
+const std::vector<std::pair<size_t,double>>& ImageStore::get_filtered_aspects(const std::string& dir) const {
     if (dir.empty()) {
-        for (size_t i = 0; i < entries_.size(); ++i) {
-            result.emplace_back(i, entries_[i].aspect_ratio);
+        if (aspects_dirty_) {
+            all_aspects_cache_.clear();
+            all_aspects_cache_.reserve(entries_.size());
+            for (size_t i = 0; i < entries_.size(); ++i) {
+                all_aspects_cache_.emplace_back(i, entries_[i].aspect_ratio);
+            }
+            aspects_dirty_ = false;
         }
+        return all_aspects_cache_;
     } else {
-        // Match any filepath that lives directly in or under `dir`.
-        // We use filesystem::path to avoid substring false-positives like
-        // filter="/foo/bar" accidentally matching "/foo/bard/img.jpg".
+        filtered_aspects_cache_.clear();
+        filtered_aspects_cache_.reserve(entries_.size());
         std::string prefix = dir;
         if (prefix.back() != '/') prefix += '/';
         for (size_t i = 0; i < entries_.size(); ++i) {
             const std::string& fp = entries_[i].filepath;
             if (fp.size() > prefix.size() && fp.compare(0, prefix.size(), prefix) == 0) {
-                result.emplace_back(i, entries_[i].aspect_ratio);
+                filtered_aspects_cache_.emplace_back(i, entries_[i].aspect_ratio);
             }
         }
+        return filtered_aspects_cache_;
     }
-    return result;
 }
 
 
@@ -412,6 +393,7 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
         entries_[i].index = i;
         path_to_index_[entries_[i].filepath] = i;
     }
+    aspects_dirty_ = true;
     
     // Clear visibility state because indices changed completely
     currently_visible_.clear();

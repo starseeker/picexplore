@@ -20,21 +20,21 @@ LayoutEngine::LayoutResult LayoutEngine::compute(const std::vector<std::pair<siz
     cfg_.pt = 5;
     cfg_.pb = 5;
 
-    std::vector<Item> items;
-    items.reserve(indexed_aspects.size());
+    items_scratch_.clear();
+    items_scratch_.reserve(indexed_aspects.size());
     for (const auto& [raw_idx, ar] : indexed_aspects) {
         Item item;
         item.ar = ar;
-        items.push_back(item);
+        items_scratch_.push_back(item);
     }
 
     LayoutResult result;
-    if (items.empty()) {
+    if (items_scratch_.empty()) {
         result.total_height = 0;
         return result;
     }
 
-    JustifiedLayout layout(items, cfg_);
+    JustifiedLayout layout(items_scratch_, cfg_);
     
     result.boxes.reserve(layout.boxes().size());
     const auto& layout_boxes = layout.boxes();

@@ -30,4 +30,5 @@ public:
 private:
     LayoutCfg cfg_;
     double last_viewport_width_ = 0.0;
+    std::vector<Item> items_scratch_;
 };

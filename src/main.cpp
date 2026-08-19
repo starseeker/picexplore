@@ -133,7 +133,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        Fl::visual(FL_RGB);
+        Fl::visual(FL_DOUBLE | FL_RGB);
 
         MainWindow win(1024, 768, "PicExplore", directory, db_path);
         win.show();

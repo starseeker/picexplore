@@ -93,6 +93,10 @@ private:
     bool minimap_dragging_ = false;
     bool show_minimap_ = true;
 
+    std::vector<uint8_t> draw_tmp_buf_;
+    std::vector<uint8_t> tint_tmp_buf_;
+    std::vector<int>     x_coords_buf_;
+
     void draw_single_image();
     void draw_grid();
 };

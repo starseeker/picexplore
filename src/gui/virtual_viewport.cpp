@@ -1,6 +1,7 @@
 #include "virtual_viewport.h"
 #include <iostream>
 #include <filesystem>
+#include <cstring>
 #include <FL/fl_draw.H>
 #include <FL/Fl.H>
 #include "../third_party/stb/stb_image_resize2.h"
@@ -59,8 +60,42 @@ void VirtualViewport::draw() {
     }
 }
 
+static void fast_scale_image(const uint8_t* src, int sw, int sh,
+                             uint8_t* dst, int dw, int dh,
+                             std::vector<int>& x_coords_buf) {
+    if (!src || !dst || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+
+    if (sw == dw && sh == dh) {
+        std::memcpy(dst, src, (size_t)dw * dh * 3);
+        return;
+    }
+
+    x_coords_buf.resize(dw);
+    int* x_coords = x_coords_buf.data();
+    for (int x = 0; x < dw; ++x) {
+        x_coords[x] = ((x * sw) / dw) * 3;
+    }
+
+    int src_stride = sw * 3;
+    int dst_stride = dw * 3;
+
+    for (int y = 0; y < dh; ++y) {
+        int sy = (y * sh) / dh;
+        if (sy >= sh) sy = sh - 1;
+        const uint8_t* src_row = src + sy * src_stride;
+        uint8_t* dst_row = dst + y * dst_stride;
+
+        for (int x = 0; x < dw; ++x) {
+            int sx_off = x_coords[x];
+            dst_row[x * 3 + 0] = src_row[sx_off + 0];
+            dst_row[x * 3 + 1] = src_row[sx_off + 1];
+            dst_row[x * 3 + 2] = src_row[sx_off + 2];
+        }
+    }
+}
+
 void VirtualViewport::draw_grid() {
-    fl_color(FL_DARK2); 
+    fl_color(fl_rgb_color(38, 38, 38)); 
     fl_rectf(x(), y(), w(), h());
 
     if (!layout_) return;
@@ -89,7 +124,16 @@ void VirtualViewport::draw_grid() {
         const uint8_t* img_data = nullptr;
         
         if (entry.best_quality != ThumbQuality::NONE && !entry.scaled.rgb_data.empty()) {
-            img_data = store_.get_scaled_image(box.image_index, draw_w, draw_h);
+            if (entry.scaled.width == draw_w && entry.scaled.height == draw_h) {
+                img_data = entry.scaled.rgb_data.data();
+            } else if (entry.scaled.width > 0 && entry.scaled.height > 0 && draw_w > 0 && draw_h > 0) {
+                draw_tmp_buf_.resize(draw_w * draw_h * 3);
+                fast_scale_image(entry.scaled.rgb_data.data(),
+                                 entry.scaled.width, entry.scaled.height,
+                                 draw_tmp_buf_.data(), draw_w, draw_h,
+                                 x_coords_buf_);
+                img_data = draw_tmp_buf_.data();
+            }
         }
 
         if (!img_data) {
@@ -136,16 +180,16 @@ void VirtualViewport::draw_grid() {
         } else {
             if (is_selected) {
                 // Tint whole image with a light blue overlay (blend 25% light blue: 120, 185, 255)
-                std::vector<uint8_t> tinted(draw_w * draw_h * 3);
+                tint_tmp_buf_.resize(draw_w * draw_h * 3);
                 for (size_t i = 0; i < (size_t)draw_w * draw_h; ++i) {
                     uint8_t r = img_data[i * 3 + 0];
                     uint8_t g = img_data[i * 3 + 1];
                     uint8_t b = img_data[i * 3 + 2];
-                    tinted[i * 3 + 0] = static_cast<uint8_t>((r * 3 + 120) / 4);
-                    tinted[i * 3 + 1] = static_cast<uint8_t>((g * 3 + 185) / 4);
-                    tinted[i * 3 + 2] = static_cast<uint8_t>((b * 3 + 255) / 4);
+                    tint_tmp_buf_[i * 3 + 0] = static_cast<uint8_t>((r * 3 + 120) / 4);
+                    tint_tmp_buf_[i * 3 + 1] = static_cast<uint8_t>((g * 3 + 185) / 4);
+                    tint_tmp_buf_[i * 3 + 2] = static_cast<uint8_t>((b * 3 + 255) / 4);
                 }
-                fl_draw_image(tinted.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
+                fl_draw_image(tint_tmp_buf_.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
             } else {
                 fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
             }
