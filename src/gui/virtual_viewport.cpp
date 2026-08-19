@@ -391,6 +391,11 @@ void VirtualViewport::set_full_res_image(const std::vector<uint8_t>& rgb, int w,
     redraw();
 }
 
+void VirtualViewport::mark_full_res_ready() {
+    full_res_ready_ = true;
+    redraw();
+}
+
 void VirtualViewport::set_tile_manager(TileManager* tm, const std::string& hash, int orig_w, int orig_h) {
     tile_manager_ = tm;
     tile_hash_ = hash;
@@ -557,7 +562,7 @@ void VirtualViewport::draw_single_image() {
     // Draw loading overlay or zoom percentage
     fl_font(FL_HELVETICA_BOLD, 14);
     fl_color(FL_WHITE);
-    if (!full_res_ready_) {
+    if (!full_res_ready_ && !tile_manager_) {
         fl_draw("Loading full resolution...", x() + 10, y() + h() - 10);
     } else {
         std::string text = "Zoom: ";

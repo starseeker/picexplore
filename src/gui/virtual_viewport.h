@@ -26,6 +26,7 @@ public:
     size_t current_single_image() const { return single_idx_; }
     
     void set_full_res_image(const std::vector<uint8_t>& rgb, int w, int h);
+    void mark_full_res_ready();
     void set_tile_manager(class TileManager* tm, const std::string& hash, int orig_w, int orig_h);
 
     int scroll_to_image(size_t raw_idx);

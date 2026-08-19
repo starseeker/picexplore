@@ -91,6 +91,17 @@ void FullResLoader::worker_thread() {
             }
         } else {
             std::cerr << "FullResLoader failed to decode: " << filepath << std::endl;
+            bool cancelled = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (has_request_) {
+                    cancelled = true;
+                }
+            }
+            if (!cancelled) {
+                update_queue_.enqueue(UpdateEvent::make_full_res_ready(
+                    image_index, filepath, {}, 0, 0));
+            }
         }
     }
 }

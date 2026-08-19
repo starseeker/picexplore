@@ -486,7 +486,11 @@ void MainWindow::poll_events() {
         } else if (ev.type == UpdateEvent::Type::FULL_RES_READY) {
             if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
                 viewport_->current_single_image() == ev.full_res.image_index) {
-                viewport_->set_full_res_image(ev.full_res.rgb_data, ev.full_res.width, ev.full_res.height);
+                if (!ev.full_res.rgb_data.empty()) {
+                    viewport_->set_full_res_image(ev.full_res.rgb_data, ev.full_res.width, ev.full_res.height);
+                } else {
+                    viewport_->mark_full_res_ready();
+                }
                 
                 std::string filename = std::filesystem::path(ev.full_res.filepath).filename().string();
                 std::string label = "  Viewing: " + filename;
