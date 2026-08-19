@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <chrono>
 #include "../third_party/stb/stb_image_resize2.h"
+#include "../third_party/stb/stb_image.h"
 #include <iostream>
 
 ImageStore::ImageStore() {
@@ -316,6 +317,17 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
                 } catch (...) {}
             }
         }
+    } else if (criteria == SortCriteria::PIXEL_AREA) {
+        for (auto& entry : entries_) {
+            if (entry.original_width <= 0 || entry.original_height <= 0) {
+                int w = 0, h = 0, c = 0;
+                if (stbi_info(entry.filepath.c_str(), &w, &h, &c)) {
+                    entry.original_width = w;
+                    entry.original_height = h;
+                    if (h > 0) entry.aspect_ratio = (double)w / h;
+                }
+            }
+        }
     }
 
     std::sort(entries_.begin(), entries_.end(), [criteria, ascending](const ImageEntry& a, const ImageEntry& b) {
@@ -329,6 +341,13 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
         } else if (criteria == SortCriteria::TIMESTAMP) {
             if (a.file_timestamp != b.file_timestamp) {
                 return ascending ? (a.file_timestamp < b.file_timestamp) : (a.file_timestamp > b.file_timestamp);
+            }
+            return a.filepath < b.filepath;
+        } else if (criteria == SortCriteria::PIXEL_AREA) {
+            long long area_a = (long long)a.original_width * a.original_height;
+            long long area_b = (long long)b.original_width * b.original_height;
+            if (area_a != area_b) {
+                return ascending ? (area_a < area_b) : (area_a > area_b);
             }
             return a.filepath < b.filepath;
         }

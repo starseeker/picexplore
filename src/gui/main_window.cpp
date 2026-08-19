@@ -31,6 +31,8 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     menubar_->add("Sort/Alphabetical (Z-A)",    0, menu_cb, (void*)2);
     menubar_->add("Sort/File Size (Smallest)",  0, menu_cb, (void*)3);
     menubar_->add("Sort/File Size (Largest)",   0, menu_cb, (void*)4);
+    menubar_->add("Sort/Pixel Area (Smallest)", 0, menu_cb, (void*)17);
+    menubar_->add("Sort/Pixel Area (Largest)",  0, menu_cb, (void*)18);
     menubar_->add("Sort/Date (Oldest)",         0, menu_cb, (void*)5);
     menubar_->add("Sort/Date (Newest)",         0, menu_cb, (void*)6);
 
@@ -656,6 +658,8 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 4: criteria = ImageStore::SortCriteria::FILE_SIZE;    ascending = false; break;
         case 5: criteria = ImageStore::SortCriteria::TIMESTAMP;    ascending = true;  break;
         case 6: criteria = ImageStore::SortCriteria::TIMESTAMP;    ascending = false; break;
+        case 17: criteria = ImageStore::SortCriteria::PIXEL_AREA;  ascending = true;  break;
+        case 18: criteria = ImageStore::SortCriteria::PIXEL_AREA;  ascending = false; break;
         case 7: win->target_height_ = std::min(win->target_height_ * 1.2, 800.0); win->layout_dirty_ = true; break;
         case 8: win->target_height_ = std::max(win->target_height_ / 1.2,  50.0); win->layout_dirty_ = true; break;
         case 9: win->target_height_ = 150.0; win->layout_dirty_ = true; break;
@@ -683,7 +687,7 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         default: return;
     }
     
-    if (choice >= 1 && choice <= 6) {
+    if ((choice >= 1 && choice <= 6) || choice == 17 || choice == 18) {
         win->store_.sort_entries(criteria, ascending);
         win->layout_dirty_ = true;
         win->viewport_->set_scroll_offset(0);

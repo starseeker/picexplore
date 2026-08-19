@@ -92,7 +92,8 @@ public:
     enum class SortCriteria {
         ALPHABETICAL,
         FILE_SIZE,
-        TIMESTAMP
+        TIMESTAMP,
+        PIXEL_AREA
     };
     void sort_entries(SortCriteria criteria, bool ascending);
     size_t find_by_filepath(const std::string& filepath) const;
