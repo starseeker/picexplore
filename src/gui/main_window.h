@@ -16,6 +16,14 @@
 #include <unordered_set>
 #include <chrono>
 
+class FileTypeLegendWidget : public Fl_Widget {
+public:
+    FileTypeLegendWidget(int X, int Y, int W, int H)
+        : Fl_Widget(X, Y, W, H, "") {}
+
+    void draw() override;
+};
+
 class MainWindow : public Fl_Double_Window {
 public:
     MainWindow(int w, int h, const char* title, const std::string& directory, const std::string& db_path = "");
@@ -59,6 +67,7 @@ private:
     class Fl_Menu_Bar* menubar_;
     Fl_Box*          statusbar_;
     Fl_Box*          statusbar_hint_;
+    FileTypeLegendWidget* legend_widget_;
     
     bool info_panel_visible_ = false;
     int  info_panel_width_ = 280;

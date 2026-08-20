@@ -16,6 +16,56 @@ static constexpr int STATUS_H = 20;
 static constexpr int SCROLL_W = 20;
 static constexpr int INFO_W   = 250;
 
+void FileTypeLegendWidget::draw() {
+    if (!visible()) return;
+    fl_push_clip(x(), y(), w(), h());
+
+    // Dark statusbar background
+    fl_color(fl_rgb_color(28, 28, 28));
+    fl_rectf(x(), y(), w(), h());
+
+    auto entries = FileTypeColors::get_legend_entries();
+
+    fl_font(FL_HELVETICA_BOLD, 9);
+    int dot_sz = 8;
+    int spacing = 10;
+    int item_pad = 4;
+
+    int total_w = 0;
+    for (const auto& entry : entries) {
+        int tw = 0, th = 0;
+        fl_measure(entry.name.c_str(), tw, th, 0);
+        total_w += dot_sz + item_pad + tw + spacing;
+    }
+
+    int cur_x = x() + w() - total_w;
+    if (cur_x < x() + 4) cur_x = x() + 4;
+    int cur_y = y() + (h() - dot_sz) / 2;
+
+    for (const auto& entry : entries) {
+        if (cur_x + dot_sz >= x() + w()) break;
+
+        // Swatch
+        fl_color(fl_rgb_color(entry.color.r, entry.color.g, entry.color.b));
+        fl_rectf(cur_x, cur_y, dot_sz, dot_sz);
+
+        fl_color(fl_rgb_color(std::max(0, entry.color.r / 2), std::max(0, entry.color.g / 2), std::max(0, entry.color.b / 2)));
+        fl_rect(cur_x, cur_y, dot_sz, dot_sz);
+
+        cur_x += dot_sz + item_pad;
+
+        // Label
+        int tw = 0, th = 0;
+        fl_measure(entry.name.c_str(), tw, th, 0);
+        fl_color(fl_rgb_color(175, 175, 175));
+        fl_draw(entry.name.c_str(), cur_x, y() + (h() + th) / 2 - 2);
+
+        cur_x += tw + spacing;
+    }
+
+    fl_pop_clip();
+}
+
 MainWindow::MainWindow(int w, int h, const char* title, const std::string& directory, const std::string& db_path)
     : Fl_Double_Window(w, h, title), directory_(directory), db_path_(db_path) {
 
@@ -98,6 +148,9 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     statusbar_hint_->labelfont(FL_HELVETICA);
     statusbar_hint_->align(FL_ALIGN_RIGHT | FL_ALIGN_INSIDE);
     statusbar_hint_->hide();
+
+    legend_widget_ = new FileTypeLegendWidget(w - 420, MENU_H + vp_h, 420, STATUS_H);
+    legend_widget_->hide();
 
     // Wire info panel breadcrumb → directory filter
     // Only fires when info panel is already visible (panel must be shown to click it).
@@ -734,21 +787,7 @@ void MainWindow::set_layout_mode(LayoutEngine::LayoutType type) {
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
 
-    int vp_h = h() - MENU_H - STATUS_H;
-    int info_w = std::clamp(info_panel_width_, 160, std::max(160, w() - 200));
-
-    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
-        scrollbar_->hide();
-        int vp_w = w();
-        if (info_panel_visible_) vp_w -= info_w;
-        viewport_->resize(0, MENU_H, vp_w, vp_h);
-    } else {
-        scrollbar_->show();
-        int vp_w = w() - SCROLL_W;
-        if (info_panel_visible_) vp_w -= info_w;
-        viewport_->resize(0, MENU_H, vp_w, vp_h);
-    }
-
+    resize(x(), y(), w(), h());
     recompute_layout(true);
 }
 
@@ -764,6 +803,7 @@ void MainWindow::set_treemap_style(VirtualViewport::TreemapRenderStyle style) {
     if (treemap_style_ == style) return;
     treemap_style_ = style;
     viewport_->set_treemap_render_style(style);
+    resize(x(), y(), w(), h());
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
         reprioritize_thumbnails();
     }
@@ -1050,23 +1090,39 @@ void MainWindow::resize(int X, int Y, int W, int H) {
 
     menubar_->resize(0, 0, W, MENU_H);
 
+    bool show_legend = (viewport_->current_mode() == VirtualViewport::ViewMode::GRID &&
+                        active_layout_ == LayoutEngine::LayoutType::TREEMAP &&
+                        treemap_style_ == VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS);
+    int legend_w = std::min(450, std::max(200, W - 200));
+
     if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
         viewport_->resize(0, MENU_H, vp_w, vp_h);
         scrollbar_->hide();
+        legend_widget_->hide();
         statusbar_->resize(0, MENU_H + vp_h, W - 280, STATUS_H);
         statusbar_hint_->resize(W - 280, MENU_H + vp_h, 280, STATUS_H);
+        statusbar_hint_->show();
+    } else if (show_legend) {
+        viewport_->resize(0, MENU_H, vp_w, vp_h);
+        scrollbar_->hide();
+        statusbar_hint_->hide();
+        statusbar_->resize(0, MENU_H + vp_h, std::max(10, W - legend_w), STATUS_H);
+        legend_widget_->resize(W - legend_w, MENU_H + vp_h, legend_w, STATUS_H);
+        legend_widget_->show();
     } else if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
         viewport_->resize(0, MENU_H, vp_w, vp_h);
         scrollbar_->hide();
+        statusbar_hint_->hide();
+        legend_widget_->hide();
         statusbar_->resize(0, MENU_H + vp_h, W, STATUS_H);
-        statusbar_hint_->resize(W - 280, MENU_H + vp_h, 280, STATUS_H);
     } else {
         int content_w = std::max(vp_w - SCROLL_W, 10);
         viewport_->resize(0, MENU_H, content_w, vp_h);
         scrollbar_->resize(content_w, MENU_H, SCROLL_W, vp_h);
         scrollbar_->show();
+        statusbar_hint_->hide();
+        legend_widget_->hide();
         statusbar_->resize(0, MENU_H + vp_h, W, STATUS_H);
-        statusbar_hint_->resize(W - 280, MENU_H + vp_h, 280, STATUS_H);
     }
 
     if (info_panel_visible_) {
@@ -1083,6 +1139,7 @@ void MainWindow::resize(int X, int Y, int W, int H) {
         viewport_->damage(FL_DAMAGE_ALL);
         menubar_->damage(FL_DAMAGE_ALL);
         statusbar_->damage(FL_DAMAGE_ALL);
+        legend_widget_->damage(FL_DAMAGE_ALL);
     }
 
     if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {

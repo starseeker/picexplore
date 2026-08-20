@@ -75,4 +75,18 @@ std::string get_category_name(const std::string& filepath) {
     return result.empty() ? "OTHER" : result;
 }
 
+std::vector<LegendEntry> get_legend_entries() {
+    return {
+        {"JPG", {230, 126, 34}},
+        {"PNG", {41, 128, 185}},
+        {"WEBP", {39, 174, 96}},
+        {"GIF", {142, 68, 173}},
+        {"TIFF", {74, 105, 189}},
+        {"BMP", {87, 96, 111}},
+        {"PDF", {231, 76, 60}},
+        {"SVG", {22, 160, 133}},
+        {"OTHER", {116, 125, 140}}
+    };
+}
+
 } // namespace FileTypeColors
