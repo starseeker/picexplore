@@ -77,7 +77,7 @@ private:
     size_t selected_idx_ = (size_t)-1;
 
     ViewMode view_mode_ = ViewMode::GRID;
-    TreemapRenderStyle treemap_render_style_ = TreemapRenderStyle::FILE_TYPE_COLORS;
+    TreemapRenderStyle treemap_render_style_ = TreemapRenderStyle::ALL_THUMBNAILS;
 
     size_t   single_idx_ = 0;
     float    zoom_ = 0.0f;   // 0 = fit-to-window

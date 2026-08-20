@@ -1,10 +1,19 @@
 # picexplore
 
-![PicExplore GUI viewing NARA images](doc/nara_example.png)
+![PicExplore GUI viewing NARA images with default justified layout](doc/nara_example.png)
+*Justified Grid Layout: fluid, multi-resolution row-based photo gallery.*
 
-**PicExplore** is a fast, lightweight image browser, content-based deduplicator, batch scanner, and PDF gallery generator for local photo collections.
+![PicExplore GUI viewing NARA images with treemap](doc/nara_treemap.png)
+*Squarified Treemap Layout: full-collection thumbnail mosaic proportionally weighted by file size or pixel dimensions.*
 
-It combines an interactive FLTK GUI featuring Flickr-style justified layouts, multi-resolution progressive thumbnail streaming, and deep-zoom tiling with high-throughput headless batch tools backed by an embedded LMDB database.
+![PicExplore GUI viewing large NARA image](doc/nara_large_image_viewing.png)
+*Single-Image Deep Zoom: full-resolution inspection with level-of-detail (LOD) tiling and interactive minimap navigator.*
+
+---
+
+**PicExplore** is a high-performance, lightweight image browser, content-based deduplicator, batch scanner, and PDF gallery generator for local photo collections.
+
+It combines an interactive FLTK GUI featuring Flickr-style justified layouts, squarified treemap visualizations, multi-resolution progressive thumbnail streaming, and deep-zoom tiling with high-throughput headless batch tools backed by an embedded LMDB database.
 
 ---
 
@@ -34,13 +43,19 @@ picexplore --pdf gallery.pdf --row-height 180 --margin 12
 
 ---
 
-## Features
+## Key Features
 
-- **Fluid Justified Layout**: Dynamically arranges photos in clean, aesthetic rows using an optimized justified layout algorithm.
-- **Progressive Multi-Resolution Streaming**: Generates and loads thumbnails asynchronously across 6 resolution tiers (32px &rarr; 64px &rarr; 128px &rarr; 256px &rarr; 512px &rarr; 1024px), prioritizing visible viewports.
+- **Dual Interactive Layouts**:
+  - **Fluid Justified Grid** (<kbd>Ctrl+1</kbd>): Dynamically arranges photos in clean, aesthetic rows using an optimized justified layout algorithm.
+  - **Squarified Treemap** (<kbd>Ctrl+2</kbd>): Visualizes photo collections in a 2D squarified treemap with zero-allocation $O(1)$ ratio evaluations (<1 ms for 10,000+ items). Proportionally scales rectangles by **File Size** (bytes), **Pixel Area** (megapixels), or **Equal Size**.
+- **Dual Treemap Visual Styles**:
+  - **All Thumbnails** *(Default)*: Center-cropped square thumbnail mosaic rendered across all tiles down to 1px.
+  - **File Type Colors**: Categorical color-coded cards with file extension badges (JPG, PNG, WebP, GIF, TIFF, BMP, TGA, PDF, SVG) and a live status-bar color key.
+- **Progressive Multi-Resolution Streaming**: Generates and loads thumbnails asynchronously across 6 resolution tiers (32px &rarr; 64px &rarr; 128px &rarr; 256px &rarr; 512px &rarr; 1024px), prioritizing visible viewport regions.
 - **Deep Zoom & Tiling**: Smooth single-image inspection mode with full-resolution rendering, level-of-detail (LOD) tiling cache, and interactive minimap navigator.
+- **Dynamic Mode-Aware Menus**: Contextual Sort and View options adapt automatically to the active view mode (Treemap, Grid, or Single Image), eliminating irrelevant controls.
 - **Content-Based Deduplication**: Employs xxHash (XXH3 128-bit) content hashing to detect identical images across different folders or filenames without duplicate thumbnail generation.
-- **Embedded Database Cache**: Fast LMDB storage keeps paths, hashes, and thumbnails indexed for instant subsequent loads.
+- **High-Performance LMDB Database**: Fast embedded LMDB storage caches paths, hashes, EXIF metadata, aspect-ratio thumbnails, and pre-cropped square thumbnails (`hash:sq128`, `hash:sq64`) with lock-free parallel read concurrency across all CPU cores.
 - **Live Directory Watching**: Automatically detects added, deleted, or modified files in real time (via `inotify` on Linux).
 - **Metadata & EXIF Inspector**: Collapsible info panel displaying image dimensions, file size, timestamps, EXIF metadata, duplicate occurrences, and clickable folder breadcrumbs for directory filtering.
 - **PDF Contact Sheet Generation**: Vector/raster PDF generator with justified layout, customizable row heights, image spacing, and padding.
@@ -51,14 +66,16 @@ picexplore --pdf gallery.pdf --row-height 180 --margin 12
 
 | Action | Control | Description |
 | :--- | :--- | :--- |
-| **Scroll Gallery** | `Mouse Wheel` / `Scrollbar` | Smooth vertical scrolling through image rows |
-| **Zoom Gallery** | `Ctrl` + `Mouse Wheel` / `Ctrl` + `+` / `-` | Zoom gallery row heights (`Ctrl` + `0` resets zoom) |
+| **Switch to Justified Grid** | `Ctrl` + `1` | Switch to row-based justified photo gallery |
+| **Switch to Treemap** | `Ctrl` + `2` | Switch to squarified treemap collection view |
+| **Scroll Gallery** | `Mouse Wheel` / `Scrollbar` | Smooth vertical scrolling through image rows (Grid mode) |
+| **Zoom Gallery Rows** | `Ctrl` + `Mouse Wheel` / `Ctrl` + `+` / `-` | Adjust row heights in Grid mode (`Ctrl` + `0` resets zoom) |
 | **Select Image** | `Left Click` | Select an image and display its metadata in Info Panel |
-| **Open Full-Res View** | `Double Click` | Enter single-image inspection mode |
+| **Open Full-Res View** | `Double Click` | Enter single-image deep zoom inspection mode |
 | **Zoom in Full View** | `Mouse Wheel` | Zoom in/out at mouse cursor position |
-| **Pan in Full View** | `Left Click + Drag` | Pan across the zoomed image (or drag minimap viewport) |
+| **Pan in Full View** | `Left Click + Drag` | Pan across zoomed image (or drag viewport box on minimap) |
 | **Previous / Next Image** | `Left Arrow` / `Right Arrow` | Navigate adjacent images in single-image mode |
-| **Exit Full View** | `Escape` | Return to gallery view |
+| **Exit Full View** | `Escape` | Return to gallery or treemap view |
 | **Filter by Directory** | Click breadcrumb button | Filters current view to clicked folder (`Ctrl` + `R` resets filter) |
 | **Toggle Info Panel** | `View` &rarr; `Information Panel` | Show/hide image details, EXIF, and duplicate list |
 | **Toggle Minimap** | `View` &rarr; `Navigator (Minimap)` | Show/hide navigation minimap in full-res view |
@@ -96,7 +113,7 @@ Options:
 
 | Format | Extension | Decoding Pipeline |
 | :--- | :--- | :--- |
-| **JPEG** | `.jpg`, `.jpeg` | `libjpeg-turbo` with DCT-domain downscaling and TinyEXIF orientation |
+| **JPEG** | `.jpg`, `.jpeg` | `libjpeg-turbo` with DCT-domain downscaling, custom error logging, and TinyEXIF orientation |
 | **PNG** | `.png` | Native `libpng` decoder with fast color space conversions |
 | **WebP** | `.webp` | Native `libwebp` decoder with hardware-accelerated scaling |
 | **TIFF** | `.tif`, `.tiff` | `libtiff` with RGBA converter and floating-point fallback |
@@ -107,10 +124,12 @@ Options:
 
 ## Performance & Architecture
 
+- **Squarified Treemap Layout Engine**: Zero-allocation C++17 algorithm utilizing sorted area index bounds and constant-time ratio evaluation to lay out 10,000+ images in under 1 millisecond.
+- **Lock-Free Multi-Core LMDB Reads**: Employs thread-local read-only transactions (`MDB_RDONLY`) without mutex locks, allowing worker threads across all CPU cores to decode thumbnails simultaneously.
 - **DCT-Domain JPEG Decoding**: Uses `libjpeg-turbo`'s IDCT scaling factors (1/1, 1/2, 1/4, 1/8) to decode JPEGs directly at requested thumbnail resolutions, saving significant CPU time and memory bandwidth.
+- **Dedicated Square Thumbnail Cache**: Automatically generates and stores center-cropped square thumbnails (`hash:sq128`, `hash:sq64`) in LMDB for instant treemap mosaic rendering.
+- **$O(1)$ LRU Memory Management**: Visibility and memory eviction use constant-time hash set checks and incremental size tracking, eliminating UI thread latency spikes.
 - **Priority Queue & Scroll Stabilization**: Prioritizes thumbnail generation for items currently visible in the viewport, waiting 500ms after scrolling stops to prevent pipeline thrashing.
-- **Multi-Threaded Worker Pool**: Spawns background worker threads for parallel file inspection, hashing, and thumbnail rendering without blocking the UI.
-- **Storage-Optimized Database**: Thumbnails are stored in LMDB as quality-compressed JPEGs (90% quality) with instant memory-mapped lookups.
 
 ---
 

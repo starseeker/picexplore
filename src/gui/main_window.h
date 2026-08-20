@@ -58,7 +58,7 @@ private:
     
     LayoutEngine::LayoutType active_layout_ = LayoutEngine::LayoutType::JUSTIFIED;
     LayoutEngine::TreemapMetric treemap_metric_ = LayoutEngine::TreemapMetric::FILE_SIZE;
-    VirtualViewport::TreemapRenderStyle treemap_style_ = VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS;
+    VirtualViewport::TreemapRenderStyle treemap_style_ = VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS;
     ImageStore::SortCriteria current_sort_criteria_ = ImageStore::SortCriteria::ALPHABETICAL;
     bool sort_ascending_ = true;
 
@@ -109,7 +109,7 @@ private:
     double last_target_height_ = 0.0;
     int last_viewport_width_ = 0;
     int last_viewport_height_ = 0;
-    VirtualViewport::TreemapRenderStyle last_treemap_style_ = VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS;
+    VirtualViewport::TreemapRenderStyle last_treemap_style_ = VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS;
     double target_height_ = 150.0;
     uint64_t current_generation_ = 0;
     bool reprioritize_pending_ = false;
