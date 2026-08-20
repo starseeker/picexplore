@@ -325,6 +325,7 @@ void MainWindow::start() {
     watcher_->start(directory_, update_queue_);
 
     update_statusbar();
+    update_menu_states();
 
     Fl::add_timeout(0.016, timer_cb, this);
 }
@@ -406,6 +407,7 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     scrollbar_->hide();
     info_panel_->set_single_image_mode(true);
     viewport_->resize(0, MENU_H, vp_w, vp_h); // Expand over scrollbar
+    update_menu_states();
 }
 
 void MainWindow::navigate_single_image(int delta) {
@@ -469,6 +471,7 @@ void MainWindow::exit_single_image_mode() {
     
     last_visible_.clear();
     update_statusbar();
+    update_menu_states();
     recompute_layout();
 
     size_t sel = viewport_->get_selected_image();
@@ -607,6 +610,74 @@ void MainWindow::update_statusbar() {
     
     statusbar_->copy_label(label.c_str());
     statusbar_->redraw();
+}
+
+void MainWindow::update_menu_states() {
+    bool is_treemap = (active_layout_ == LayoutEngine::LayoutType::TREEMAP);
+    bool is_grid = (viewport_->current_mode() == VirtualViewport::ViewMode::GRID);
+
+    // List of menu paths to disable in Treemap mode
+    const char* treemap_disabled_sorts[] = {
+        "Sort/Alphabetical (A-Z)",
+        "Sort/Alphabetical (Z-A)",
+        "Sort/Date (Oldest)",
+        "Sort/Date (Newest)",
+        nullptr
+    };
+
+    for (int i = 0; treemap_disabled_sorts[i]; ++i) {
+        Fl_Menu_Item* item = const_cast<Fl_Menu_Item*>(menubar_->find_item(treemap_disabled_sorts[i]));
+        if (item) {
+            if (is_treemap || !is_grid) {
+                item->deactivate();
+            } else {
+                item->activate();
+            }
+        }
+    }
+
+    // Treemap specific submenus in View
+    const char* treemap_only_menus[] = {
+        "View/Treemap Sizing/File Size",
+        "View/Treemap Sizing/Pixel Area",
+        "View/Treemap Sizing/Equal Size",
+        "View/Treemap Style/File Type Colors",
+        "View/Treemap Style/All Thumbnails",
+        nullptr
+    };
+
+    for (int i = 0; treemap_only_menus[i]; ++i) {
+        Fl_Menu_Item* item = const_cast<Fl_Menu_Item*>(menubar_->find_item(treemap_only_menus[i]));
+        if (item) {
+            if (!is_treemap || !is_grid) {
+                item->deactivate();
+            } else {
+                item->activate();
+            }
+        }
+    }
+
+    // Zoom and Minimap are only applicable in Justified Grid
+    const char* justified_only_menus[] = {
+        "View/Zoom In (Ctrl+Wheel Up)",
+        "View/Zoom Out (Ctrl+Wheel Down)",
+        "View/Reset Zoom",
+        "View/Navigator (Minimap)",
+        nullptr
+    };
+
+    for (int i = 0; justified_only_menus[i]; ++i) {
+        Fl_Menu_Item* item = const_cast<Fl_Menu_Item*>(menubar_->find_item(justified_only_menus[i]));
+        if (item) {
+            if (is_treemap || !is_grid) {
+                item->deactivate();
+            } else {
+                item->activate();
+            }
+        }
+    }
+
+    menubar_->redraw();
 }
 
 // ── timer / event poll ────────────────────────────────────────────────────
@@ -787,6 +858,16 @@ void MainWindow::set_layout_mode(LayoutEngine::LayoutType type) {
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
 
+    // Sync menu radio checkmark
+    if (type == LayoutEngine::LayoutType::JUSTIFIED) {
+        Fl_Menu_Item* mi = const_cast<Fl_Menu_Item*>(menubar_->find_item("View/Layout/Justified Grid"));
+        if (mi) mi->setonly();
+    } else if (type == LayoutEngine::LayoutType::TREEMAP) {
+        Fl_Menu_Item* mi = const_cast<Fl_Menu_Item*>(menubar_->find_item("View/Layout/Treemap"));
+        if (mi) mi->setonly();
+    }
+
+    update_menu_states();
     resize(x(), y(), w(), h());
     recompute_layout(true);
 }
@@ -1221,9 +1302,21 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
     }
     
     if ((choice >= 1 && choice <= 6) || choice == 17 || choice == 18) {
+        if (win->active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+            if (choice == 3 || choice == 4) {
+                win->set_treemap_metric(LayoutEngine::TreemapMetric::FILE_SIZE);
+                Fl_Menu_Item* mi = const_cast<Fl_Menu_Item*>(win->menubar_->find_item("View/Treemap Sizing/File Size"));
+                if (mi) mi->setonly();
+            } else if (choice == 17 || choice == 18) {
+                win->set_treemap_metric(LayoutEngine::TreemapMetric::PIXEL_AREA);
+                Fl_Menu_Item* mi = const_cast<Fl_Menu_Item*>(win->menubar_->find_item("View/Treemap Sizing/Pixel Area"));
+                if (mi) mi->setonly();
+            }
+        }
         win->store_.sort_entries(criteria, ascending);
         win->layout_dirty_ = true;
         win->viewport_->set_scroll_offset(0);
+        win->recompute_layout(true);
     }
 }
 

@@ -86,6 +86,7 @@ private:
     void apply_directory_filter(const std::string& dir);
     void reset_directory_filter();
     void update_statusbar();
+    void update_menu_states();
     void recompute_layout(bool reprioritize = true);
 
     std::vector<std::string> reconcile_and_get_duplicates(const std::string& hash, const std::string& current_filepath);
