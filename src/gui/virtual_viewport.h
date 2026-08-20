@@ -22,6 +22,19 @@ public:
     enum class ViewMode { GRID, SINGLE_IMAGE };
     ViewMode current_mode() const { return view_mode_; }
 
+    enum class TreemapRenderStyle {
+        FILE_TYPE_COLORS,
+        ALL_THUMBNAILS
+    };
+
+    void set_treemap_render_style(TreemapRenderStyle style) {
+        if (treemap_render_style_ != style) {
+            treemap_render_style_ = style;
+            redraw();
+        }
+    }
+    TreemapRenderStyle treemap_render_style() const { return treemap_render_style_; }
+
     void enter_single_image(size_t raw_idx);
     void exit_single_image();
     size_t current_single_image() const { return single_idx_; }
@@ -64,6 +77,8 @@ private:
     size_t selected_idx_ = (size_t)-1;
 
     ViewMode view_mode_ = ViewMode::GRID;
+    TreemapRenderStyle treemap_render_style_ = TreemapRenderStyle::FILE_TYPE_COLORS;
+
     size_t   single_idx_ = 0;
     float    zoom_ = 0.0f;   // 0 = fit-to-window
     float    pan_x_ = 0.0f, pan_y_ = 0.0f;

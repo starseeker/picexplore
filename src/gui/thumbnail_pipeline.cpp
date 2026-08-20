@@ -110,20 +110,36 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
         if (!hash.empty() && db_.is_open()) {
             std::lock_guard<std::mutex> lock(db_.get_mutex());
             if (db_.begin_transaction()) {
-                // 1. Try exact target quality first
-                std::string key = hash + ":" + std::to_string(static_cast<int>(req.target_quality));
-                if (db_.get_key_data(key, jpeg_data)) {
-                    target_found = true;
-                    found_quality = req.target_quality;
-                } else {
-                    // 2. Try best available quality in DB: check sizes from largest down to smallest
-                    std::vector<int> candidate_sizes = {2048, 1024, 512, 256, 128, 64, 32};
-                    for (int sz : candidate_sizes) {
-                        std::string cand_key = hash + ":" + std::to_string(sz);
-                        if (db_.get_key_data(cand_key, jpeg_data)) {
-                            target_found = true;
-                            found_quality = static_cast<ThumbQuality>(sz);
-                            break;
+                if (req.target_quality == ThumbQuality::SQUARE_128 || req.target_quality == ThumbQuality::SQUARE_64) {
+                    std::string sq_key = (req.target_quality == ThumbQuality::SQUARE_64) ? (hash + ":sq64") : (hash + ":sq128");
+                    if (db_.get_key_data(sq_key, jpeg_data)) {
+                        target_found = true;
+                        found_quality = req.target_quality;
+                    } else if (db_.get_key_data(hash + ":sq128", jpeg_data)) {
+                        target_found = true;
+                        found_quality = ThumbQuality::SQUARE_128;
+                    } else if (db_.get_key_data(hash + ":sq64", jpeg_data)) {
+                        target_found = true;
+                        found_quality = ThumbQuality::SQUARE_64;
+                    }
+                }
+
+                if (!target_found) {
+                    // 1. Try exact target quality first
+                    std::string key = hash + ":" + std::to_string(static_cast<int>(req.target_quality));
+                    if (db_.get_key_data(key, jpeg_data)) {
+                        target_found = true;
+                        found_quality = req.target_quality;
+                    } else {
+                        // 2. Try best available quality in DB: check sizes from largest down to smallest
+                        std::vector<int> candidate_sizes = {2048, 1024, 512, 256, 128, 64, 32};
+                        for (int sz : candidate_sizes) {
+                            std::string cand_key = hash + ":" + std::to_string(sz);
+                            if (db_.get_key_data(cand_key, jpeg_data)) {
+                                target_found = true;
+                                found_quality = static_cast<ThumbQuality>(sz);
+                                break;
+                            }
                         }
                     }
                 }
@@ -146,6 +162,10 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
                     req.image_index, req.filepath, hash, found_quality, std::vector<uint8_t>(rgb_decoded), dec_w, dec_h, req.generation
                 ));
                 
+                if (req.target_quality == ThumbQuality::SQUARE_128 || req.target_quality == ThumbQuality::SQUARE_64) {
+                    return true;
+                }
+
                 // If the cached thumbnail in LMDB is already of equal or higher quality, we're done!
                 if (static_cast<int>(found_quality) >= static_cast<int>(req.target_quality)) {
                     return true;
@@ -235,26 +255,84 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
         target_h = std::max(1, target_h);
         target_w = std::max(1, target_w);
 
+        const uint8_t* source_data = fast_decoded ? rgb_decoded.data() : img;
         std::vector<uint8_t> resized;
-        if (fast_decoded && w == target_w && h == target_h) {
-            resized = std::move(rgb_decoded);
+        std::vector<uint8_t> sq128_jpeg;
+
+        if (req.target_quality == ThumbQuality::SQUARE_128 || req.target_quality == ThumbQuality::SQUARE_64) {
+            int sq_target = (req.target_quality == ThumbQuality::SQUARE_64) ? 64 : 128;
+            target_w = sq_target;
+            target_h = sq_target;
+
+            int sq_dim = std::min(w, h);
+            int crop_x = (w - sq_dim) / 2;
+            int crop_y = (h - sq_dim) / 2;
+            const uint8_t* crop_src = source_data + (crop_y * w + crop_x) * 3;
+
+            resized.resize(sq_target * sq_target * 3);
+            stbir_resize_uint8_linear(crop_src, sq_dim, sq_dim, w * 3,
+                                     resized.data(), sq_target, sq_target, 0, STBIR_RGB);
         } else {
-            resized.resize(target_w * target_h * 3);
-            const uint8_t* source_data = fast_decoded ? rgb_decoded.data() : img;
-            stbir_resize_uint8_linear(source_data, w, h, 0, resized.data(), target_w, target_h, 0, STBIR_RGB);
+            if (fast_decoded && w == target_w && h == target_h) {
+                resized = rgb_decoded;
+            } else {
+                resized.resize(target_w * target_h * 3);
+                stbir_resize_uint8_linear(source_data, w, h, 0, resized.data(), target_w, target_h, 0, STBIR_RGB);
+            }
+
+            if (source_data && w > 0 && h > 0) {
+                int sq_dim = std::min(w, h);
+                int crop_x = (w - sq_dim) / 2;
+                int crop_y = (h - sq_dim) / 2;
+                const uint8_t* crop_src = source_data + (crop_y * w + crop_x) * 3;
+                std::vector<uint8_t> sq128_rgb(128 * 128 * 3);
+                stbir_resize_uint8_linear(crop_src, sq_dim, sq_dim, w * 3,
+                                         sq128_rgb.data(), 128, 128, 0, STBIR_RGB);
+                sq128_jpeg = encode_jpeg(sq128_rgb.data(), 128, 128, 85);
+            }
         }
         
         if (img) stbi_image_free(img);
+        img = nullptr;
 
-        std::vector<uint8_t> jpeg_data_out = encode_jpeg(resized.data(), target_w, target_h, 90);
+        std::vector<uint8_t> jpeg_data_out = encode_jpeg(resized.data(), target_w, target_h, 85);
 
         if (db_.is_open() && !hash.empty()) {
             std::lock_guard<std::mutex> lock(db_.get_mutex());
             if (db_.begin_transaction()) {
-                std::string key = hash + ":" + std::to_string(static_cast<int>(req.target_quality));
+                std::string key;
+                if (req.target_quality == ThumbQuality::SQUARE_128) key = hash + ":sq128";
+                else if (req.target_quality == ThumbQuality::SQUARE_64) key = hash + ":sq64";
+                else key = hash + ":" + std::to_string(static_cast<int>(req.target_quality));
+
                 if (db_.store_key_data(key, jpeg_data_out)) {
                     db_.add_path_for_hash(hash, req.filepath);
                     db_.store_key_value("file:" + req.filepath, hash);
+
+                    // Also ensure square thumbnail is cached in DB if we didn't just write it
+                    if (!sq128_jpeg.empty()) {
+                        std::vector<uint8_t> sq_check;
+                        if (!db_.get_key_data(hash + ":sq128", sq_check)) {
+                            db_.store_key_data(hash + ":sq128", sq128_jpeg);
+                        }
+                    }
+
+                    // Ensure metadata is stored in DB
+                    ImageMetadata meta;
+                    if (!db_.get_image_metadata(hash, meta)) {
+                        uint64_t file_size = 0, file_timestamp = 0;
+                        try {
+                            file_size = std::filesystem::file_size(req.filepath);
+                            file_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+                                std::filesystem::last_write_time(req.filepath).time_since_epoch()).count();
+                        } catch (...) {}
+                        meta.file_size = file_size;
+                        meta.file_timestamp = file_timestamp;
+                        meta.orig_width = w;
+                        meta.orig_height = h;
+                        db_.store_image_metadata(hash, meta);
+                    }
+
                     db_.commit_transaction();
                 } else {
                     db_.abort_transaction();

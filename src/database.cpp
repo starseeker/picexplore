@@ -490,14 +490,15 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	Timer& timer, bool& should_skip) {
     should_skip = false;
 
-    // Load image with stb_image
+    // Load image with stb_image forced to 3 channels (RGB)
     int width, height, channels;
-    unsigned char* image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 0);
+    unsigned char* image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 3);
     if (!image_data) {
 	fprintf(stderr, "Error: Failed to load image '%s': %s\n", filepath.c_str(), stbi_failure_reason());
 	should_skip = true;
 	return false;
     }
+    channels = 3;
 
     // Check for zero width or height
     if (width <= 0 || height <= 0) {
@@ -510,43 +511,11 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
     // Read EXIF orientation and apply transformation if needed
     int orientation = get_exif_orientation(filepath);
     if (orientation > 1) {
-	// Convert to RGB if not already (needed for orientation transforms)
-	unsigned char* rgb_data = nullptr;
-	bool allocated_rgb = false;
-
-	if (channels == 3) {
-	    // For RGB data, create a copy for transformation
-	    rgb_data = (unsigned char*)malloc(width * height * 3);
-	    allocated_rgb = true;
-	    memcpy(rgb_data, image_data, width * height * 3);
-	} else {
-	    // Convert to RGB for orientation processing
-	    rgb_data = (unsigned char*)malloc(width * height * 3);
-	    allocated_rgb = true;
-
-	    for (int i = 0; i < width * height; i++) {
-		if (channels == 1) {
-		    // Grayscale to RGB
-		    rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i];
-		} else if (channels == 2) {
-		    // Grayscale + Alpha to RGB (ignore alpha)  
-		    rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i*2];
-		} else if (channels == 4) {
-		    // RGBA to RGB (ignore alpha)
-		    rgb_data[i*3] = image_data[i*4];
-		    rgb_data[i*3+1] = image_data[i*4+1];
-		    rgb_data[i*3+2] = image_data[i*4+2];
-		}
-	    }
-	}
-
-	// Apply orientation transformation
+	unsigned char* rgb_data = (unsigned char*)malloc(width * height * 3);
+	memcpy(rgb_data, image_data, width * height * 3);
 	apply_orientation_transform(rgb_data, width, height, orientation);
-
-	// Replace the original image data
 	stbi_image_free(image_data);
 	image_data = rgb_data;
-	channels = 3;
     }
 
     // Compute content hash using fast SIMD-vectorized 128-bit hash
@@ -579,6 +548,19 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
     // Store file path as write task
     write_tasks.emplace_back(WriteTask::ADD_PATH_FOR_HASH, std::string(hash_str), filepath);
     write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, std::string(hash_str));
+
+    // Store metadata write task (file size, timestamp, orig dimensions)
+    uint64_t f_size = 0, f_time = 0;
+    try {
+        f_size = fs::file_size(filepath);
+        f_time = std::chrono::duration_cast<std::chrono::seconds>(
+            fs::last_write_time(filepath).time_since_epoch()).count();
+    } catch (...) {}
+
+    ImageMetadata meta{f_size, f_time, width, height};
+    std::vector<uint8_t> meta_bytes(sizeof(ImageMetadata));
+    std::memcpy(meta_bytes.data(), &meta, sizeof(ImageMetadata));
+    write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, std::string(hash_str) + ":meta", meta_bytes);
 
     // Generate and store thumbnails
     std::vector<int> thumb_sizes = {32, 64, 128, 256, 512, 1024, 2048};
@@ -726,6 +708,29 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 		thumbnails_generated = false;
 	    }
 	}
+    }
+    // Generate and store center-cropped square thumbnails for Treemap / square mosaic modes
+    if (image_data && width > 0 && height > 0) {
+        int sq_dim = std::min(width, height);
+        int crop_x = (width - sq_dim) / 2;
+        int crop_y = (height - sq_dim) / 2;
+        const unsigned char* crop_src = image_data + (crop_y * width + crop_x) * 3;
+
+        std::vector<uint8_t> sq128_rgb(128 * 128 * 3);
+        stbir_resize_uint8_linear(crop_src, sq_dim, sq_dim, width * 3,
+                                 sq128_rgb.data(), 128, 128, 0, STBIR_RGB);
+        std::vector<uint8_t> sq128_jpeg = encode_jpeg(sq128_rgb.data(), 128, 128, 85);
+        if (!sq128_jpeg.empty()) {
+            write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, std::string(hash_str) + ":sq128", std::move(sq128_jpeg));
+        }
+
+        std::vector<uint8_t> sq64_rgb(64 * 64 * 3);
+        stbir_resize_uint8_linear(sq128_rgb.data(), 128, 128, 128 * 3,
+                                 sq64_rgb.data(), 64, 64, 0, STBIR_RGB);
+        std::vector<uint8_t> sq64_jpeg = encode_jpeg(sq64_rgb.data(), 64, 64, 85);
+        if (!sq64_jpeg.empty()) {
+            write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, std::string(hash_str) + ":sq64", std::move(sq64_jpeg));
+        }
     }
 
     stbi_image_free(image_data);
@@ -1214,6 +1219,23 @@ bool DatabaseManager::remove_path_for_hash(const std::string& hash, const std::s
     return success;
 }
 
+bool DatabaseManager::store_image_metadata(const std::string& hash, const ImageMetadata& meta) {
+    std::string key = hash + ":meta";
+    std::vector<uint8_t> data(sizeof(ImageMetadata));
+    std::memcpy(data.data(), &meta, sizeof(ImageMetadata));
+    return store_key_data(key, data);
+}
+
+bool DatabaseManager::get_image_metadata(const std::string& hash, ImageMetadata& meta) {
+    std::string key = hash + ":meta";
+    std::vector<uint8_t> data;
+    if (get_key_data(key, data) && data.size() >= sizeof(ImageMetadata)) {
+        std::memcpy(&meta, data.data(), sizeof(ImageMetadata));
+        return true;
+    }
+    return false;
+}
+
 bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) {
     // Find largest thumbnail size available
     std::vector<int> sizes = {32, 64, 128, 256, 512, 1024, 2048};
@@ -1245,6 +1267,22 @@ bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) 
     info.thumb_width = width;
     info.thumb_height = height;
     info.aspect_ratio = static_cast<double>(width) / height;
+    info.orig_width = width;
+    info.orig_height = height;
+    info.file_size = 0;
+    info.file_timestamp = 0;
+
+    ImageMetadata meta;
+    if (get_image_metadata(hash, meta)) {
+        info.file_size = meta.file_size;
+        info.file_timestamp = meta.file_timestamp;
+        if (meta.orig_width > 0 && meta.orig_height > 0) {
+            info.orig_width = meta.orig_width;
+            info.orig_height = meta.orig_height;
+            info.aspect_ratio = static_cast<double>(meta.orig_width) / meta.orig_height;
+        }
+    }
+
     return true;
 }
 

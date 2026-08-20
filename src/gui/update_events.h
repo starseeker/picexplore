@@ -13,7 +13,9 @@ enum class ThumbQuality {
     MEDIUM = 128,  // 128px thumbnail
     LARGE = 256,   // 256px thumbnail
     XLARGE = 512,  // 512px thumbnail
-    FULL = 2048    // 1024px thumbnail
+    FULL = 2048,   // 2048px thumbnail
+    SQUARE_64 = 6400,   // 64x64 square crop thumbnail
+    SQUARE_128 = 12800  // 128x128 square crop thumbnail
 };
 
 struct UpdateEvent {

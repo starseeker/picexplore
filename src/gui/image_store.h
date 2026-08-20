@@ -37,6 +37,7 @@ struct ImageEntry {
         ThumbQuality quality = ThumbQuality::NONE;
     };
     DecodedThumb decoded;
+    DecodedThumb square_thumb;
 
     // Pre-scaled image for current layout dimensions
     struct ScaledImage {
@@ -95,6 +96,8 @@ public:
         PIXEL_AREA
     };
     void sort_entries(SortCriteria criteria, bool ascending);
+    void ensure_file_sizes();
+    void ensure_pixel_dimensions();
     size_t find_by_filepath(const std::string& filepath) const;
 
     // Memory management: Evict unused RGB and scaled data

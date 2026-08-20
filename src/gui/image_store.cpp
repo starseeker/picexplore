@@ -231,6 +231,18 @@ void ImageStore::set_thumbnail_rgb(size_t index, const std::string& filepath, Th
     
     auto& entry = entries_[index];
     
+    if (quality == ThumbQuality::SQUARE_128 || quality == ThumbQuality::SQUARE_64) {
+        decoded_rgb_memory_used_ -= entry.square_thumb.rgb_data.size();
+        entry.square_thumb.rgb_data = std::move(rgb_data);
+        entry.square_thumb.width = width;
+        entry.square_thumb.height = height;
+        entry.square_thumb.quality = quality;
+        decoded_rgb_memory_used_ += entry.square_thumb.rgb_data.size();
+        update_lru(index);
+        evict_memory_if_needed();
+        return;
+    }
+
     // If the UI requested a thumbnail with a specific generation, but this incoming
     // thumbnail is from a generic generation=0 background task, only reject it if
     // we ALREADY have a thumbnail of equal or higher quality.
@@ -339,28 +351,43 @@ const std::vector<std::pair<size_t,double>>& ImageStore::get_filtered_aspects(co
 }
 
 
+void ImageStore::ensure_file_sizes() {
+    for (auto& entry : entries_) {
+        if (entry.file_size == 0) {
+            try {
+                entry.file_size = std::filesystem::file_size(entry.filepath);
+            } catch (...) {}
+        }
+    }
+}
+
+void ImageStore::ensure_pixel_dimensions() {
+    for (auto& entry : entries_) {
+        if (entry.original_width <= 0 || entry.original_height <= 0) {
+            int w = 0, h = 0;
+            if (get_image_info(entry.filepath, &w, &h) && w > 0 && h > 0) {
+                entry.original_width = w;
+                entry.original_height = h;
+                entry.aspect_ratio = (double)w / h;
+            }
+        }
+    }
+}
+
 void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
-    if (criteria == SortCriteria::FILE_SIZE || criteria == SortCriteria::TIMESTAMP) {
+    if (criteria == SortCriteria::FILE_SIZE) {
+        ensure_file_sizes();
+    } else if (criteria == SortCriteria::TIMESTAMP) {
         for (auto& entry : entries_) {
-            if (entry.file_size == 0 || entry.file_timestamp == 0) {
+            if (entry.file_timestamp == 0) {
                 try {
-                    entry.file_size = std::filesystem::file_size(entry.filepath);
                     entry.file_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
                         std::filesystem::last_write_time(entry.filepath).time_since_epoch()).count();
                 } catch (...) {}
             }
         }
     } else if (criteria == SortCriteria::PIXEL_AREA) {
-        for (auto& entry : entries_) {
-            if (entry.original_width <= 0 || entry.original_height <= 0) {
-                int w = 0, h = 0;
-                if (get_image_info(entry.filepath, &w, &h)) {
-                    entry.original_width = w;
-                    entry.original_height = h;
-                    if (h > 0) entry.aspect_ratio = (double)w / h;
-                }
-            }
-        }
+        ensure_pixel_dimensions();
     }
 
     std::sort(entries_.begin(), entries_.end(), [criteria, ascending](const ImageEntry& a, const ImageEntry& b) {
@@ -464,6 +491,13 @@ void ImageStore::evict_memory_if_needed() {
                 entry.decoded.quality = ThumbQuality::NONE;
                 entry.best_quality = ThumbQuality::NONE; 
                 
+                decoded_rgb_memory_used_ -= entry.square_thumb.rgb_data.size();
+                entry.square_thumb.rgb_data.clear();
+                entry.square_thumb.rgb_data.shrink_to_fit();
+                entry.square_thumb.width = 0;
+                entry.square_thumb.height = 0;
+                entry.square_thumb.quality = ThumbQuality::NONE;
+
                 entry.scaled.rgb_data.clear();
                 entry.scaled.rgb_data.shrink_to_fit();
                 entry.scaled.width = 0;

@@ -33,6 +33,9 @@ public:
     void set_treemap_metric(LayoutEngine::TreemapMetric metric);
     LayoutEngine::TreemapMetric treemap_metric() const { return treemap_metric_; }
 
+    void set_treemap_style(VirtualViewport::TreemapRenderStyle style);
+    VirtualViewport::TreemapRenderStyle treemap_style() const { return treemap_style_; }
+
     void resize(int X, int Y, int W, int H) override;
 
 protected:
@@ -47,6 +50,7 @@ private:
     
     LayoutEngine::LayoutType active_layout_ = LayoutEngine::LayoutType::JUSTIFIED;
     LayoutEngine::TreemapMetric treemap_metric_ = LayoutEngine::TreemapMetric::FILE_SIZE;
+    VirtualViewport::TreemapRenderStyle treemap_style_ = VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS;
 
     TileManager*     tile_manager_ = nullptr;
     VirtualViewport* viewport_;

@@ -1,19 +1,33 @@
 #include "file_type_colors.h"
-#include <filesystem>
+#include <string_view>
 #include <algorithm>
+#include <cctype>
 #include <FL/fl_draw.H>
 
 namespace FileTypeColors {
 
-ColorRGB get_color_rgb(const std::string& filepath) {
-    namespace fs = std::filesystem;
-    std::string ext;
-    try {
-        ext = fs::path(filepath).extension().string();
-    } catch (...) {
-        ext.clear();
+static std::string_view extract_ext(const std::string& filepath) {
+    size_t dot = filepath.rfind('.');
+    size_t slash = filepath.find_last_of("/\\");
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
+        return std::string_view();
     }
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    return std::string_view(filepath.data() + dot, filepath.size() - dot);
+}
+
+ColorRGB get_color_rgb(const std::string& filepath) {
+    std::string_view ext_view = extract_ext(filepath);
+    if (ext_view.empty()) {
+        return {116, 125, 140};
+    }
+
+    char buf[16];
+    size_t len = std::min(ext_view.size(), sizeof(buf) - 1);
+    for (size_t i = 0; i < len; ++i) {
+        buf[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(ext_view[i])));
+    }
+    buf[len] = '\0';
+    std::string_view ext(buf, len);
 
     if (ext == ".jpg" || ext == ".jpeg") {
         return {230, 126, 34};  // Warm Amber / Orange
@@ -44,21 +58,21 @@ Fl_Color get_fl_color(const std::string& filepath) {
 }
 
 std::string get_category_name(const std::string& filepath) {
-    namespace fs = std::filesystem;
-    std::string ext;
-    try {
-        ext = fs::path(filepath).extension().string();
-    } catch (...) {
-        ext.clear();
+    std::string_view ext_view = extract_ext(filepath);
+    if (ext_view.empty()) {
+        return "OTHER";
     }
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    if (!ext.empty() && ext[0] == '.') {
-        ext = ext.substr(1);
+
+    if (ext_view[0] == '.') {
+        ext_view.remove_prefix(1);
     }
-    for (auto& ch : ext) {
-        ch = static_cast<char>(toupper(static_cast<unsigned char>(ch)));
+
+    std::string result;
+    result.reserve(ext_view.size());
+    for (char ch : ext_view) {
+        result.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
     }
-    return ext.empty() ? "OTHER" : ext;
+    return result.empty() ? "OTHER" : result;
 }
 
 } // namespace FileTypeColors

@@ -80,7 +80,24 @@ int main() {
     assert(legacy_paths[0] == legacy_path);
     assert(legacy_paths[1] == new_dup);
 
-    // 8. Test directory scanning with multiple duplicate files
+    // 8. Test ImageMetadata storage and retrieval directly
+    ImageMetadata test_meta{1234567, 1700000000, 1920, 1080};
+    if (db.begin_transaction()) {
+        db.store_image_metadata(test_hash, test_meta);
+        db.commit_transaction();
+    }
+    ImageMetadata fetched_meta;
+    if (db.begin_transaction()) {
+        ok = db.get_image_metadata(test_hash, fetched_meta);
+        db.commit_transaction();
+        assert(ok);
+        assert(fetched_meta.file_size == 1234567);
+        assert(fetched_meta.file_timestamp == 1700000000);
+        assert(fetched_meta.orig_width == 1920);
+        assert(fetched_meta.orig_height == 1080);
+    }
+
+    // 9. Test directory scanning with multiple duplicate files and metadata caching
     std::string test_dir = "/tmp/test_dup_scan_dir";
     fs::create_directories(test_dir + "/sub1");
     fs::create_directories(test_dir + "/sub2");
@@ -114,6 +131,22 @@ int main() {
     assert(all_imgs[0].hash == all_imgs[1].hash);
     assert(all_imgs[1].hash == all_imgs[2].hash);
 
+    // Verify metadata was cached and loaded
+    assert(all_imgs[0].file_size == jpg_data.size());
+    assert(all_imgs[0].file_timestamp > 0);
+    assert(all_imgs[0].orig_width == 64);
+    assert(all_imgs[0].orig_height == 64);
+
+    // Verify square thumbnail was generated and stored in DB
+    std::vector<uint8_t> sq128_check, sq64_check;
+    if (scan_db.begin_transaction()) {
+        assert(scan_db.get_key_data(all_imgs[0].hash + ":sq128", sq128_check));
+        assert(!sq128_check.empty());
+        assert(scan_db.get_key_data(all_imgs[0].hash + ":sq64", sq64_check));
+        assert(!sq64_check.empty());
+        scan_db.abort_transaction();
+    }
+
     auto dup_paths = scan_db.get_paths_for_hash(all_imgs[0].hash);
     assert(dup_paths.size() == 3);
 
@@ -124,6 +157,6 @@ int main() {
     db.close();
     fs::remove(test_db);
 
-    std::cout << "All database duplicate tests passed successfully!" << std::endl;
+    std::cout << "All database duplicate and metadata tests passed successfully!" << std::endl;
     return 0;
 }

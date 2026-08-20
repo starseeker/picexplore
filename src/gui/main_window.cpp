@@ -51,6 +51,9 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     menubar_->add("View/Treemap Sizing/Pixel Area", 0, menu_cb, (void*)23, FL_MENU_RADIO);
     menubar_->add("View/Treemap Sizing/Equal Size", 0, menu_cb, (void*)24, FL_MENU_RADIO);
 
+    menubar_->add("View/Treemap Style/File Type Colors", 0, menu_cb, (void*)25, FL_MENU_RADIO | FL_MENU_VALUE);
+    menubar_->add("View/Treemap Style/All Thumbnails",   0, menu_cb, (void*)26, FL_MENU_RADIO);
+
     menubar_->add("View/Zoom In (Ctrl+Wheel Up)",    FL_CTRL | '=', menu_cb, (void*)7);
     menubar_->add("View/Zoom Out (Ctrl+Wheel Down)", FL_CTRL | '-', menu_cb, (void*)8);
     menubar_->add("View/Reset Zoom",                 FL_CTRL | '0', menu_cb, (void*)9);
@@ -750,7 +753,6 @@ void MainWindow::set_layout_mode(LayoutEngine::LayoutType type) {
 }
 
 void MainWindow::set_treemap_metric(LayoutEngine::TreemapMetric metric) {
-    if (treemap_metric_ == metric) return;
     treemap_metric_ = metric;
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
         layout_dirty_ = true;
@@ -758,10 +760,25 @@ void MainWindow::set_treemap_metric(LayoutEngine::TreemapMetric metric) {
     }
 }
 
+void MainWindow::set_treemap_style(VirtualViewport::TreemapRenderStyle style) {
+    if (treemap_style_ == style) return;
+    treemap_style_ = style;
+    viewport_->set_treemap_render_style(style);
+    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+        reprioritize_thumbnails();
+    }
+}
+
 void MainWindow::recompute_layout(bool reprioritize) {
     auto indexed = store_.get_filtered_aspects(directory_filter_);
 
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+        if (treemap_metric_ == LayoutEngine::TreemapMetric::FILE_SIZE) {
+            store_.ensure_file_sizes();
+        } else if (treemap_metric_ == LayoutEngine::TreemapMetric::PIXEL_AREA) {
+            store_.ensure_pixel_dimensions();
+        }
+
         std::vector<TreemapItem> items;
         items.reserve(indexed.size());
         for (const auto& [raw_idx, ar] : indexed) {
@@ -840,8 +857,10 @@ void MainWindow::reprioritize_thumbnails() {
         std::vector<ReqItem> req_items;
         req_items.reserve(layout_result_.boxes.size());
 
+        double min_size = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS) ? 4.0 : 36.0;
+
         for (const auto& box : layout_result_.boxes) {
-            if (box.w >= 36.0 && box.h >= 36.0) {
+            if (box.w >= min_size && box.h >= min_size) {
                 req_items.push_back({box.image_index, box.w, box.h, box.w * box.h});
             }
         }
@@ -850,29 +869,41 @@ void MainWindow::reprioritize_thumbnails() {
             return a.area > b.area;
         });
 
+        bool all_thumbs = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS);
         for (const auto& item : req_items) {
             const auto& entry = store_.get(item.idx);
 
-            ThumbQuality needed = ThumbQuality::SMALL;
-            double max_dim = std::max(item.w, item.h);
-            if (max_dim <= 64)       needed = ThumbQuality::SMALL;
-            else if (max_dim <= 128) needed = ThumbQuality::MEDIUM;
-            else if (max_dim <= 256) needed = ThumbQuality::LARGE;
-            else if (max_dim <= 512) needed = ThumbQuality::XLARGE;
-            else if (max_dim <= 1024) needed = static_cast<ThumbQuality>(1024);
-            else                      needed = ThumbQuality::FULL;
+            if (all_thumbs) {
+                bool missing_square = entry.square_thumb.rgb_data.empty();
+                if (missing_square && entry.last_requested_generation < current_generation_) {
+                    store_.get(item.idx).last_requested_generation = current_generation_;
+                    ThumbQuality sq_q = (std::max(item.w, item.h) <= 64.0) ? ThumbQuality::SQUARE_64 : ThumbQuality::SQUARE_128;
+                    pipeline_->request_thumbnail(item.idx, entry.filepath, entry.content_hash,
+                                                 sq_q, true, current_generation_,
+                                                 static_cast<int>(item.w), static_cast<int>(item.h));
+                }
+            } else {
+                ThumbQuality needed = ThumbQuality::SMALL;
+                double max_dim = std::max(item.w, item.h);
+                if (max_dim <= 64)       needed = ThumbQuality::SMALL;
+                else if (max_dim <= 128) needed = ThumbQuality::MEDIUM;
+                else if (max_dim <= 256) needed = ThumbQuality::LARGE;
+                else if (max_dim <= 512) needed = ThumbQuality::XLARGE;
+                else if (max_dim <= 1024) needed = static_cast<ThumbQuality>(1024);
+                else                      needed = ThumbQuality::FULL;
 
-            bool size_mismatch = (entry.scaled.layout_width  != static_cast<int>(item.w) ||
-                                  entry.scaled.layout_height != static_cast<int>(item.h));
-            bool needs_upgrade = (entry.scaled.quality < needed);
-            bool missing_or_mismatch = (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch || needs_upgrade);
+                bool size_mismatch = (entry.scaled.layout_width  != static_cast<int>(item.w) ||
+                                      entry.scaled.layout_height != static_cast<int>(item.h));
+                bool needs_upgrade = (entry.scaled.quality < needed);
+                bool missing_or_mismatch = (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch || needs_upgrade);
 
-            if (missing_or_mismatch && entry.last_requested_generation < current_generation_) {
-                store_.get(item.idx).last_requested_generation = current_generation_;
-                ThumbQuality req_quality = std::max(needed, entry.best_quality);
-                pipeline_->request_thumbnail(item.idx, entry.filepath, entry.content_hash,
-                                             req_quality, true, current_generation_,
-                                             static_cast<int>(item.w), static_cast<int>(item.h));
+                if (missing_or_mismatch && entry.last_requested_generation < current_generation_) {
+                    store_.get(item.idx).last_requested_generation = current_generation_;
+                    ThumbQuality req_quality = std::max(needed, entry.best_quality);
+                    pipeline_->request_thumbnail(item.idx, entry.filepath, entry.content_hash,
+                                                 req_quality, true, current_generation_,
+                                                 static_cast<int>(item.w), static_cast<int>(item.h));
+                }
             }
         }
         return;
@@ -1104,6 +1135,8 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 22: win->set_treemap_metric(LayoutEngine::TreemapMetric::FILE_SIZE); break;
         case 23: win->set_treemap_metric(LayoutEngine::TreemapMetric::PIXEL_AREA); break;
         case 24: win->set_treemap_metric(LayoutEngine::TreemapMetric::EQUAL_SIZE); break;
+        case 25: win->set_treemap_style(VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS); break;
+        case 26: win->set_treemap_style(VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS); break;
         case 7: win->target_height_ = std::min(win->target_height_ * 1.2, 800.0); win->layout_dirty_ = true; break;
         case 8: win->target_height_ = std::max(win->target_height_ / 1.2,  50.0); win->layout_dirty_ = true; break;
         case 9: win->target_height_ = 150.0; win->layout_dirty_ = true; break;

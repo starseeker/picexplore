@@ -36,6 +36,14 @@
 #include "utils.h"
 #include "concurrentqueue.h"
 
+// Image metadata structure for cached file attributes
+struct ImageMetadata {
+    uint64_t file_size = 0;
+    uint64_t file_timestamp = 0;
+    int32_t orig_width = 0;
+    int32_t orig_height = 0;
+};
+
 // Image information structure
 struct ImageInfo {
     std::string path;
@@ -45,6 +53,10 @@ struct ImageInfo {
     std::vector<uint8_t> thumb_data;
     int thumb_width = 0;
     int thumb_height = 0;
+    uintmax_t file_size = 0;
+    uintmax_t file_timestamp = 0;
+    int orig_width = 0;
+    int orig_height = 0;
 };
 
 // Write task for batch database operations
@@ -131,6 +143,8 @@ class DatabaseManager {
 	bool remove_path_for_hash(const std::string& hash, const std::string& filepath);
 	std::string extract_hash_from_key(const char* key, size_t key_size);
 	bool load_image_info(const std::string& hash, ImageInfo& info);
+	bool store_image_metadata(const std::string& hash, const ImageMetadata& meta);
+	bool get_image_metadata(const std::string& hash, ImageMetadata& meta);
 	bool is_open() const { return is_open_; }
 	std::mutex& get_mutex() { return db_mutex_; }
 

@@ -72,14 +72,14 @@ void ScanCoordinator::run() {
                 
                 ThumbQuality bq = static_cast<ThumbQuality>(img.best_thumb_size);
                 
-                int actual_w = img.thumb_width;
-                int actual_h = img.thumb_height;
+                int actual_w = (img.orig_width > 0) ? img.orig_width : img.thumb_width;
+                int actual_h = (img.orig_height > 0) ? img.orig_height : img.thumb_height;
                 double ar = img.aspect_ratio;
 
                 UpdateEvent ev = UpdateEvent::make_image_discovered(
                     norm_path, img.hash,
                     actual_w, actual_h, ar, 
-                    0, 0, // Lazy stat on demand
+                    img.file_size, img.file_timestamp,
                     bq, {}, // Skip passing jpeg data to save memory, ThumbnailPipeline will load it
                     img.thumb_width, img.thumb_height
                 );
