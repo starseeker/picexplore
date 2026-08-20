@@ -150,13 +150,54 @@ int main() {
     auto dup_paths = scan_db.get_paths_for_hash(all_imgs[0].hash);
     assert(dup_paths.size() == 3);
 
-    scan_db.close();
-    fs::remove_all(test_dir);
-    fs::remove(scan_db_path);
+    // 10. Test Unified Cache Parent/Child Sharing
+    std::string unified_dir = "/tmp/test_unified_dir";
+    fs::create_directories(unified_dir + "/parent/child");
+    
+    std::vector<uint8_t> rgb_parent(128 * 128 * 3, 200);
+    std::vector<uint8_t> jpg_data2 = encode_jpeg(rgb_parent.data(), 128, 128, 90);
+    assert(!jpg_data2.empty());
 
-    db.close();
-    fs::remove(test_db);
+    {
+        std::ofstream f1(unified_dir + "/parent/child/child_img.jpg", std::ios::binary);
+        f1.write(reinterpret_cast<const char*>(jpg_data.data()), jpg_data.size());
+        std::ofstream f2(unified_dir + "/parent/parent_img.jpg", std::ios::binary);
+        f2.write(reinterpret_cast<const char*>(jpg_data2.data()), jpg_data2.size());
+    }
 
-    std::cout << "All database duplicate and metadata tests passed successfully!" << std::endl;
+    std::string unified_db_path = "/tmp/test_unified_cache.db";
+    if (fs::exists(unified_db_path)) fs::remove(unified_db_path);
+
+    // Step A: Scan subdirectory first
+    {
+        DatabaseManager udb;
+        assert(udb.open(unified_db_path));
+        Timer t;
+        StatusReporter r(10);
+        int cnt = udb.scan_directory_parallel(unified_dir + "/parent/child", t, r, 2);
+        assert(cnt == 1);
+        auto imgs = udb.get_all_images();
+        assert(imgs.size() == 1);
+        udb.close();
+    }
+
+    // Step B: Now scan parent directory into the same database
+    {
+        DatabaseManager udb;
+        assert(udb.open(unified_db_path));
+        Timer t;
+        StatusReporter r(10);
+        int cnt = udb.scan_directory_parallel(unified_dir + "/parent", t, r, 2);
+        // Only 1 new image (parent_img.jpg) needed processing; child_img.jpg was reused from cache
+        assert(cnt == 1);
+        auto imgs = udb.get_all_images();
+        assert(imgs.size() == 2);
+        udb.close();
+    }
+
+    fs::remove_all(unified_dir);
+    fs::remove(unified_db_path);
+
+    std::cout << "All database duplicate, metadata, and unified cache sharing tests passed successfully!" << std::endl;
     return 0;
 }

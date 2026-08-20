@@ -206,6 +206,8 @@ bool is_cache_or_db_path(const std::string& path, const std::string& db_path) {
     // 3. Check known database and lock filenames
     std::string filename = fs::path(norm_path).filename().string();
     if (filename == "images.db" || filename == "images.db-lock" ||
+        filename == "cache.db" || filename == "cache.db-lock" ||
+        filename == "thumbnails.db" || filename == "thumbnails.db-lock" ||
         filename == "data.mdb" || filename == "lock.mdb" ||
         filename == ".picexplore" || filename == "picexplore") {
         return true;

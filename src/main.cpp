@@ -25,24 +25,20 @@ static std::string resolve_db_path(const std::string& explicit_db, const std::st
         fs::path local_db = fs::path(canon_dir) / "images.db";
         if (fs::exists(local_db)) {
             return local_db.string();
-        } else if (fs::exists("./images.db")) {
-            return "./images.db";
-        } else {
-            const char* home = getenv("HOME");
-            fs::path cache_dbs = home ? (fs::path(home) / ".cache" / "picexplore" / "databases") : fs::path("/tmp/picexplore/databases");
-            try {
-                fs::create_directories(cache_dbs);
-            } catch (...) {}
-
-            XXH128_hash_t h = XXH3_128bits(canon_dir.data(), canon_dir.size());
-            char buf[64];
-            snprintf(buf, sizeof(buf), "%016llx%016llx.db",
-                     (unsigned long long)h.high64, (unsigned long long)h.low64);
-            return (cache_dbs / buf).string();
         }
     }
 
-    return "./images.db";
+    if (fs::exists("./images.db")) {
+        return "./images.db";
+    }
+
+    const char* home = getenv("HOME");
+    fs::path cache_dir = home ? (fs::path(home) / ".cache" / "picexplore") : fs::path("/tmp/picexplore");
+    try {
+        fs::create_directories(cache_dir);
+    } catch (...) {}
+
+    return (cache_dir / "cache.db").string();
 }
 
 int main(int argc, char* argv[]) {

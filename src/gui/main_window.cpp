@@ -265,16 +265,12 @@ void MainWindow::start() {
             db_path_ = "./images.db";
         } else {
             const char* home = getenv("HOME");
-            fs::path cache_dbs = home ? (fs::path(home) / ".cache" / "picexplore" / "databases") : fs::path("/tmp/picexplore/databases");
+            fs::path cache_dir = home ? (fs::path(home) / ".cache" / "picexplore") : fs::path("/tmp/picexplore");
             try {
-                fs::create_directories(cache_dbs);
+                fs::create_directories(cache_dir);
             } catch (...) {}
 
-            XXH128_hash_t h = XXH3_128bits(canon_dir.data(), canon_dir.size());
-            char buf[64];
-            snprintf(buf, sizeof(buf), "%016llx%016llx.db",
-                     (unsigned long long)h.high64, (unsigned long long)h.low64);
-            db_path_ = (cache_dbs / buf).string();
+            db_path_ = (cache_dir / "cache.db").string();
         }
     }
 

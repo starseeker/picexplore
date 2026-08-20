@@ -1331,6 +1331,14 @@ bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) 
     }
 
     if (best_size == 0) {
+        if (get_key_data(hash + ":sq128", best_data)) {
+            best_size = 128;
+        } else if (get_key_data(hash + ":sq64", best_data)) {
+            best_size = 64;
+        }
+    }
+
+    if (best_size == 0) {
 	return false;
     }
 

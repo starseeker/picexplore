@@ -329,6 +329,21 @@ int run_headless_pdf(const std::string& pdf_path, const std::string& directory,
     std::vector<ImageInfo> images = db.get_all_images();
     timer.stop("Database Query");
 
+    if (!directory.empty()) {
+        std::vector<ImageInfo> filtered_images;
+        std::string prefix = fs::path(directory).lexically_normal().string();
+        if (!prefix.empty() && prefix.back() != '/' && prefix.back() != '\\') {
+            prefix += '/';
+        }
+        for (const auto& img : images) {
+            std::string norm_path = fs::path(img.path).lexically_normal().string();
+            if (norm_path.find(prefix) == 0 || norm_path == fs::path(directory).lexically_normal().string()) {
+                filtered_images.push_back(img);
+            }
+        }
+        images = std::move(filtered_images);
+    }
+
     if (images.empty()) {
         std::cerr << "Error: No images found in database";
         if (!scan_needed) {

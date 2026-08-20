@@ -103,7 +103,7 @@ Options:
   -d, --directory PATH         Directory of images to view or scan
   -s, --scan                   Run batch scanner headlessly without launching GUI
   --pdf PATH                   Generate PDF gallery from database headlessly
-  --db, --database PATH        Path to LMDB database file (default: ~/.cache/picexplore/databases/<hash>.db)
+  --db, --database PATH        Path to LMDB database file (default: ~/.cache/picexplore/cache.db)
   --row-height N               Target row height in pixels for PDF layout (default: 150)
   --margin N                   Spacing between images in pixels for PDF (default: 10)
   --layout-pad N               Layout padding for all sides in pixels (default: 0)
@@ -131,6 +131,7 @@ Options:
 
 ## Performance & Architecture
 
+- **Unified User Content Cache (`~/.cache/picexplore/cache.db`)**: Global content-addressable LMDB database caches metadata and thumbnails across all viewed folders. Opening subdirectories and subsequently opening parent directories instantly reuses cached thumbnails with zero re-decoding.
 - **Squarified Treemap Layout Engine**: Zero-allocation C++17 algorithm utilizing sorted area index bounds and constant-time ratio evaluation to lay out 10,000+ images in under 1 millisecond.
 - **Lock-Free Multi-Core LMDB Reads**: Employs thread-local read-only transactions (`MDB_RDONLY`) without mutex locks, allowing worker threads across all CPU cores to decode thumbnails simultaneously.
 - **DCT-Domain JPEG Decoding**: Uses `libjpeg-turbo`'s IDCT scaling factors (1/1, 1/2, 1/4, 1/8) to decode JPEGs directly at requested thumbnail resolutions, saving significant CPU time and memory bandwidth.

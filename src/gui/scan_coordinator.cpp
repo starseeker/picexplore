@@ -13,7 +13,12 @@ ScanCoordinator::ScanCoordinator(const std::string& directory,
                                  const std::string& db_path)
     : directory_(directory), db_path_(db_path), update_queue_(update_queue), stop_requested_(false) {
     if (db_path_.empty()) {
-        db_path_ = (fs::path(directory_) / "images.db").string();
+        const char* home = getenv("HOME");
+        fs::path cache_dir = home ? (fs::path(home) / ".cache" / "picexplore") : fs::path("/tmp/picexplore");
+        try {
+            fs::create_directories(cache_dir);
+        } catch (...) {}
+        db_path_ = (cache_dir / "cache.db").string();
     }
 }
 
