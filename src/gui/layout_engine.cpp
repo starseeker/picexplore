@@ -9,6 +9,12 @@ LayoutEngine::~LayoutEngine() {
 LayoutEngine::LayoutResult LayoutEngine::compute(const std::vector<std::pair<size_t,double>>& indexed_aspects,
                                                  double viewport_width,
                                                  double target_row_height) {
+    return compute_justified(indexed_aspects, viewport_width, target_row_height);
+}
+
+LayoutEngine::LayoutResult LayoutEngine::compute_justified(const std::vector<std::pair<size_t,double>>& indexed_aspects,
+                                                           double viewport_width,
+                                                           double target_row_height) {
     last_viewport_width_ = viewport_width;
     
     cfg_.w = viewport_width;
@@ -29,6 +35,7 @@ LayoutEngine::LayoutResult LayoutEngine::compute(const std::vector<std::pair<siz
     }
 
     LayoutResult result;
+    result.layout_type = LayoutType::JUSTIFIED;
     if (items_scratch_.empty()) {
         result.total_height = 0;
         return result;
@@ -49,7 +56,28 @@ LayoutEngine::LayoutResult LayoutEngine::compute(const std::vector<std::pair<siz
     return result;
 }
 
+LayoutEngine::LayoutResult LayoutEngine::compute_treemap(const std::vector<TreemapItem>& items,
+                                                         double viewport_width,
+                                                         double viewport_height,
+                                                         double padding) {
+    LayoutResult result;
+    result.layout_type = LayoutType::TREEMAP;
+    result.total_height = viewport_height;
+
+    if (items.empty() || viewport_width <= 0.0 || viewport_height <= 0.0) {
+        return result;
+    }
+
+    auto tboxes = SquarifiedTreemap::compute(items, 0.0, 0.0, viewport_width, viewport_height, padding);
+    result.boxes.reserve(tboxes.size());
+    for (const auto& tb : tboxes) {
+        result.boxes.push_back({tb.id, tb.x, tb.y, tb.w, tb.h});
+    }
+
+    return result;
+}
+
 LayoutEngine::LayoutResult LayoutEngine::append(const std::vector<std::pair<size_t,double>>& indexed_aspects) {
     // JustifiedLayout is fast enough for <100k images. Just recompute for now.
-    return compute(indexed_aspects, last_viewport_width_, cfg_.rh);
+    return compute_justified(indexed_aspects, last_viewport_width_, cfg_.rh);
 }

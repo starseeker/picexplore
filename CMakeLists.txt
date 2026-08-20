@@ -81,6 +81,7 @@ add_executable(picexplore
     src/gui/full_res_loader.cpp
     src/gui/tile_manager.cpp
     src/gui/inotify_watcher.cpp
+    src/gui/file_type_colors.cpp
     src/database.cpp
     src/utils.cpp
     third_party/TinyEXIF.cpp

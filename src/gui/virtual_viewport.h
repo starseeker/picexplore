@@ -8,6 +8,7 @@
 #include "image_store.h"
 #include "layout_engine.h"
 #include "tile_manager.h"
+#include "file_type_colors.h"
 
 class VirtualViewport : public Fl_Widget {
 public:
@@ -99,4 +100,5 @@ private:
 
     void draw_single_image();
     void draw_grid();
+    void draw_treemap();
 };

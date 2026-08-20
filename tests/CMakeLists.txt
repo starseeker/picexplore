@@ -6,6 +6,12 @@ target_include_directories(justified_layout_test PRIVATE ${CMAKE_SOURCE_DIR}/src
 target_compile_options(justified_layout_test PRIVATE -g)
 add_test(NAME justified_layout_test COMMAND justified_layout_test)
 
+# Treemap layout test
+add_executable(treemap_layout_test treemap_layout_test.cpp)
+target_include_directories(treemap_layout_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_options(treemap_layout_test PRIVATE -g -O2)
+add_test(NAME treemap_layout_test COMMAND treemap_layout_test)
+
 # Database test
 add_executable(database_test
     database_test.cpp

@@ -11,6 +11,7 @@
 #include "info_panel.h"
 #include "full_res_loader.h"
 #include "tile_manager.h"
+#include "file_type_colors.h"
 #include <string>
 #include <unordered_set>
 #include <chrono>
@@ -26,6 +27,12 @@ public:
     void exit_single_image_mode();
     void navigate_single_image(int delta);
 
+    void set_layout_mode(LayoutEngine::LayoutType type);
+    LayoutEngine::LayoutType layout_mode() const { return active_layout_; }
+
+    void set_treemap_metric(LayoutEngine::TreemapMetric metric);
+    LayoutEngine::TreemapMetric treemap_metric() const { return treemap_metric_; }
+
     void resize(int X, int Y, int W, int H) override;
 
 protected:
@@ -38,6 +45,9 @@ private:
     LayoutEngine layout_engine_;
     LayoutEngine::LayoutResult layout_result_;
     
+    LayoutEngine::LayoutType active_layout_ = LayoutEngine::LayoutType::JUSTIFIED;
+    LayoutEngine::TreemapMetric treemap_metric_ = LayoutEngine::TreemapMetric::FILE_SIZE;
+
     TileManager*     tile_manager_ = nullptr;
     VirtualViewport* viewport_;
     Fl_Scrollbar*    scrollbar_;

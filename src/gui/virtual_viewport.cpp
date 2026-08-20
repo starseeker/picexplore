@@ -39,6 +39,15 @@ std::vector<size_t> VirtualViewport::get_visible_indices(int margin_y) const {
     std::vector<size_t> visible;
     if (!layout_) return visible;
 
+    if (layout_->layout_type == LayoutEngine::LayoutType::TREEMAP) {
+        for (const auto& box : layout_->boxes) {
+            if (box.w > 0 && box.h > 0) {
+                visible.push_back(box.image_index);
+            }
+        }
+        return visible;
+    }
+
     int view_top = scroll_offset_ - margin_y;
     int view_bottom = scroll_offset_ + h() + margin_y;
 
@@ -55,6 +64,8 @@ std::vector<size_t> VirtualViewport::get_visible_indices(int margin_y) const {
 void VirtualViewport::draw() {
     if (view_mode_ == ViewMode::SINGLE_IMAGE) {
         draw_single_image();
+    } else if (layout_ && layout_->layout_type == LayoutEngine::LayoutType::TREEMAP) {
+        draw_treemap();
     } else {
         draw_grid();
     }
@@ -193,6 +204,130 @@ void VirtualViewport::draw_grid() {
             } else {
                 fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
             }
+        }
+    }
+
+    fl_pop_clip();
+}
+
+void VirtualViewport::draw_treemap() {
+    fl_color(fl_rgb_color(28, 28, 28)); 
+    fl_rectf(x(), y(), w(), h());
+
+    if (!layout_ || layout_->boxes.empty()) {
+        fl_font(FL_HELVETICA, 14);
+        fl_color(fl_rgb_color(150, 150, 150));
+        fl_draw("No images to display", x(), y(), w(), h(), FL_ALIGN_CENTER, nullptr, 0);
+        return;
+    }
+
+    fl_push_clip(x(), y(), w(), h());
+
+    for (const auto& box : layout_->boxes) {
+        int draw_x = static_cast<int>(x() + box.x);
+        int draw_y = static_cast<int>(y() + box.y);
+        int draw_w = static_cast<int>(box.w);
+        int draw_h = static_cast<int>(box.h);
+
+        if (draw_w <= 0 || draw_h <= 0) continue;
+
+        bool is_selected = (box.image_index == selected_idx_);
+        auto& entry = store_.get(box.image_index);
+
+        Fl_Color bg_col = FileTypeColors::get_fl_color(entry.filepath);
+
+        // Outer highlight if selected
+        if (is_selected) {
+            fl_color(fl_rgb_color(60, 160, 255));
+            fl_rectf(draw_x - 2, draw_y - 2, draw_w + 4, draw_h + 4);
+        }
+
+        // Card background
+        fl_color(bg_col);
+        fl_rectf(draw_x, draw_y, draw_w, draw_h);
+
+        // 1px subtle dark outline
+        fl_color(fl_rgb_color(20, 20, 20));
+        fl_rect(draw_x, draw_y, draw_w, draw_h);
+
+        // Threshold for drawing thumbnails: at least 36x36 px
+        if (draw_w >= 36 && draw_h >= 36) {
+            int pad = (draw_w >= 80 && draw_h >= 80) ? 4 : 2;
+            int inner_w = draw_w - 2 * pad;
+            int inner_h = draw_h - 2 * pad;
+
+            const uint8_t* img_data = nullptr;
+            int img_w = 0, img_h = 0;
+
+            if (entry.best_quality != ThumbQuality::NONE && !entry.scaled.rgb_data.empty() &&
+                entry.scaled.width > 0 && entry.scaled.height > 0) {
+                
+                // Aspect fit within inner box
+                double ar = entry.aspect_ratio > 0.0 ? entry.aspect_ratio : 1.0;
+                img_w = inner_w;
+                img_h = inner_h;
+                if ((double)inner_w / inner_h > ar) {
+                    img_w = std::max(1, static_cast<int>(inner_h * ar));
+                } else {
+                    img_h = std::max(1, static_cast<int>(inner_w / ar));
+                }
+
+                if (img_w > 0 && img_h > 0) {
+                    if (entry.scaled.width == img_w && entry.scaled.height == img_h) {
+                        img_data = entry.scaled.rgb_data.data();
+                    } else {
+                        draw_tmp_buf_.resize(img_w * img_h * 3);
+                        fast_scale_image(entry.scaled.rgb_data.data(),
+                                         entry.scaled.width, entry.scaled.height,
+                                         draw_tmp_buf_.data(), img_w, img_h,
+                                         x_coords_buf_);
+                        img_data = draw_tmp_buf_.data();
+                    }
+                }
+            }
+
+            if (img_data && img_w > 0 && img_h > 0) {
+                int img_x = draw_x + pad + (inner_w - img_w) / 2;
+                int img_y = draw_y + pad + (inner_h - img_h) / 2;
+
+                if (is_selected) {
+                    tint_tmp_buf_.resize(img_w * img_h * 3);
+                    for (size_t i = 0; i < (size_t)img_w * img_h; ++i) {
+                        uint8_t r = img_data[i * 3 + 0];
+                        uint8_t g = img_data[i * 3 + 1];
+                        uint8_t b = img_data[i * 3 + 2];
+                        tint_tmp_buf_[i * 3 + 0] = static_cast<uint8_t>((r * 3 + 120) / 4);
+                        tint_tmp_buf_[i * 3 + 1] = static_cast<uint8_t>((g * 3 + 185) / 4);
+                        tint_tmp_buf_[i * 3 + 2] = static_cast<uint8_t>((b * 3 + 255) / 4);
+                    }
+                    fl_draw_image(tint_tmp_buf_.data(), img_x, img_y, img_w, img_h, 3, 0);
+                } else {
+                    fl_draw_image(img_data, img_x, img_y, img_w, img_h, 3, 0);
+                }
+
+                fl_color(fl_rgb_color(15, 15, 15));
+                fl_rect(img_x, img_y, img_w, img_h);
+            } else {
+                // If thumbnail not available, draw clean filename / info text if space permits
+                if (draw_w >= 48 && draw_h >= 24) {
+                    std::filesystem::path p(entry.filepath);
+                    std::string filename = p.filename().string();
+                    
+                    int font_sz = 10;
+                    if (draw_w >= 120 && draw_h >= 60) font_sz = 12;
+                    else if (draw_w < 70 || draw_h < 35) font_sz = 9;
+
+                    fl_font(FL_HELVETICA_BOLD, font_sz);
+                    fl_color(FL_WHITE);
+                    fl_draw(filename.c_str(), draw_x + 4, draw_y + 4, draw_w - 8, draw_h - 8, FL_ALIGN_CENTER | FL_ALIGN_WRAP, nullptr, 0);
+                }
+            }
+        } else if (draw_w >= 20 && draw_h >= 14) {
+            // Small tile: draw extension abbreviation
+            std::string cat = FileTypeColors::get_category_name(entry.filepath);
+            fl_font(FL_HELVETICA_BOLD, 8);
+            fl_color(FL_WHITE);
+            fl_draw(cat.c_str(), draw_x, draw_y, draw_w, draw_h, FL_ALIGN_CENTER, nullptr, 0);
         }
     }
 
@@ -379,7 +514,10 @@ int VirtualViewport::handle(int event) {
                 take_focus();
                 if (layout_ && on_image_clicked) {
                     int mx = Fl::event_x() - x();
-                    int my = Fl::event_y() - y() + scroll_offset_;
+                    int my = Fl::event_y() - y();
+                    if (layout_->layout_type == LayoutEngine::LayoutType::JUSTIFIED) {
+                        my += scroll_offset_;
+                    }
                     bool hit = false;
                     for (const auto& box : layout_->boxes) {
                         if (mx >= box.x && mx <= box.x + box.w &&

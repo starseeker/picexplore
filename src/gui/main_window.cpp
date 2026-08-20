@@ -44,6 +44,13 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     menubar_->add("Sort/Date (Oldest)",         0, menu_cb, (void*)5);
     menubar_->add("Sort/Date (Newest)",         0, menu_cb, (void*)6);
 
+    menubar_->add("View/Layout/Justified Grid", FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO | FL_MENU_VALUE);
+    menubar_->add("View/Layout/Treemap",        FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO);
+
+    menubar_->add("View/Treemap Sizing/File Size",  0, menu_cb, (void*)22, FL_MENU_RADIO | FL_MENU_VALUE);
+    menubar_->add("View/Treemap Sizing/Pixel Area", 0, menu_cb, (void*)23, FL_MENU_RADIO);
+    menubar_->add("View/Treemap Sizing/Equal Size", 0, menu_cb, (void*)24, FL_MENU_RADIO);
+
     menubar_->add("View/Zoom In (Ctrl+Wheel Up)",    FL_CTRL | '=', menu_cb, (void*)7);
     menubar_->add("View/Zoom Out (Ctrl+Wheel Down)", FL_CTRL | '-', menu_cb, (void*)8);
     menubar_->add("View/Reset Zoom",                 FL_CTRL | '0', menu_cb, (void*)9);
@@ -391,10 +398,18 @@ void MainWindow::exit_single_image_mode() {
     statusbar_->resize(0, MENU_H + vp_h, w(), STATUS_H);
 
     int info_w = std::clamp(info_panel_width_, 160, std::max(160, w() - 200));
-    scrollbar_->show();
-    int vp_w = w() - SCROLL_W;
+    int vp_w = w();
     if (info_panel_visible_) vp_w -= info_w;
-    viewport_->resize(0, MENU_H, vp_w, vp_h);
+
+    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+        scrollbar_->hide();
+        viewport_->resize(0, MENU_H, vp_w, vp_h);
+    } else {
+        scrollbar_->show();
+        int content_w = std::max(vp_w - SCROLL_W, 10);
+        viewport_->resize(0, MENU_H, content_w, vp_h);
+        scrollbar_->resize(content_w, MENU_H, SCROLL_W, vp_h);
+    }
     
     last_visible_.clear();
     update_statusbar();
@@ -402,9 +417,11 @@ void MainWindow::exit_single_image_mode() {
 
     size_t sel = viewport_->get_selected_image();
     if (sel != (size_t)-1) {
-        int target_y = viewport_->scroll_to_image(sel);
-        viewport_->set_scroll_offset(target_y);
-        scrollbar_->value(target_y);
+        if (active_layout_ == LayoutEngine::LayoutType::JUSTIFIED) {
+            int target_y = viewport_->scroll_to_image(sel);
+            viewport_->set_scroll_offset(target_y);
+            scrollbar_->value(target_y);
+        }
         reprioritize_thumbnails();
     }
 }
@@ -707,16 +724,75 @@ void MainWindow::poll_events() {
     }
 }
 
+void MainWindow::set_layout_mode(LayoutEngine::LayoutType type) {
+    if (active_layout_ == type) return;
+    active_layout_ = type;
+    layout_dirty_ = true;
+    viewport_->set_scroll_offset(0);
+    scrollbar_->value(0);
+
+    int vp_h = h() - MENU_H - STATUS_H;
+    int info_w = std::clamp(info_panel_width_, 160, std::max(160, w() - 200));
+
+    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+        scrollbar_->hide();
+        int vp_w = w();
+        if (info_panel_visible_) vp_w -= info_w;
+        viewport_->resize(0, MENU_H, vp_w, vp_h);
+    } else {
+        scrollbar_->show();
+        int vp_w = w() - SCROLL_W;
+        if (info_panel_visible_) vp_w -= info_w;
+        viewport_->resize(0, MENU_H, vp_w, vp_h);
+    }
+
+    recompute_layout(true);
+}
+
+void MainWindow::set_treemap_metric(LayoutEngine::TreemapMetric metric) {
+    if (treemap_metric_ == metric) return;
+    treemap_metric_ = metric;
+    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+        layout_dirty_ = true;
+        recompute_layout(true);
+    }
+}
+
 void MainWindow::recompute_layout(bool reprioritize) {
     auto indexed = store_.get_filtered_aspects(directory_filter_);
-    layout_result_ = layout_engine_.compute(indexed, viewport_->content_width(), target_height_);
-    viewport_->set_layout(&layout_result_);
-    
-    int max_scroll = std::max(0, static_cast<int>(layout_result_.total_height) - viewport_->h());
-    int current_scroll = std::clamp(viewport_->scroll_offset(), 0, max_scroll);
-    
-    viewport_->set_scroll_offset(current_scroll);
-    scrollbar_->value(current_scroll, viewport_->h(), 0, layout_result_.total_height);
+
+    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+        std::vector<TreemapItem> items;
+        items.reserve(indexed.size());
+        for (const auto& [raw_idx, ar] : indexed) {
+            const auto& entry = store_.get(raw_idx);
+            double weight = 1.0;
+            if (treemap_metric_ == LayoutEngine::TreemapMetric::FILE_SIZE) {
+                weight = entry.file_size > 0 ? static_cast<double>(entry.file_size) : 1024.0;
+            } else if (treemap_metric_ == LayoutEngine::TreemapMetric::PIXEL_AREA) {
+                weight = (entry.original_width > 0 && entry.original_height > 0)
+                            ? static_cast<double>(entry.original_width) * entry.original_height
+                            : 10000.0;
+            } else {
+                weight = 1.0;
+            }
+            items.push_back(TreemapItem{raw_idx, weight, ar});
+        }
+
+        layout_result_ = layout_engine_.compute_treemap(items, viewport_->w(), viewport_->h(), 2.0);
+        viewport_->set_layout(&layout_result_);
+        viewport_->set_scroll_offset(0);
+        scrollbar_->value(0, viewport_->h(), 0, viewport_->h());
+    } else {
+        layout_result_ = layout_engine_.compute_justified(indexed, viewport_->content_width(), target_height_);
+        viewport_->set_layout(&layout_result_);
+        
+        int max_scroll = std::max(0, static_cast<int>(layout_result_.total_height) - viewport_->h());
+        int current_scroll = std::clamp(viewport_->scroll_offset(), 0, max_scroll);
+        
+        viewport_->set_scroll_offset(current_scroll);
+        scrollbar_->value(current_scroll, viewport_->h(), 0, layout_result_.total_height);
+    }
     
     layout_dirty_ = false;
     viewport_->redraw();
@@ -732,6 +808,76 @@ void MainWindow::reprioritize_thumbnails() {
     auto visible = viewport_->get_visible_indices();
     store_.mark_visible(visible);
     
+    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+        bool view_changed = false;
+        if (visible.size() != last_visible_.size() ||
+            viewport_->w() != last_viewport_width_) {
+            view_changed = true;
+        } else {
+            for (size_t idx : visible) {
+                const auto& entry = store_.get(idx);
+                if (entry.best_quality == ThumbQuality::NONE && entry.last_requested_generation < current_generation_) {
+                    view_changed = true;
+                    break;
+                }
+            }
+        }
+
+        if (!view_changed) return;
+
+        current_generation_++;
+        pipeline_->set_generation(current_generation_);
+        last_visible_ = visible;
+        last_target_height_ = 0.0;
+        last_viewport_width_ = viewport_->w();
+
+        struct ReqItem {
+            size_t idx;
+            double w;
+            double h;
+            double area;
+        };
+        std::vector<ReqItem> req_items;
+        req_items.reserve(layout_result_.boxes.size());
+
+        for (const auto& box : layout_result_.boxes) {
+            if (box.w >= 36.0 && box.h >= 36.0) {
+                req_items.push_back({box.image_index, box.w, box.h, box.w * box.h});
+            }
+        }
+
+        std::sort(req_items.begin(), req_items.end(), [](const ReqItem& a, const ReqItem& b) {
+            return a.area > b.area;
+        });
+
+        for (const auto& item : req_items) {
+            const auto& entry = store_.get(item.idx);
+
+            ThumbQuality needed = ThumbQuality::SMALL;
+            double max_dim = std::max(item.w, item.h);
+            if (max_dim <= 64)       needed = ThumbQuality::SMALL;
+            else if (max_dim <= 128) needed = ThumbQuality::MEDIUM;
+            else if (max_dim <= 256) needed = ThumbQuality::LARGE;
+            else if (max_dim <= 512) needed = ThumbQuality::XLARGE;
+            else if (max_dim <= 1024) needed = static_cast<ThumbQuality>(1024);
+            else                      needed = ThumbQuality::FULL;
+
+            bool size_mismatch = (entry.scaled.layout_width  != static_cast<int>(item.w) ||
+                                  entry.scaled.layout_height != static_cast<int>(item.h));
+            bool needs_upgrade = (entry.scaled.quality < needed);
+            bool missing_or_mismatch = (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch || needs_upgrade);
+
+            if (missing_or_mismatch && entry.last_requested_generation < current_generation_) {
+                store_.get(item.idx).last_requested_generation = current_generation_;
+                ThumbQuality req_quality = std::max(needed, entry.best_quality);
+                pipeline_->request_thumbnail(item.idx, entry.filepath, entry.content_hash,
+                                             req_quality, true, current_generation_,
+                                             static_cast<int>(item.w), static_cast<int>(item.h));
+            }
+        }
+        return;
+    }
+
     bool view_changed = false;
     if (visible.size() != last_visible_.size() || 
         target_height_ != last_target_height_ ||
@@ -885,6 +1031,11 @@ void MainWindow::resize(int X, int Y, int W, int H) {
         scrollbar_->hide();
         statusbar_->resize(0, MENU_H + vp_h, W - 280, STATUS_H);
         statusbar_hint_->resize(W - 280, MENU_H + vp_h, 280, STATUS_H);
+    } else if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+        viewport_->resize(0, MENU_H, vp_w, vp_h);
+        scrollbar_->hide();
+        statusbar_->resize(0, MENU_H + vp_h, W, STATUS_H);
+        statusbar_hint_->resize(W - 280, MENU_H + vp_h, 280, STATUS_H);
     } else {
         int content_w = std::max(vp_w - SCROLL_W, 10);
         viewport_->resize(0, MENU_H, content_w, vp_h);
@@ -948,6 +1099,11 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 6: criteria = ImageStore::SortCriteria::TIMESTAMP;    ascending = false; break;
         case 17: criteria = ImageStore::SortCriteria::PIXEL_AREA;  ascending = true;  break;
         case 18: criteria = ImageStore::SortCriteria::PIXEL_AREA;  ascending = false; break;
+        case 20: win->set_layout_mode(LayoutEngine::LayoutType::JUSTIFIED); break;
+        case 21: win->set_layout_mode(LayoutEngine::LayoutType::TREEMAP); break;
+        case 22: win->set_treemap_metric(LayoutEngine::TreemapMetric::FILE_SIZE); break;
+        case 23: win->set_treemap_metric(LayoutEngine::TreemapMetric::PIXEL_AREA); break;
+        case 24: win->set_treemap_metric(LayoutEngine::TreemapMetric::EQUAL_SIZE); break;
         case 7: win->target_height_ = std::min(win->target_height_ * 1.2, 800.0); win->layout_dirty_ = true; break;
         case 8: win->target_height_ = std::max(win->target_height_ / 1.2,  50.0); win->layout_dirty_ = true; break;
         case 9: win->target_height_ = 150.0; win->layout_dirty_ = true; break;
