@@ -52,8 +52,9 @@ picexplore --pdf gallery.pdf --row-height 180 --margin 12
   - **Fluid Justified Grid** (<kbd>Ctrl+1</kbd>): Dynamically arranges photos in clean, aesthetic rows using an optimized justified layout algorithm.
   - **Flat Squarified Treemap** (<kbd>Ctrl+2</kbd>): Visualizes all photos in a flat 2D squarified treemap with zero-allocation $O(1)$ ratio evaluations (<1 ms for 10,000+ items). Proportionally scales rectangles by **File Size** (bytes), **Pixel Area** (megapixels), or **Equal Size**.
   - **Hierarchical (Nested) Treemap** (<kbd>Ctrl+3</kbd>): Recursively clusters images by directory hierarchy into nested subfolder containers with depth-themed border frames and directory labels. Supports **interactive directory drill-down** (click any folder header to zoom in) and **parent directory navigation** (click the top parent bar to navigate back up).
-- **Dual Treemap Visual Styles**:
+- **Triple Treemap Visual Styles**:
   - **All Thumbnails** *(Default)*: Center-cropped square thumbnail mosaic rendered across all tiles down to 1px.
+  - **Cushion Treemap**: 3D shaded cushion treemap based on the classic van Wijk & van de Wetering algorithm, accumulating multi-level parabolic height profiles down the directory tree with real-time Lambertian diffuse lighting.
   - **File Type Colors**: Categorical color-coded cards with file extension badges (JPG, PNG, WebP, GIF, TIFF, BMP, TGA, PDF, SVG) and a live status-bar color key.
 - **Progressive Multi-Resolution Streaming**: Generates and loads thumbnails asynchronously across 6 resolution tiers (32px &rarr; 64px &rarr; 128px &rarr; 256px &rarr; 512px &rarr; 1024px), prioritizing visible viewport regions.
 - **Deep Zoom & Tiling**: Smooth single-image inspection mode with full-resolution rendering, level-of-detail (LOD) tiling cache, and interactive minimap navigator.
