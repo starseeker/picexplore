@@ -2,204 +2,164 @@
 
 ![PicExplore GUI viewing NARA images](doc/nara_example.png)
 
-Program for exploring what images are present in a filesystem.
+**PicExplore** is a fast, lightweight image browser, content-based deduplicator, batch scanner, and PDF gallery generator for local photo collections.
 
-Fast identification and display of a variety of image formats with thumbnail generation and PDF gallery creation.
+It combines an interactive FLTK GUI featuring Flickr-style justified layouts, multi-resolution progressive thumbnail streaming, and deep-zoom tiling with high-throughput headless batch tools backed by an embedded LMDB database.
 
-## Complete Workflow
+---
 
-The complete image exploration workflow is now handled by a single unified tool called `picscan`:
+## Quick Start
 
-### Basic Usage
-
+### 1. Interactive GUI Viewer (Default)
+Explore and browse an image directory interactively:
 ```bash
-# Scan directory and build/update database:
-picscan --directory /path/to/photos
-
-# Generate PDF from existing database:
-picscan --pdf gallery.pdf
-
-# Scan directory and generate PDF in one step:
-picscan --directory /path/to/photos --pdf gallery.pdf
+picexplore /path/to/photos
 ```
 
-This will:
-- Recursively scan the specified directory for image files (JPEG, PNG, BMP, TGA)
-- Compute unique content-based hashes (xxHash) for each image
-- Generate multiple JPEG thumbnails at sizes: 32, 64, 128, 256, 512, 1024 px (maximum dimension)
-- Store file paths, hashes, and thumbnails in an LMDB database
-- Skip duplicate images (same content hash) and corrupt/unreadable files gracefully
-- Generate multi-page PDF with justified layout algorithm for optimal space usage
-- Create 8.5x11" pages at 300 DPI with 0.5" margins
-- Display periodic status reports every 10 seconds
-- Show detailed timing summary for all major phases
-
-## Tools
-
-### picexplore_gui (NEW!)
-Interactive FLTK-based GUI for browsing image collections with justified layout and progressive thumbnail loading.
-
-**Features:**
-- **Incremental Display**: Fast initial scan shows grey rectangles with image metadata, then progressively loads thumbnails
-- **Priority Queue**: Visible images are prioritized for thumbnail generation
-- **Scroll Stabilization**: Waits 500ms after scrolling before reprioritizing (prevents thrashing)
-- **Progressive Quality**: Thumbnails improve from 32px → 64px → 128px → 256px → 512px → 1024px
-- **Justified Layout**: Optimally arranges images using the same algorithm as PDF generation
-- **Multi-threaded**: 4 worker threads for parallel thumbnail generation
-- **Efficient JPEG**: Uses libjpeg-turbo DCT-domain scaling for fast decoding
-
-**Usage:**
+### 2. Headless Batch Scanner
+Scan an image collection and build or update the thumbnail database without launching the GUI:
 ```bash
-# Launch GUI
-picexplore_gui
-
-# Or load a directory directly
-picexplore_gui /path/to/photos
+picexplore --scan /path/to/photos
 ```
 
-See [gui/README.md](gui/README.md) for detailed architecture and design information.
-
-### picscan
-Unified image scanner and PDF gallery generator that combines the functionality of the previous separate tools.
-
-**Usage:**
+### 3. PDF Gallery Generator
+Generate a multi-page justified PDF contact sheet directly from a directory or existing database:
 ```bash
-picscan [OPTIONS]
+# Scan and export PDF in one command
+picexplore -d /path/to/photos --pdf gallery.pdf
+
+# Export PDF from existing database with custom row height and margins
+picexplore --pdf gallery.pdf --row-height 180 --margin 12
 ```
 
-**Options:**
-- `-h, --help`: Show help message
-- `-d, --directory PATH`: Directory to scan for images
-- `--db PATH`: LMDB database path (default: `./images.db`)
-- `--pdf PATH`: PDF output file path
-- `--row-height N`: Target row height in pixels for PDF layout (default: 150)
-- `--margin N`: Spacing between images in pixels for PDF layout (default: 10)
-- `--layout-pad N`: Layout padding for all sides in pixels (default: 0)
-- `--layout-pad-top N`: Layout padding top in pixels
-- `--layout-pad-bottom N`: Layout padding bottom in pixels  
-- `--layout-pad-left N`: Layout padding left in pixels
-- `--layout-pad-right N`: Layout padding right in pixels
-- `-v, --verbose`: Enable verbose output with detailed information
+---
 
-**PDF Layout Controls:**
-- **Page margins**: Fixed 0.5" margins from page edge (controls distance from paper edge)
-- **Layout padding**: Internal padding around the grid of images (`--layout-pad-*` options)
-- **Image spacing**: Space between individual images within the grid (`--margin` option)
+## Features
 
-**Features:**
-- **Multi-format support**: JPEG, PNG, BMP, TGA
-- **Efficient JPEG thumbnailing**: Uses DCT-domain downscaling during decode for optimal performance and memory usage
-- **EXIF orientation support**: Automatically reads and applies EXIF orientation data for correct thumbnail display using TinyEXIF
-- **Content-based deduplication**: Prevents duplicate processing using xxHash
-- **Multiple thumbnail sizes**: 32, 64, 128, 256, 512, 1024 px maximum dimension
-- **Robust error handling**: Gracefully skips corrupt or unreadable images
-- **LMDB database**: Lightning-fast storage and retrieval
-- **Flexible operation**: Can scan only, generate PDF only, or both in one command
-- **Status reporting**: Periodic updates every 10 seconds during processing
-- **Performance instrumentation**: Detailed timing information for all major phases
-- **Justified layout**: Uses optimized layout algorithm for space-efficient PDF pages
+- **Fluid Justified Layout**: Dynamically arranges photos in clean, aesthetic rows using an optimized justified layout algorithm.
+- **Progressive Multi-Resolution Streaming**: Generates and loads thumbnails asynchronously across 6 resolution tiers (32px &rarr; 64px &rarr; 128px &rarr; 256px &rarr; 512px &rarr; 1024px), prioritizing visible viewports.
+- **Deep Zoom & Tiling**: Smooth single-image inspection mode with full-resolution rendering, level-of-detail (LOD) tiling cache, and interactive minimap navigator.
+- **Content-Based Deduplication**: Employs xxHash (XXH3 128-bit) content hashing to detect identical images across different folders or filenames without duplicate thumbnail generation.
+- **Embedded Database Cache**: Fast LMDB storage keeps paths, hashes, and thumbnails indexed for instant subsequent loads.
+- **Live Directory Watching**: Automatically detects added, deleted, or modified files in real time (via `inotify` on Linux).
+- **Metadata & EXIF Inspector**: Collapsible info panel displaying image dimensions, file size, timestamps, EXIF metadata, duplicate occurrences, and clickable folder breadcrumbs for directory filtering.
+- **PDF Contact Sheet Generation**: Vector/raster PDF generator with justified layout, customizable row heights, image spacing, and padding.
 
-## Complete Examples
+---
 
-```bash
-# Scan your photo directory and create thumbnail database
-picscan --directory ~/Pictures --verbose
+## GUI Controls & Navigation
 
-# Generate PDF gallery from existing thumbnails  
-picscan --pdf my_photo_gallery.pdf --row-height 200
+| Action | Control | Description |
+| :--- | :--- | :--- |
+| **Scroll Gallery** | `Mouse Wheel` / `Scrollbar` | Smooth vertical scrolling through image rows |
+| **Zoom Gallery** | `Ctrl` + `Mouse Wheel` / `Ctrl` + `+` / `-` | Zoom gallery row heights (`Ctrl` + `0` resets zoom) |
+| **Select Image** | `Left Click` | Select an image and display its metadata in Info Panel |
+| **Open Full-Res View** | `Double Click` | Enter single-image inspection mode |
+| **Zoom in Full View** | `Mouse Wheel` | Zoom in/out at mouse cursor position |
+| **Pan in Full View** | `Left Click + Drag` | Pan across the zoomed image (or drag minimap viewport) |
+| **Previous / Next Image** | `Left Arrow` / `Right Arrow` | Navigate adjacent images in single-image mode |
+| **Exit Full View** | `Escape` | Return to gallery view |
+| **Filter by Directory** | Click breadcrumb button | Filters current view to clicked folder (`Ctrl` + `R` resets filter) |
+| **Toggle Info Panel** | `View` &rarr; `Information Panel` | Show/hide image details, EXIF, and duplicate list |
+| **Toggle Minimap** | `View` &rarr; `Navigator (Minimap)` | Show/hide navigation minimap in full-res view |
 
-# Generate PDF with custom layout padding (20px on all sides)
-picscan --pdf gallery.pdf --layout-pad 20
+---
 
-# Generate PDF with asymmetric padding (larger top/bottom padding)
-picscan --pdf gallery.pdf --layout-pad-top 30 --layout-pad-bottom 30 --layout-pad-left 10 --layout-pad-right 10
+## CLI Reference
 
-# Do both operations in one command
-picscan --directory ~/Pictures --pdf my_photo_gallery.pdf --verbose
-
-# The PDF gallery is now ready to view!
 ```
+Usage:
+  picexplore [directory] [OPTIONS]
+
+Positional Arguments:
+  directory                    Directory of images to view or scan
+
+Options:
+  -h, --help                   Print usage and options
+  -d, --directory PATH         Directory of images to view or scan
+  -s, --scan                   Run batch scanner headlessly without launching GUI
+  --pdf PATH                   Generate PDF gallery from database headlessly
+  --db, --database PATH        Path to LMDB database file (default: ~/.cache/picexplore/databases/<hash>.db)
+  --row-height N               Target row height in pixels for PDF layout (default: 150)
+  --margin N                   Spacing between images in pixels for PDF (default: 10)
+  --layout-pad N               Layout padding for all sides in pixels (default: 0)
+  --layout-pad-top N           Layout padding top in pixels
+  --layout-pad-bottom N        Layout padding bottom in pixels
+  --layout-pad-left N          Layout padding left in pixels
+  --layout-pad-right N         Layout padding right in pixels
+  -v, --verbose                Enable verbose output and performance metrics
+```
+
+---
+
+## Supported Image Formats
+
+| Format | Extension | Decoding Pipeline |
+| :--- | :--- | :--- |
+| **JPEG** | `.jpg`, `.jpeg` | `libjpeg-turbo` with DCT-domain downscaling and TinyEXIF orientation |
+| **PNG** | `.png` | Native `libpng` decoder with fast color space conversions |
+| **WebP** | `.webp` | Native `libwebp` decoder with hardware-accelerated scaling |
+| **TIFF** | `.tif`, `.tiff` | `libtiff` with RGBA converter and floating-point fallback |
+| **BMP** | `.bmp` | High-performance `stb_image` decoding |
+| **TGA** | `.tga` | High-performance `stb_image` decoding |
+
+---
+
+## Performance & Architecture
+
+- **DCT-Domain JPEG Decoding**: Uses `libjpeg-turbo`'s IDCT scaling factors (1/1, 1/2, 1/4, 1/8) to decode JPEGs directly at requested thumbnail resolutions, saving significant CPU time and memory bandwidth.
+- **Priority Queue & Scroll Stabilization**: Prioritizes thumbnail generation for items currently visible in the viewport, waiting 500ms after scrolling stops to prevent pipeline thrashing.
+- **Multi-Threaded Worker Pool**: Spawns background worker threads for parallel file inspection, hashing, and thumbnail rendering without blocking the UI.
+- **Storage-Optimized Database**: Thumbnails are stored in LMDB as quality-compressed JPEGs (90% quality) with instant memory-mapped lookups.
+
+---
 
 ## Building
 
 ### Prerequisites
 
-You need the following system packages installed:
+Ensure you have CMake 3.12+, a C++17 compiler, and the required development libraries installed:
 
-- CMake 3.12 or later
-- A C++17 compatible compiler (GCC, Clang)
-- libjpeg-turbo development headers (`libjpeg-turbo8-dev` on Ubuntu/Debian)
-- FLTK 1.3+ development headers (`libfltk1.3-dev` on Ubuntu/Debian) - for GUI
-- pkg-config
-
-On Ubuntu/Debian:
+**Ubuntu / Debian:**
 ```bash
-sudo apt-get install cmake build-essential libjpeg-turbo8-dev libfltk1.3-dev pkg-config
+sudo apt-get update
+sudo apt-get install cmake build-essential pkg-config \
+    libfltk1.3-dev libjpeg-turbo8-dev libpng-dev \
+    libwebp-dev libtiff-dev zlib1g-dev
+```
+
+**Fedora / RHEL:**
+```bash
+sudo dnf install cmake gcc-c++ pkgconf-pkg-config \
+    fltk-devel libjpeg-turbo-devel libpng-devel \
+    libwebp-devel libtiff-devel zlib-devel
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S cmake base-devel pkgconf fltk libjpeg-turbo libpng libwebp libtiff zlib
 ```
 
 ### Build Steps
 
-1. Clone the repository with submodules:
+1. Clone the repository and submodules:
 ```bash
 git clone --recursive https://github.com/starseeker/picexplore.git
 cd picexplore
 ```
+*(If already cloned without `--recursive`, run `git submodule update --init --recursive`)*
 
-If you already cloned without submodules, initialize them:
+2. Build with CMake:
 ```bash
-git submodule update --init --recursive
-```
-
-2. Build the project:
-```bash
-mkdir build
-cd build
+mkdir build && cd build
 cmake ..
-make
+cmake --build . -j$(nproc)
 ```
 
-This will build the executables:
-- `picscan` (unified image scanner and PDF gallery generator)
-- `picexplore_gui` (interactive FLTK-based image browser)
+The resulting executable `picexplore` will be in `build/`.
 
-## Supported Image Formats
+---
 
-- **JPEG** (.jpg, .jpeg) - Efficient DCT-domain downscaling during decode for optimal thumbnail generation
-- **PNG** (.png) - Full support with automatic JPEG thumbnail conversion
-- **BMP** (.bmp) - Full support with automatic JPEG thumbnail conversion  
-- **TGA** (.tga) - Full support with automatic JPEG thumbnail conversion
+## License
 
-All formats support grayscale, RGB, and RGBA color modes.
-
-## Image Processing Details
-
-The application uses an optimized pipeline designed for efficiency and quality:
-
-### JPEG Processing (Optimized)
-1. **EXIF Orientation Reading**: Uses TinyEXIF to read EXIF orientation data from JPEG files
-2. **Orientation Correction**: Applies appropriate rotations and flips to ensure correct thumbnail orientation
-3. **DCT-Domain Downscaling**: JPEGs are decoded using libjpeg-turbo with DCT-domain scaling (scale factors 1/1, 1/2, 1/4, 1/8)
-4. **Scale Factor Grouping**: Thumbnails are grouped by optimal scale factor to minimize decode operations
-5. **Single Decode Per Group**: Each scale factor group requires only one decode operation
-6. **JPEG Encoding**: All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
-
-### Non-JPEG Processing  
-1. **EXIF Orientation Reading**: Uses TinyEXIF to read EXIF orientation data where available
-2. **Orientation Correction**: Applies appropriate rotations and flips to ensure correct thumbnail orientation
-3. **Full Resolution Decoding**: PNG, BMP, TGA images are decoded at their original resolution using stb_image
-4. **High-Quality Resizing**: Thumbnails are generated using stb_image_resize with linear interpolation
-5. **JPEG Encoding**: All thumbnails are stored as JPEG with 90% quality for optimal size/quality balance
-
-This approach optimizes performance and memory usage for JPEG files (which typically represent the majority of images in photo collections) while maintaining high quality for all supported formats.
-
-## Performance Notes
-
-- **Fast scanning**: Optimized for processing large image collections
-- **Content-based deduplication**: Identical images (by content) are processed only once
-- **Efficient JPEG processing**: DCT-domain downscaling minimizes memory usage and decode time
-- **Scale factor optimization**: Groups thumbnails by scale factor to minimize JPEG decode operations
-- **Lightning-fast database**: LMDB provides high-performance storage and retrieval
-- **Memory efficient**: Processes images one at a time with proper cleanup
-- **Status reporting**: Real-time progress updates every 10 seconds
-- **Performance instrumentation**: Detailed timing breakdown of all processing phases
-
+PicExplore is open source under the [MIT License](LICENSE).
