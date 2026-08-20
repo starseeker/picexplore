@@ -1094,12 +1094,12 @@ static std::string serialize_paths(const std::vector<std::string>& paths) {
 }
 
 std::string DatabaseManager::extract_hash_from_key(const char* key, size_t key_size) {
-    std::string key_str(key, key_size);
+    std::string_view key_str(key, key_size);
     if (key_str.length() > 6 && key_str.substr(key_str.length() - 6) == ":paths") {
-	return key_str.substr(0, key_str.length() - 6);
+	return std::string(key_str.substr(0, key_str.length() - 6));
     }
     if (key_str.length() > 5 && key_str.substr(key_str.length() - 5) == ":path") {
-	return key_str.substr(0, key_str.length() - 5);
+	return std::string(key_str.substr(0, key_str.length() - 5));
     }
     return "";
 }
@@ -1318,61 +1318,92 @@ std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::stri
 	return images;
     }
 
-    std::unordered_set<std::string> seen_paths;
+    // Fast path: B-Tree prefix range seek on "file:" keys
+    std::string start_key = prefix.empty() ? "file:" : ("file:" + (exact_dir.empty() ? prefix : exact_dir));
     MDB_val key, data;
-    while (mdb_cursor_get(cursor, &key, &data, MDB_NEXT) == 0) {
-	std::string hash = extract_hash_from_key((char*)key.mv_data, key.mv_size);
-	if (hash.empty()) continue;
+    key.mv_data = (void*)start_key.c_str();
+    key.mv_size = start_key.length();
 
-	std::vector<std::string> paths = parse_paths(std::string((char*)data.mv_data, data.mv_size));
-	if (paths.empty()) continue;
+    MDB_txn* temp_txn = txn_;
+    MDB_dbi temp_dbi = dbi_;
+    txn_ = read_txn;
+    dbi_ = read_dbi;
 
-	std::vector<std::string> matching_paths;
-	for (const auto& p : paths) {
-	    std::string norm_p = fs::path(p).lexically_normal().string();
-	    if (prefix.empty() || norm_p.rfind(prefix, 0) == 0 || norm_p == exact_dir) {
-		if (seen_paths.insert(norm_p).second) {
-		    matching_paths.push_back(norm_p);
-		}
-	    }
-	}
+    std::unordered_set<std::string> seen_paths;
+    int rc = mdb_cursor_get(cursor, &key, &data, MDB_SET_RANGE);
+    while (rc == 0) {
+        std::string_view k((const char*)key.mv_data, key.mv_size);
+        if (k.rfind("file:", 0) != 0) {
+            // Reached end of "file:" key namespace
+            break;
+        }
 
-	if (matching_paths.empty()) continue;
+        std::string_view file_path = k.substr(5);
+        if (!prefix.empty() && file_path.rfind(prefix, 0) != 0 && file_path != exact_dir) {
+            // Because B-Tree keys are lexicographically sorted, once file_path > prefix we are done
+            if (file_path > prefix) {
+                break;
+            }
+        }
 
-	// Temporarily store current transaction state
-	MDB_txn* temp_txn = txn_;
-	MDB_dbi temp_dbi = dbi_;
+        if (prefix.empty() || file_path.rfind(prefix, 0) == 0 || file_path == exact_dir) {
+            std::string norm_p = fs::path(file_path).lexically_normal().string();
+            if (seen_paths.insert(norm_p).second) {
+                std::string hash((const char*)data.mv_data, data.mv_size);
+                ImageInfo info;
+                info.path = norm_p;
+                info.hash = hash;
+                if (load_image_info(hash, info)) {
+                    images.push_back(std::move(info));
+                }
+            }
+        }
 
-	// Use read transaction for loading image info
-	txn_ = read_txn;
-	dbi_ = read_dbi;
-
-	ImageInfo base_info;
-	base_info.hash = hash;
-
-	if (load_image_info(hash, base_info)) {
-	    for (const auto& mp : matching_paths) {
-		ImageInfo info = base_info;
-		info.path = mp;
-		images.push_back(std::move(info));
-	    }
-	} else {
-	    fprintf(stderr, "Warning: Failed to load image info for hash '%s'\n", hash.c_str());
-	}
-
-	// Restore transaction state
-	txn_ = temp_txn;
-	dbi_ = temp_dbi;
+        rc = mdb_cursor_get(cursor, &key, &data, MDB_NEXT);
     }
+
+    // Fallback for legacy DBs without "file:" keys
+    if (images.empty()) {
+        rc = mdb_cursor_get(cursor, &key, &data, MDB_FIRST);
+        while (rc == 0) {
+            std::string_view k((const char*)key.mv_data, key.mv_size);
+            std::string hash;
+            if (k.length() > 6 && k.substr(k.length() - 6) == ":paths") {
+                hash = std::string(k.substr(0, k.length() - 6));
+            } else if (k.length() > 5 && k.substr(k.length() - 5) == ":path") {
+                hash = std::string(k.substr(0, k.length() - 5));
+            }
+
+            if (!hash.empty()) {
+                std::vector<std::string> paths = parse_paths(std::string((char*)data.mv_data, data.mv_size));
+                for (const auto& p : paths) {
+                    std::string norm_p = fs::path(p).lexically_normal().string();
+                    if (prefix.empty() || norm_p.rfind(prefix, 0) == 0 || norm_p == exact_dir) {
+                        if (seen_paths.insert(norm_p).second) {
+                            ImageInfo info;
+                            info.path = norm_p;
+                            info.hash = hash;
+                            if (load_image_info(hash, info)) {
+                                images.push_back(std::move(info));
+                            }
+                        }
+                    }
+                }
+            }
+            rc = mdb_cursor_get(cursor, &key, &data, MDB_NEXT);
+        }
+    }
+
+    txn_ = temp_txn;
+    dbi_ = temp_dbi;
 
     mdb_cursor_close(cursor);
     mdb_txn_abort(read_txn);
 
-    // Sort images alphabetically by path
     std::sort(images.begin(), images.end(),
-	    [](const ImageInfo& a, const ImageInfo& b) {
-	    return a.path < b.path;
-	    });
+              [](const ImageInfo& a, const ImageInfo& b) {
+                  return a.path < b.path;
+              });
 
     return images;
 }
