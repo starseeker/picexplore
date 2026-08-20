@@ -189,6 +189,30 @@ void test_hierarchical_performance() {
     assert(duration_ms < 50);
 }
 
+void test_hierarchical_zoom_in_and_parent_bar() {
+    std::vector<HierarchicalTreemapItem> items = {
+        {0, "/photos/2023/vacation/pic1.jpg", 500.0, 1.5},
+        {1, "/photos/2023/vacation/pic2.jpg", 300.0, 1.0}
+    };
+
+    double W = 1000.0;
+    double H = 600.0;
+    auto res = HierarchicalTreemap::compute(items, "/photos", "/photos/2023/vacation", 0, 0, W, H, 2.0, 4.0, 18.0);
+
+    assert(res.boxes.size() == 2);
+    bool found_parent_bar = false;
+    for (const auto& c : res.container_boxes) {
+        if (c.depth == 0) {
+            found_parent_bar = true;
+            assert(c.dir_path == "/photos/2023");
+            assert(c.h == 24.0);
+            assert(c.w == W);
+        }
+    }
+    assert(found_parent_bar);
+    std::cout << "[PASS] Hierarchical zoom in and parent bar test\n";
+}
+
 int main() {
     try {
         test_empty();
@@ -196,6 +220,7 @@ int main() {
         test_multiple_items_and_svg();
         test_performance_10k_items();
         test_hierarchical_treemap();
+        test_hierarchical_zoom_in_and_parent_bar();
         test_hierarchical_performance();
         std::cout << "All Treemap layout unit tests passed successfully!\n";
         return 0;

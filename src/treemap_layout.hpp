@@ -229,7 +229,8 @@ public:
 
     static HierarchicalTreemapResult compute(
         const std::vector<HierarchicalTreemapItem>& input_items,
-        const std::string& root_dir,
+        const std::string& base_root_dir,
+        const std::string& current_filter_dir,
         double bounds_x, double bounds_y,
         double bounds_w, double bounds_h,
         double item_padding = 1.5,
@@ -241,23 +242,59 @@ public:
             return result;
         }
 
+        std::string effective_root = current_filter_dir.empty() ? base_root_dir : current_filter_dir;
+
+        // If we are drilled down into a subdirectory, add a top navigation parent bar
+        if (!current_filter_dir.empty()) {
+            std::string parent_dir;
+            std::string parent_label;
+            
+            // Extract parent path
+            size_t last_slash = current_filter_dir.find_last_of("/\\");
+            if (last_slash != std::string::npos && last_slash > 0) {
+                parent_dir = current_filter_dir.substr(0, last_slash);
+            } else {
+                parent_dir = base_root_dir;
+            }
+
+            std::string cur_folder = current_filter_dir;
+            if (last_slash != std::string::npos) {
+                cur_folder = current_filter_dir.substr(last_slash + 1);
+            }
+
+            parent_label = "📁 ⮤ " + parent_dir + "  /  " + cur_folder + "  (click to navigate up)";
+
+            double top_bar_h = 24.0;
+            if (bounds_h > top_bar_h + 30.0) {
+                result.container_boxes.push_back(ContainerBox{
+                    parent_dir,
+                    parent_label,
+                    0, // depth 0 indicates top parent bar
+                    bounds_x, bounds_y, bounds_w, top_bar_h
+                });
+
+                bounds_y += top_bar_h + 2.0;
+                bounds_h -= (top_bar_h + 2.0);
+            }
+        }
+
         // 1. Build the Directory Tree
         TreeNode root;
-        root.name = root_dir;
-        root.full_path = root_dir;
+        root.name = effective_root;
+        root.full_path = effective_root;
         root.depth = 0;
 
         for (const auto& item : input_items) {
             std::string rel_path = item.filepath;
-            if (!root_dir.empty() && rel_path.rfind(root_dir, 0) == 0) {
-                rel_path = rel_path.substr(root_dir.size());
+            if (!effective_root.empty() && rel_path.rfind(effective_root, 0) == 0) {
+                rel_path = rel_path.substr(effective_root.size());
                 if (!rel_path.empty() && (rel_path.front() == '/' || rel_path.front() == '\\')) {
                     rel_path.erase(0, 1);
                 }
             }
 
             TreeNode* cur = &root;
-            std::string cur_accum_path = root_dir;
+            std::string cur_accum_path = effective_root;
             
             size_t start = 0;
             size_t slash = rel_path.find_first_of("/\\");
@@ -390,6 +427,18 @@ public:
 
         layout_node(layout_node, &root, bounds_x, bounds_y, bounds_w, bounds_h);
         return result;
+    }
+
+    static HierarchicalTreemapResult compute(
+        const std::vector<HierarchicalTreemapItem>& input_items,
+        const std::string& root_dir,
+        double bounds_x, double bounds_y,
+        double bounds_w, double bounds_h,
+        double item_padding = 1.5,
+        double container_margin = 3.0,
+        double header_height = 18.0)
+    {
+        return compute(input_items, root_dir, "", bounds_x, bounds_y, bounds_w, bounds_h, item_padding, container_margin, header_height);
     }
 };
 

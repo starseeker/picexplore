@@ -284,6 +284,22 @@ void VirtualViewport::draw_treemap() {
 
             if (cw <= 0 || ch <= 0) continue;
 
+            if (cbox.depth == 0) {
+                // Top parent navigation bar
+                fl_color(fl_rgb_color(28, 38, 52));
+                fl_rectf(cx, cy, cw, ch);
+
+                fl_color(fl_rgb_color(55, 95, 145));
+                fl_rect(cx, cy, cw, ch);
+
+                fl_push_clip(cx + 6, cy + 1, cw - 12, ch - 2);
+                fl_font(FL_HELVETICA_BOLD, 11);
+                fl_color(fl_rgb_color(140, 200, 255));
+                fl_draw(cbox.dir_name.c_str(), cx + 6, cy + 16);
+                fl_pop_clip();
+                continue;
+            }
+
             Fl_Color bg_tone;
             Fl_Color border_tone;
             if (cbox.depth == 1) {
@@ -670,33 +686,84 @@ int VirtualViewport::handle(int event) {
                 return 1;
             case FL_PUSH:
                 take_focus();
-                if (layout_ && on_image_clicked) {
+                if (layout_) {
                     int mx = Fl::event_x() - x();
                     int my = Fl::event_y() - y();
                     if (layout_->layout_type == LayoutEngine::LayoutType::JUSTIFIED) {
                         my += scroll_offset_;
                     }
-                    bool hit = false;
-                    for (const auto& box : layout_->boxes) {
-                        if (mx >= box.x && mx <= box.x + box.w &&
-                            my >= box.y && my <= box.y + box.h) {
-                            hit = true;
-                            try {
-                                const auto& entry = store_.get(box.image_index);
-                                if (Fl::event_clicks() > 0 && on_image_double_clicked) {
-                                    on_image_double_clicked(entry.filepath);
-                                } else {
-                                    on_image_clicked(entry.filepath);
-                                }
-                            } catch (...) {}
-                            return 1;
+
+                    // In Hierarchical Treemap mode, check if a container header / top parent bar was clicked
+                    if (layout_->layout_type == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP && on_directory_clicked) {
+                        for (auto it = layout_->container_boxes.rbegin(); it != layout_->container_boxes.rend(); ++it) {
+                            const auto& cbox = *it;
+                            int cx = static_cast<int>(cbox.x);
+                            int cy = static_cast<int>(cbox.y);
+                            int cw = static_cast<int>(cbox.w);
+                            int ch = static_cast<int>(cbox.h);
+
+                            int hdr_h = (cbox.depth == 0) ? ch : 18;
+                            if (cbox.depth > 0 && (ch < 36 || cw < 60)) {
+                                continue;
+                            }
+
+                            if (mx >= cx && mx <= cx + cw && my >= cy && my <= cy + hdr_h) {
+                                on_directory_clicked(cbox.dir_path);
+                                return 1;
+                            }
                         }
                     }
-                    if (!hit) {
-                        on_image_clicked("");
+
+                    if (on_image_clicked) {
+                        bool hit = false;
+                        for (const auto& box : layout_->boxes) {
+                            if (mx >= box.x && mx <= box.x + box.w &&
+                                my >= box.y && my <= box.y + box.h) {
+                                hit = true;
+                                try {
+                                    const auto& entry = store_.get(box.image_index);
+                                    if (Fl::event_clicks() > 0 && on_image_double_clicked) {
+                                        on_image_double_clicked(entry.filepath);
+                                    } else {
+                                        on_image_clicked(entry.filepath);
+                                    }
+                                } catch (...) {}
+                                return 1;
+                            }
+                        }
+                        if (!hit) {
+                            on_image_clicked("");
+                        }
                     }
                 }
                 return 1; // Consume clicks so they don't propagate incorrectly
+            case FL_MOVE:
+                if (layout_ && layout_->layout_type == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
+                    int mx = Fl::event_x() - x();
+                    int my = Fl::event_y() - y();
+                    bool over_header = false;
+                    for (auto it = layout_->container_boxes.rbegin(); it != layout_->container_boxes.rend(); ++it) {
+                        const auto& cbox = *it;
+                        int cx = static_cast<int>(cbox.x);
+                        int cy = static_cast<int>(cbox.y);
+                        int cw = static_cast<int>(cbox.w);
+                        int ch = static_cast<int>(cbox.h);
+
+                        int hdr_h = (cbox.depth == 0) ? ch : 18;
+                        if (cbox.depth > 0 && (ch < 36 || cw < 60)) continue;
+
+                        if (mx >= cx && mx <= cx + cw && my >= cy && my <= cy + hdr_h) {
+                            over_header = true;
+                            break;
+                        }
+                    }
+                    if (over_header) {
+                        fl_cursor(FL_CURSOR_HAND);
+                    } else {
+                        fl_cursor(FL_CURSOR_DEFAULT);
+                    }
+                }
+                return 1;
             case FL_MOUSEWHEEL:
                 return 0; 
             default:

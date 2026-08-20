@@ -51,7 +51,8 @@ public:
 
     // Full recompute for Hierarchical Squarified Treemap Layout (Nested).
     LayoutResult compute_hierarchical_treemap(const std::vector<HierarchicalTreemapItem>& items,
-                                              const std::string& root_dir,
+                                              const std::string& base_root_dir,
+                                              const std::string& current_filter_dir,
                                               double viewport_width,
                                               double viewport_height,
                                               double item_padding = 1.5);

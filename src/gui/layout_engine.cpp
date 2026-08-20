@@ -78,7 +78,8 @@ LayoutEngine::LayoutResult LayoutEngine::compute_treemap(const std::vector<Treem
 }
 
 LayoutEngine::LayoutResult LayoutEngine::compute_hierarchical_treemap(const std::vector<HierarchicalTreemapItem>& items,
-                                                                     const std::string& root_dir,
+                                                                     const std::string& base_root_dir,
+                                                                     const std::string& current_filter_dir,
                                                                      double viewport_width,
                                                                      double viewport_height,
                                                                      double item_padding) {
@@ -90,7 +91,7 @@ LayoutEngine::LayoutResult LayoutEngine::compute_hierarchical_treemap(const std:
         return result;
     }
 
-    auto hres = HierarchicalTreemap::compute(items, root_dir, 0.0, 0.0, viewport_width, viewport_height, item_padding);
+    auto hres = HierarchicalTreemap::compute(items, base_root_dir, current_filter_dir, 0.0, 0.0, viewport_width, viewport_height, item_padding);
     result.boxes.reserve(hres.boxes.size());
     for (const auto& tb : hres.boxes) {
         result.boxes.push_back({tb.id, tb.x, tb.y, tb.w, tb.h});

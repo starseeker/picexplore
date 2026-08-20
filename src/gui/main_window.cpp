@@ -231,6 +231,10 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
         navigate_single_image(delta);
     };
 
+    viewport_->on_directory_clicked = [this](const std::string& dir) {
+        apply_directory_filter(dir);
+    };
+
     end();
     resizable(this);
 }
@@ -454,11 +458,28 @@ void MainWindow::exit_single_image_mode() {
 }
 
 void MainWindow::apply_directory_filter(const std::string& dir) {
-    directory_filter_ = dir;
+    namespace fs = std::filesystem;
+    std::string canon_dir = dir;
+    try {
+        canon_dir = fs::canonical(dir).string();
+    } catch (...) {}
+
+    std::string canon_root = directory_;
+    try {
+        canon_root = fs::canonical(directory_).string();
+    } catch (...) {}
+
+    if (dir.empty() || canon_dir == canon_root || canon_dir.size() < canon_root.size()) {
+        directory_filter_.clear();
+    } else {
+        directory_filter_ = dir;
+    }
+
     layout_dirty_ = true;
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
     update_statusbar();
+    recompute_layout(true);
 }
 
 void MainWindow::reset_directory_filter() {
@@ -467,6 +488,7 @@ void MainWindow::reset_directory_filter() {
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
     update_statusbar();
+    recompute_layout(true);
 }
 
 std::vector<std::string> MainWindow::reconcile_and_get_duplicates(const std::string& hash, const std::string& current_filepath) {
@@ -932,9 +954,8 @@ void MainWindow::recompute_layout(bool reprioritize) {
             items.push_back(HierarchicalTreemapItem{raw_idx, entry.filepath, weight, ar});
         }
 
-        std::string effective_root = directory_filter_.empty() ? directory_ : directory_filter_;
         layout_result_ = layout_engine_.compute_hierarchical_treemap(
-            items, effective_root, viewport_->w(), viewport_->h(), 1.5
+            items, directory_, directory_filter_, viewport_->w(), viewport_->h(), 1.5
         );
         viewport_->set_layout(&layout_result_);
         viewport_->set_scroll_offset(0);

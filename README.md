@@ -51,7 +51,7 @@ picexplore --pdf gallery.pdf --row-height 180 --margin 12
 - **Triple Interactive Layouts**:
   - **Fluid Justified Grid** (<kbd>Ctrl+1</kbd>): Dynamically arranges photos in clean, aesthetic rows using an optimized justified layout algorithm.
   - **Flat Squarified Treemap** (<kbd>Ctrl+2</kbd>): Visualizes all photos in a flat 2D squarified treemap with zero-allocation $O(1)$ ratio evaluations (<1 ms for 10,000+ items). Proportionally scales rectangles by **File Size** (bytes), **Pixel Area** (megapixels), or **Equal Size**.
-  - **Hierarchical (Nested) Treemap** (<kbd>Ctrl+3</kbd>): Recursively clusters images by directory hierarchy into nested subfolder containers with depth-themed border frames and directory labels, providing immediate visual insight into directory disk usage and collection structure.
+  - **Hierarchical (Nested) Treemap** (<kbd>Ctrl+3</kbd>): Recursively clusters images by directory hierarchy into nested subfolder containers with depth-themed border frames and directory labels. Supports **interactive directory drill-down** (click any folder header to zoom in) and **parent directory navigation** (click the top parent bar to navigate back up).
 - **Dual Treemap Visual Styles**:
   - **All Thumbnails** *(Default)*: Center-cropped square thumbnail mosaic rendered across all tiles down to 1px.
   - **File Type Colors**: Categorical color-coded cards with file extension badges (JPG, PNG, WebP, GIF, TIFF, BMP, TGA, PDF, SVG) and a live status-bar color key.
@@ -73,9 +73,11 @@ picexplore --pdf gallery.pdf --row-height 180 --margin 12
 | **Switch to Justified Grid** | `Ctrl` + `1` | Switch to row-based justified photo gallery |
 | **Switch to Flat Treemap** | `Ctrl` + `2` | Switch to flat squarified treemap collection view |
 | **Switch to Hierarchical Treemap** | `Ctrl` + `3` | Switch to nested directory hierarchy treemap view |
+| **Drill Down into Directory** | `Left Click` on folder header | Zoom into specific subdirectory in Hierarchical Treemap |
+| **Navigate to Parent Directory** | `Left Click` on top parent bar | Zoom out to parent directory (`Ctrl` + `R` resets to root) |
 | **Scroll Gallery** | `Mouse Wheel` / `Scrollbar` | Smooth vertical scrolling through image rows (Grid mode) |
 | **Zoom Gallery Rows** | `Ctrl` + `Mouse Wheel` / `Ctrl` + `+` / `-` | Adjust row heights in Grid mode (`Ctrl` + `0` resets zoom) |
-| **Select Image** | `Left Click` | Select an image and display its metadata in Info Panel |
+| **Select Image** | `Left Click` on image | Select an image and display its metadata in Info Panel |
 | **Open Full-Res View** | `Double Click` | Enter single-image deep zoom inspection mode |
 | **Zoom in Full View** | `Mouse Wheel` | Zoom in/out at mouse cursor position |
 | **Pan in Full View** | `Left Click + Drag` | Pan across zoomed image (or drag viewport box on minimap) |
