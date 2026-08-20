@@ -102,8 +102,91 @@ void test_performance_10k_items() {
 
     assert(boxes.size() == 10000);
     auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << "[PASS] 10,000 items layout in " << duration_ms << " ms\n";
+    std::cout << "[PASS] 10,000 items flat layout in " << duration_ms << " ms\n";
     assert(duration_ms < 50); // Performance requirement: < 50ms for 10k items
+}
+
+void test_hierarchical_treemap() {
+    std::vector<HierarchicalTreemapItem> items = {
+        {0, "/photos/2023/vacation/pic1.jpg", 500.0, 1.5},
+        {1, "/photos/2023/vacation/pic2.jpg", 300.0, 1.0},
+        {2, "/photos/2023/work/project1.png", 400.0, 1.3},
+        {3, "/photos/2024/summer/beach.jpg", 600.0, 1.0},
+        {4, "/photos/2024/summer/trip/day1.jpg", 200.0, 1.0},
+        {5, "/photos/2024/summer/trip/day2.jpg", 200.0, 1.0},
+        {6, "/photos/root_file.jpg", 150.0, 1.0}
+    };
+
+    double W = 1200.0;
+    double H = 800.0;
+    auto res = HierarchicalTreemap::compute(items, "/photos", 0, 0, W, H, 2.0, 4.0, 18.0);
+
+    assert(res.boxes.size() == items.size());
+    assert(!res.container_boxes.empty());
+
+    // Verify all leaf boxes within boundaries
+    for (const auto& b : res.boxes) {
+        assert(b.x >= 0.0);
+        assert(b.y >= 0.0);
+        assert(b.x + b.w <= W + 1e-3);
+        assert(b.y + b.h <= H + 1e-3);
+        assert(b.w > 0.0);
+        assert(b.h > 0.0);
+    }
+
+    // Verify container boxes
+    for (const auto& c : res.container_boxes) {
+        assert(c.depth > 0);
+        assert(!c.dir_name.empty());
+        assert(c.x >= 0.0);
+        assert(c.y >= 0.0);
+        assert(c.x + c.w <= W + 1e-3);
+        assert(c.y + c.h <= H + 1e-3);
+    }
+
+    // Export SVG for hierarchical visualization
+    svg::Dimensions d(W, H);
+    svg::Document doc("hierarchical_treemap_test.svg", svg::Layout(d, svg::Layout::TopLeft));
+
+    // Draw background
+    doc << svg::Rectangle(svg::Point(0, 0), W, H, svg::Fill(svg::Color(25, 25, 25)));
+
+    // Draw container boxes
+    for (const auto& c : res.container_boxes) {
+        svg::Color border_col = (c.depth == 1) ? svg::Color(90, 95, 110) : svg::Color(130, 140, 160);
+        svg::Color bg_col = (c.depth == 1) ? svg::Color(35, 38, 44) : svg::Color(45, 48, 56);
+        doc << svg::Rectangle(svg::Point(c.x, c.y), c.w, c.h, svg::Fill(bg_col), svg::Stroke(1.5, border_col));
+    }
+
+    // Draw leaf boxes
+    for (const auto& b : res.boxes) {
+        doc << svg::Rectangle(svg::Point(b.x, b.y), b.w, b.h, svg::Fill(svg::Color(41, 128, 185)), svg::Stroke(1, svg::Color(20, 20, 20)));
+    }
+    doc.save();
+
+    std::cout << "[PASS] Hierarchical treemap layout and SVG export\n";
+}
+
+void test_hierarchical_performance() {
+    std::vector<HierarchicalTreemapItem> items;
+    items.reserve(10000);
+    for (size_t i = 0; i < 10000; ++i) {
+        int year = 2015 + (i % 10);
+        int month = 1 + (i % 12);
+        int day = 1 + (i % 28);
+        std::string path = "/gallery/" + std::to_string(year) + "/" + std::to_string(month) + "/" + std::to_string(day) + "/img_" + std::to_string(i) + ".jpg";
+        double weight = 50.0 + (i % 1000);
+        items.push_back({i, path, weight, 1.0});
+    }
+
+    auto start = std::chrono::steady_clock::now();
+    auto res = HierarchicalTreemap::compute(items, "/gallery", 0, 0, 1920, 1080, 1.0, 3.0, 16.0);
+    auto end = std::chrono::steady_clock::now();
+
+    assert(res.boxes.size() == 10000);
+    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << "[PASS] 10,000 items hierarchical tree build & layout in " << duration_ms << " ms\n";
+    assert(duration_ms < 50);
 }
 
 int main() {
@@ -112,6 +195,8 @@ int main() {
         test_single_item();
         test_multiple_items_and_svg();
         test_performance_10k_items();
+        test_hierarchical_treemap();
+        test_hierarchical_performance();
         std::cout << "All Treemap layout unit tests passed successfully!\n";
         return 0;
     } catch (const std::exception& e) {

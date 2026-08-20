@@ -273,6 +273,53 @@ void VirtualViewport::draw_treemap() {
 
     fl_push_clip(x(), y(), w(), h());
 
+    if (layout_->layout_type == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
+        for (const auto& cbox : layout_->container_boxes) {
+            int cx = static_cast<int>(x() + cbox.x);
+            int cy = static_cast<int>(y() + cbox.y);
+            int cw = static_cast<int>(cbox.w);
+            int ch = static_cast<int>(cbox.h);
+
+            if (cw <= 0 || ch <= 0) continue;
+
+            Fl_Color bg_tone;
+            Fl_Color border_tone;
+            if (cbox.depth == 1) {
+                bg_tone = fl_rgb_color(32, 34, 38);
+                border_tone = fl_rgb_color(65, 70, 80);
+            } else if (cbox.depth == 2) {
+                bg_tone = fl_rgb_color(38, 40, 46);
+                border_tone = fl_rgb_color(80, 86, 98);
+            } else {
+                bg_tone = fl_rgb_color(44, 46, 54);
+                border_tone = fl_rgb_color(95, 102, 116);
+            }
+
+            fl_color(bg_tone);
+            fl_rectf(cx, cy, cw, ch);
+
+            fl_color(border_tone);
+            fl_rect(cx, cy, cw, ch);
+
+            // Draw folder header if large enough
+            if (ch >= 36 && cw >= 60) {
+                int hdr_h = 18;
+                fl_color(fl_rgb_color(45, 48, 55));
+                fl_rectf(cx + 1, cy + 1, cw - 2, hdr_h);
+
+                fl_color(border_tone);
+                fl_line(cx, cy + hdr_h, cx + cw, cy + hdr_h);
+
+                fl_push_clip(cx + 4, cy + 1, cw - 8, hdr_h);
+                fl_font(FL_HELVETICA_BOLD, 10);
+                fl_color(fl_rgb_color(210, 215, 225));
+                std::string label = "📁 " + cbox.dir_name;
+                fl_draw(label.c_str(), cx + 4, cy + 13);
+                fl_pop_clip();
+            }
+        }
+    }
+
     bool all_thumbs_mode = (treemap_render_style_ == TreemapRenderStyle::ALL_THUMBNAILS);
 
     for (const auto& box : layout_->boxes) {

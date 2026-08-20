@@ -564,9 +564,12 @@ void MainWindow::update_statusbar() {
             label = "  " + std::to_string(total_images) + (total_images == 1 ? " image" : " images");
         }
     }
-
-    int completed = db_build_total_ - static_cast<int>(pending_db_build_.size());
-    bool building = (!pending_db_build_.empty());
+    
+    // Append database build status if in progress
+    int pending = pending_db_build_.size();
+    int completed = db_build_total_ - pending;
+    bool building = (db_build_total_ > 0 && completed < db_build_total_);
+    
     if (building) {
         label += "   |   Building Thumbnails: " + std::to_string(std::max(0, completed)) + " / " + std::to_string(db_build_total_);
         if (!scan_complete_) {
@@ -584,7 +587,9 @@ void MainWindow::rebuild_menu() {
     menubar_->clear();
 
     bool is_single = (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE);
-    bool is_treemap = (active_layout_ == LayoutEngine::LayoutType::TREEMAP);
+    bool is_flat_treemap = (active_layout_ == LayoutEngine::LayoutType::TREEMAP);
+    bool is_hier_treemap = (active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP);
+    bool is_treemap = (is_flat_treemap || is_hier_treemap);
     int font_sz = info_panel_ ? info_panel_->get_font_size() : 14;
 
     if (is_single) {
@@ -611,13 +616,14 @@ void MainWindow::rebuild_menu() {
         menubar_->add("Sort/Equal Size", 0, menu_cb, (void*)24, FL_MENU_RADIO | val_eq);
 
         // View menu for Treemap mode
-        menubar_->add("View/Layout/Justified Grid", FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO);
-        menubar_->add("View/Layout/Treemap",        FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO | FL_MENU_VALUE);
+        menubar_->add("View/Layout/Justified Grid",       FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO);
+        menubar_->add("View/Layout/Flat Treemap",         FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO | (is_flat_treemap ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Layout/Hierarchical Treemap", FL_CTRL | '3', menu_cb, (void*)27, FL_MENU_RADIO | (is_hier_treemap ? FL_MENU_VALUE : 0));
 
         int val_fc = (treemap_style_ == VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS) ? FL_MENU_VALUE : 0;
         int val_at = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS) ? FL_MENU_VALUE : 0;
-        menubar_->add("View/Treemap Style/File Type Colors", 0, menu_cb, (void*)25, FL_MENU_RADIO | val_fc);
         menubar_->add("View/Treemap Style/All Thumbnails",   0, menu_cb, (void*)26, FL_MENU_RADIO | val_at);
+        menubar_->add("View/Treemap Style/File Type Colors", 0, menu_cb, (void*)25, FL_MENU_RADIO | val_fc);
 
         menubar_->add("View/Information Panel", 0, menu_cb, (void*)10, FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0));
         menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO | (font_sz == 11 ? FL_MENU_VALUE : 0));
@@ -646,8 +652,9 @@ void MainWindow::rebuild_menu() {
         menubar_->add("Sort/Date (Oldest)",         0, menu_cb, (void*)5,  FL_MENU_RADIO | val_do);
         menubar_->add("Sort/Date (Newest)",         0, menu_cb, (void*)6,  FL_MENU_RADIO | val_dn);
 
-        menubar_->add("View/Layout/Justified Grid", FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO | FL_MENU_VALUE);
-        menubar_->add("View/Layout/Treemap",        FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO);
+        menubar_->add("View/Layout/Justified Grid",       FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO | FL_MENU_VALUE);
+        menubar_->add("View/Layout/Flat Treemap",         FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO);
+        menubar_->add("View/Layout/Hierarchical Treemap", FL_CTRL | '3', menu_cb, (void*)27, FL_MENU_RADIO);
 
         menubar_->add("View/Zoom In (Ctrl+Wheel Up)",    FL_CTRL | '=', menu_cb, (void*)7);
         menubar_->add("View/Zoom Out (Ctrl+Wheel Down)", FL_CTRL | '-', menu_cb, (void*)8);
@@ -852,7 +859,7 @@ void MainWindow::set_layout_mode(LayoutEngine::LayoutType type) {
 
 void MainWindow::set_treemap_metric(LayoutEngine::TreemapMetric metric) {
     treemap_metric_ = metric;
-    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
         layout_dirty_ = true;
         rebuild_menu();
         recompute_layout(true);
@@ -865,7 +872,7 @@ void MainWindow::set_treemap_style(VirtualViewport::TreemapRenderStyle style) {
     viewport_->set_treemap_render_style(style);
     rebuild_menu();
     resize(x(), y(), w(), h());
-    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
         reprioritize_thumbnails();
     }
 }
@@ -901,6 +908,37 @@ void MainWindow::recompute_layout(bool reprioritize) {
         viewport_->set_layout(&layout_result_);
         viewport_->set_scroll_offset(0);
         scrollbar_->value(0, viewport_->h(), 0, viewport_->h());
+    } else if (active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
+        if (treemap_metric_ == LayoutEngine::TreemapMetric::FILE_SIZE) {
+            store_.ensure_file_sizes();
+        } else if (treemap_metric_ == LayoutEngine::TreemapMetric::PIXEL_AREA) {
+            store_.ensure_pixel_dimensions();
+        }
+
+        std::vector<HierarchicalTreemapItem> items;
+        items.reserve(indexed.size());
+        for (const auto& [raw_idx, ar] : indexed) {
+            const auto& entry = store_.get(raw_idx);
+            double weight = 1.0;
+            if (treemap_metric_ == LayoutEngine::TreemapMetric::FILE_SIZE) {
+                weight = entry.file_size > 0 ? static_cast<double>(entry.file_size) : 1024.0;
+            } else if (treemap_metric_ == LayoutEngine::TreemapMetric::PIXEL_AREA) {
+                weight = (entry.original_width > 0 && entry.original_height > 0)
+                            ? static_cast<double>(entry.original_width) * entry.original_height
+                            : 10000.0;
+            } else {
+                weight = 1.0;
+            }
+            items.push_back(HierarchicalTreemapItem{raw_idx, entry.filepath, weight, ar});
+        }
+
+        std::string effective_root = directory_filter_.empty() ? directory_ : directory_filter_;
+        layout_result_ = layout_engine_.compute_hierarchical_treemap(
+            items, effective_root, viewport_->w(), viewport_->h(), 1.5
+        );
+        viewport_->set_layout(&layout_result_);
+        viewport_->set_scroll_offset(0);
+        scrollbar_->value(0, viewport_->h(), 0, viewport_->h());
     } else {
         layout_result_ = layout_engine_.compute_justified(indexed, viewport_->content_width(), target_height_);
         viewport_->set_layout(&layout_result_);
@@ -926,7 +964,7 @@ void MainWindow::reprioritize_thumbnails() {
     auto visible = viewport_->get_visible_indices();
     store_.mark_visible(visible);
     
-    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
         bool size_or_style_changed = (viewport_->w() != last_viewport_width_ ||
                                       viewport_->h() != last_viewport_height_ ||
                                       visible.size() != last_visible_.size() ||
@@ -1151,8 +1189,9 @@ void MainWindow::resize(int X, int Y, int W, int H) {
 
     menubar_->resize(0, 0, W, MENU_H);
 
+    bool is_treemap = (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP);
     bool show_legend = (viewport_->current_mode() == VirtualViewport::ViewMode::GRID &&
-                        active_layout_ == LayoutEngine::LayoutType::TREEMAP &&
+                        is_treemap &&
                         treemap_style_ == VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS);
     int legend_w = std::min(450, std::max(200, W - 200));
 
@@ -1170,7 +1209,7 @@ void MainWindow::resize(int X, int Y, int W, int H) {
         statusbar_->resize(0, MENU_H + vp_h, std::max(10, W - legend_w), STATUS_H);
         legend_widget_->resize(W - legend_w, MENU_H + vp_h, legend_w, STATUS_H);
         legend_widget_->show();
-    } else if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+    } else if (is_treemap) {
         viewport_->resize(0, MENU_H, vp_w, vp_h);
         scrollbar_->hide();
         statusbar_hint_->hide();
@@ -1243,6 +1282,7 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 18: criteria = ImageStore::SortCriteria::PIXEL_AREA;  ascending = false; break;
         case 20: win->set_layout_mode(LayoutEngine::LayoutType::JUSTIFIED); break;
         case 21: win->set_layout_mode(LayoutEngine::LayoutType::TREEMAP); break;
+        case 27: win->set_layout_mode(LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP); break;
         case 22: win->set_treemap_metric(LayoutEngine::TreemapMetric::FILE_SIZE); break;
         case 23: win->set_treemap_metric(LayoutEngine::TreemapMetric::PIXEL_AREA); break;
         case 24: win->set_treemap_metric(LayoutEngine::TreemapMetric::EQUAL_SIZE); break;

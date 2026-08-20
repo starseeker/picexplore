@@ -9,7 +9,8 @@ class LayoutEngine {
 public:
     enum class LayoutType {
         JUSTIFIED,
-        TREEMAP
+        TREEMAP,
+        HIERARCHICAL_TREEMAP
     };
 
     enum class TreemapMetric {
@@ -24,6 +25,7 @@ public:
             double x, y, w, h;
         };
         std::vector<Box> boxes;
+        std::vector<ContainerBox> container_boxes;
         double total_height = 0.0;
         LayoutType layout_type = LayoutType::JUSTIFIED;
     };
@@ -41,11 +43,18 @@ public:
                                    double viewport_width,
                                    double target_row_height = 150.0);
 
-    // Full recompute for Squarified Treemap Layout.
+    // Full recompute for Squarified Treemap Layout (Flat).
     LayoutResult compute_treemap(const std::vector<TreemapItem>& items,
                                 double viewport_width,
                                 double viewport_height,
                                 double padding = 2.0);
+
+    // Full recompute for Hierarchical Squarified Treemap Layout (Nested).
+    LayoutResult compute_hierarchical_treemap(const std::vector<HierarchicalTreemapItem>& items,
+                                              const std::string& root_dir,
+                                              double viewport_width,
+                                              double viewport_height,
+                                              double item_padding = 1.5);
 
     // Incremental append (Justified)
     LayoutResult append(const std::vector<std::pair<size_t,double>>& indexed_aspects);

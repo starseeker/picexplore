@@ -45,15 +45,16 @@ picexplore --pdf gallery.pdf --row-height 180 --margin 12
 
 ## Key Features
 
-- **Dual Interactive Layouts**:
+- **Triple Interactive Layouts**:
   - **Fluid Justified Grid** (<kbd>Ctrl+1</kbd>): Dynamically arranges photos in clean, aesthetic rows using an optimized justified layout algorithm.
-  - **Squarified Treemap** (<kbd>Ctrl+2</kbd>): Visualizes photo collections in a 2D squarified treemap with zero-allocation $O(1)$ ratio evaluations (<1 ms for 10,000+ items). Proportionally scales rectangles by **File Size** (bytes), **Pixel Area** (megapixels), or **Equal Size**.
+  - **Flat Squarified Treemap** (<kbd>Ctrl+2</kbd>): Visualizes all photos in a flat 2D squarified treemap with zero-allocation $O(1)$ ratio evaluations (<1 ms for 10,000+ items). Proportionally scales rectangles by **File Size** (bytes), **Pixel Area** (megapixels), or **Equal Size**.
+  - **Hierarchical (Nested) Treemap** (<kbd>Ctrl+3</kbd>): Recursively clusters images by directory hierarchy into nested subfolder containers with depth-themed border frames and directory labels, providing immediate visual insight into directory disk usage and collection structure.
 - **Dual Treemap Visual Styles**:
   - **All Thumbnails** *(Default)*: Center-cropped square thumbnail mosaic rendered across all tiles down to 1px.
   - **File Type Colors**: Categorical color-coded cards with file extension badges (JPG, PNG, WebP, GIF, TIFF, BMP, TGA, PDF, SVG) and a live status-bar color key.
 - **Progressive Multi-Resolution Streaming**: Generates and loads thumbnails asynchronously across 6 resolution tiers (32px &rarr; 64px &rarr; 128px &rarr; 256px &rarr; 512px &rarr; 1024px), prioritizing visible viewport regions.
 - **Deep Zoom & Tiling**: Smooth single-image inspection mode with full-resolution rendering, level-of-detail (LOD) tiling cache, and interactive minimap navigator.
-- **Dynamic Mode-Aware Menus**: Contextual Sort and View options adapt automatically to the active view mode (Treemap, Grid, or Single Image), eliminating irrelevant controls.
+- **Dynamic Mode-Aware Menus**: Contextual Sort and View options adapt automatically to the active view mode (Flat Treemap, Hierarchical Treemap, Grid, or Single Image), eliminating irrelevant controls.
 - **Content-Based Deduplication**: Employs xxHash (XXH3 128-bit) content hashing to detect identical images across different folders or filenames without duplicate thumbnail generation.
 - **High-Performance LMDB Database**: Fast embedded LMDB storage caches paths, hashes, EXIF metadata, aspect-ratio thumbnails, and pre-cropped square thumbnails (`hash:sq128`, `hash:sq64`) with lock-free parallel read concurrency across all CPU cores.
 - **Live Directory Watching**: Automatically detects added, deleted, or modified files in real time (via `inotify` on Linux).
@@ -67,7 +68,8 @@ picexplore --pdf gallery.pdf --row-height 180 --margin 12
 | Action | Control | Description |
 | :--- | :--- | :--- |
 | **Switch to Justified Grid** | `Ctrl` + `1` | Switch to row-based justified photo gallery |
-| **Switch to Treemap** | `Ctrl` + `2` | Switch to squarified treemap collection view |
+| **Switch to Flat Treemap** | `Ctrl` + `2` | Switch to flat squarified treemap collection view |
+| **Switch to Hierarchical Treemap** | `Ctrl` + `3` | Switch to nested directory hierarchy treemap view |
 | **Scroll Gallery** | `Mouse Wheel` / `Scrollbar` | Smooth vertical scrolling through image rows (Grid mode) |
 | **Zoom Gallery Rows** | `Ctrl` + `Mouse Wheel` / `Ctrl` + `+` / `-` | Adjust row heights in Grid mode (`Ctrl` + `0` resets zoom) |
 | **Select Image** | `Left Click` | Select an image and display its metadata in Info Panel |

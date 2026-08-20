@@ -77,6 +77,29 @@ LayoutEngine::LayoutResult LayoutEngine::compute_treemap(const std::vector<Treem
     return result;
 }
 
+LayoutEngine::LayoutResult LayoutEngine::compute_hierarchical_treemap(const std::vector<HierarchicalTreemapItem>& items,
+                                                                     const std::string& root_dir,
+                                                                     double viewport_width,
+                                                                     double viewport_height,
+                                                                     double item_padding) {
+    LayoutResult result;
+    result.layout_type = LayoutType::HIERARCHICAL_TREEMAP;
+    result.total_height = viewport_height;
+
+    if (items.empty() || viewport_width <= 0.0 || viewport_height <= 0.0) {
+        return result;
+    }
+
+    auto hres = HierarchicalTreemap::compute(items, root_dir, 0.0, 0.0, viewport_width, viewport_height, item_padding);
+    result.boxes.reserve(hres.boxes.size());
+    for (const auto& tb : hres.boxes) {
+        result.boxes.push_back({tb.id, tb.x, tb.y, tb.w, tb.h});
+    }
+    result.container_boxes = std::move(hres.container_boxes);
+
+    return result;
+}
+
 LayoutEngine::LayoutResult LayoutEngine::append(const std::vector<std::pair<size_t,double>>& indexed_aspects) {
     // JustifiedLayout is fast enough for <100k images. Just recompute for now.
     return compute_justified(indexed_aspects, last_viewport_width_, cfg_.rh);
