@@ -5,6 +5,7 @@
 #include <string_view>
 #include <memory>
 #include <map>
+#include <unordered_map>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -237,7 +238,7 @@ public:
         double total_weight = 0.0;
         
         // Children subdirectories (mapped by folder name)
-        std::map<std::string, std::unique_ptr<TreeNode>> subdirs;
+        std::unordered_map<std::string, std::unique_ptr<TreeNode>> subdirs;
         // Immediate child files
         std::vector<TreemapItem> files;
     };
@@ -293,18 +294,18 @@ public:
             }
         }
 
-        // 1. Build the Directory Tree
+        // 1. Build the Directory Tree (zero-allocation string_view path segmentation)
         TreeNode root;
         root.name = effective_root;
         root.full_path = effective_root;
         root.depth = 0;
 
         for (const auto& item : input_items) {
-            std::string rel_path = item.filepath;
+            std::string_view rel_path = item.filepath;
             if (!effective_root.empty() && rel_path.rfind(effective_root, 0) == 0) {
-                rel_path = rel_path.substr(effective_root.size());
-                if (!rel_path.empty() && (rel_path.front() == '/' || rel_path.front() == '\\')) {
-                    rel_path.erase(0, 1);
+                rel_path.remove_prefix(effective_root.size());
+                while (!rel_path.empty() && (rel_path.front() == '/' || rel_path.front() == '\\')) {
+                    rel_path.remove_prefix(1);
                 }
             }
 
@@ -312,27 +313,32 @@ public:
             std::string cur_accum_path = effective_root;
             
             size_t start = 0;
-            size_t slash = rel_path.find_first_of("/\\");
-            while (slash != std::string::npos) {
-                std::string segment = rel_path.substr(start, slash - start);
+            while (start < rel_path.size()) {
+                size_t slash = rel_path.find_first_of("/\\", start);
+                if (slash == std::string_view::npos) {
+                    // Reached the filename in the current directory
+                    break;
+                }
+
+                std::string_view segment = rel_path.substr(start, slash - start);
                 if (!segment.empty()) {
                     if (!cur_accum_path.empty() && cur_accum_path.back() != '/' && cur_accum_path.back() != '\\') {
                         cur_accum_path += "/";
                     }
-                    cur_accum_path += segment;
+                    cur_accum_path.append(segment.data(), segment.size());
 
-                    auto it = cur->subdirs.find(segment);
+                    std::string seg_str(segment);
+                    auto it = cur->subdirs.find(seg_str);
                     if (it == cur->subdirs.end()) {
                         auto newNode = std::make_unique<TreeNode>();
-                        newNode->name = segment;
+                        newNode->name = seg_str;
                         newNode->full_path = cur_accum_path;
                         newNode->depth = cur->depth + 1;
-                        it = cur->subdirs.emplace(segment, std::move(newNode)).first;
+                        it = cur->subdirs.emplace(std::move(seg_str), std::move(newNode)).first;
                     }
                     cur = it->second.get();
                 }
                 start = slash + 1;
-                slash = rel_path.find_first_of("/\\", start);
             }
 
             cur->files.push_back(TreemapItem{item.id, std::max(1e-9, item.weight), item.aspect_ratio});
@@ -413,12 +419,22 @@ public:
                 partition_items.push_back(TreemapItem{idx, f.weight, f.aspect_ratio});
             }
 
+            std::vector<TreeNode*> sorted_subdirs;
+            sorted_subdirs.reserve(node->subdirs.size());
             for (auto& pair : node->subdirs) {
                 if (pair.second->total_weight > 0.0) {
-                    size_t idx = child_refs.size();
-                    child_refs.push_back(ChildRef{true, pair.second.get(), 0});
-                    partition_items.push_back(TreemapItem{idx, pair.second->total_weight, 1.0});
+                    sorted_subdirs.push_back(pair.second.get());
                 }
+            }
+            std::sort(sorted_subdirs.begin(), sorted_subdirs.end(),
+                      [](const TreeNode* a, const TreeNode* b) {
+                          return a->name < b->name;
+                      });
+
+            for (auto* sub : sorted_subdirs) {
+                size_t idx = child_refs.size();
+                child_refs.push_back(ChildRef{true, sub, 0});
+                partition_items.push_back(TreemapItem{idx, sub->total_weight, 1.0});
             }
 
             if (partition_items.empty()) return;
