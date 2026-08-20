@@ -96,6 +96,8 @@ private:
     std::vector<size_t> last_visible_;
     double last_target_height_ = 0.0;
     int last_viewport_width_ = 0;
+    int last_viewport_height_ = 0;
+    VirtualViewport::TreemapRenderStyle last_treemap_style_ = VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS;
     double target_height_ = 150.0;
     uint64_t current_generation_ = 0;
     bool reprioritize_pending_ = false;

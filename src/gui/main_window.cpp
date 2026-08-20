@@ -826,27 +826,20 @@ void MainWindow::reprioritize_thumbnails() {
     store_.mark_visible(visible);
     
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
-        bool view_changed = false;
-        if (visible.size() != last_visible_.size() ||
-            viewport_->w() != last_viewport_width_) {
-            view_changed = true;
-        } else {
-            for (size_t idx : visible) {
-                const auto& entry = store_.get(idx);
-                if (entry.best_quality == ThumbQuality::NONE && entry.last_requested_generation < current_generation_) {
-                    view_changed = true;
-                    break;
-                }
-            }
+        bool size_or_style_changed = (viewport_->w() != last_viewport_width_ ||
+                                      viewport_->h() != last_viewport_height_ ||
+                                      visible.size() != last_visible_.size() ||
+                                      treemap_style_ != last_treemap_style_);
+        
+        if (size_or_style_changed) {
+            current_generation_++;
+            pipeline_->set_generation(current_generation_);
+            last_visible_ = visible;
+            last_target_height_ = 0.0;
+            last_viewport_width_ = viewport_->w();
+            last_viewport_height_ = viewport_->h();
+            last_treemap_style_ = treemap_style_;
         }
-
-        if (!view_changed) return;
-
-        current_generation_++;
-        pipeline_->set_generation(current_generation_);
-        last_visible_ = visible;
-        last_target_height_ = 0.0;
-        last_viewport_width_ = viewport_->w();
 
         struct ReqItem {
             size_t idx;
@@ -857,7 +850,8 @@ void MainWindow::reprioritize_thumbnails() {
         std::vector<ReqItem> req_items;
         req_items.reserve(layout_result_.boxes.size());
 
-        double min_size = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS) ? 4.0 : 36.0;
+        bool all_thumbs = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS);
+        double min_size = all_thumbs ? 1.0 : 36.0;
 
         for (const auto& box : layout_result_.boxes) {
             if (box.w >= min_size && box.h >= min_size) {
@@ -869,7 +863,6 @@ void MainWindow::reprioritize_thumbnails() {
             return a.area > b.area;
         });
 
-        bool all_thumbs = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS);
         for (const auto& item : req_items) {
             const auto& entry = store_.get(item.idx);
 
