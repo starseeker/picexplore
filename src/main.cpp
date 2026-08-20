@@ -134,6 +134,9 @@ int main(int argc, char* argv[]) {
         }
 
         Fl::visual(FL_DOUBLE | FL_RGB);
+        Fl::background(40, 40, 40);
+        Fl::foreground(220, 220, 220);
+        Fl::background2(28, 28, 28);
 
         MainWindow win(1024, 768, "PicExplore", directory, db_path);
         win.show();

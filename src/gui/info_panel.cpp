@@ -238,6 +238,10 @@ InfoPanel::InfoPanel(int X, int Y, int W, int H, const char* L)
     dup_browser_->textfont(FL_HELVETICA);
     dup_browser_->textsize(font_size_);
     dup_browser_->selection_color(fl_rgb_color(60, 160, 255));
+    dup_browser_->scrollbar.box(FL_FLAT_BOX);
+    dup_browser_->scrollbar.color(fl_rgb_color(32, 32, 32));
+    dup_browser_->scrollbar.selection_color(fl_rgb_color(70, 70, 70));
+    dup_browser_->scrollbar.labelcolor(fl_rgb_color(210, 210, 210));
     dup_browser_->callback([](Fl_Widget* w, void* ud) {
         auto* panel = static_cast<InfoPanel*>(ud);
         int val = panel->dup_browser_->value();
