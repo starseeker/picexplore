@@ -187,6 +187,10 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
             if (load_tiff_file(req.filepath, target_w, target_h, rgb_decoded, w, h)) {
                 fast_decoded = true;
             }
+        } else if (ext == ".png") {
+            if (load_png_file(req.filepath, target_w, target_h, rgb_decoded, w, h)) {
+                fast_decoded = true;
+            }
         }
 
         if (!fast_decoded) {

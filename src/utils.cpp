@@ -28,6 +28,8 @@
 #include <algorithm>
 #include <filesystem>
 #include <png.h>
+#include <jpeglib.h>
+#include <setjmp.h>
 
 /* Utils is where we put the implementation
  * sections for stb */
@@ -144,22 +146,61 @@ void StatusReporter::report_thread() {
     }
 }
 
+struct my_jpeg_enc_error_mgr {
+    struct jpeg_error_mgr pub;
+    jmp_buf setjmp_buffer;
+};
+
+static void my_jpeg_enc_error_exit(j_common_ptr cinfo) {
+    auto* myerr = reinterpret_cast<my_jpeg_enc_error_mgr*>(cinfo->err);
+    longjmp(myerr->setjmp_buffer, 1);
+}
+
 // Utility functions
 std::vector<uint8_t> encode_jpeg(const unsigned char* rgb_data, int width, int height, int quality) {
-    std::vector<uint8_t> jpeg_data;
+    if (!rgb_data || width <= 0 || height <= 0) return {};
 
-    // STB write callback to capture data
-    auto write_func = [](void* context, void* data, int size) {
-	auto* vec = static_cast<std::vector<uint8_t>*>(context);
-	const uint8_t* bytes = static_cast<const uint8_t*>(data);
-	vec->insert(vec->end(), bytes, bytes + size);
-    };
+    struct jpeg_compress_struct cinfo;
+    struct my_jpeg_enc_error_mgr jerr;
 
-    if (stbi_write_jpg_to_func(write_func, &jpeg_data, width, height, 3, rgb_data, quality)) {
-	return jpeg_data;
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = my_jpeg_enc_error_exit;
+
+    if (setjmp(jerr.setjmp_buffer)) {
+        jpeg_destroy_compress(&cinfo);
+        return {};
     }
 
-    return {}; // Empty vector on failure
+    jpeg_create_compress(&cinfo);
+
+    unsigned char* outbuffer = nullptr;
+    unsigned long outsize = 0;
+    jpeg_mem_dest(&cinfo, &outbuffer, &outsize);
+
+    cinfo.image_width = width;
+    cinfo.image_height = height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, std::clamp(quality, 1, 100), TRUE);
+    jpeg_start_compress(&cinfo, TRUE);
+
+    int row_stride = width * 3;
+    while (cinfo.next_scanline < cinfo.image_height) {
+        JSAMPROW row_pointer[1] = { const_cast<JSAMPROW>(&rgb_data[cinfo.next_scanline * row_stride]) };
+        jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    }
+
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
+
+    std::vector<uint8_t> jpeg_data;
+    if (outbuffer && outsize > 0) {
+        jpeg_data.assign(outbuffer, outbuffer + outsize);
+        free(outbuffer);
+    }
+    return jpeg_data;
 }
 
 bool is_image_file(const std::string& filepath) {
