@@ -28,7 +28,6 @@ void InotifyWatcher::start(const std::string& directory, moodycamel::ConcurrentQ
         return;
     }
     
-    add_watch_recursive(directory_);
     watch_thread_ = std::thread(&InotifyWatcher::watch_thread_func, this);
 }
 
@@ -47,7 +46,7 @@ void InotifyWatcher::stop() {
 }
 
 void InotifyWatcher::add_watch_recursive(const std::string& path) {
-    if (is_cache_or_db_path(path)) return;
+    if (stop_requested_ || is_cache_or_db_path(path)) return;
 
     int wd = inotify_add_watch(inotify_fd_, path.c_str(), 
         IN_CLOSE_WRITE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE);
@@ -59,6 +58,7 @@ void InotifyWatcher::add_watch_recursive(const std::string& path) {
     
     try {
         for (const auto& entry : fs::directory_iterator(path)) {
+            if (stop_requested_) break;
             if (entry.is_directory() && !fs::is_symlink(entry)) {
                 std::string subpath = fs::path(entry.path()).lexically_normal().string();
                 if (!is_cache_or_db_path(subpath)) {
@@ -70,6 +70,8 @@ void InotifyWatcher::add_watch_recursive(const std::string& path) {
 }
 
 void InotifyWatcher::watch_thread_func() {
+    add_watch_recursive(directory_);
+
     const size_t buf_size = 8192;
     char buffer[buf_size] __attribute__((aligned(__alignof__(struct inotify_event))));
     

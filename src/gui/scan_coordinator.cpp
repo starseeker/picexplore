@@ -53,27 +53,15 @@ void ScanCoordinator::run() {
     std::unordered_set<std::string> db_paths;
     
     if (db_opened) {
-        images = db.get_all_images();
+        images = db.get_images_for_directory(directory_);
         if (!images.empty()) {
             std::cout << "Loading images from database: " << db_path_ << std::endl;
-            
-            // Normalize directory string for safe prefix matching
-            std::string prefix = fs::path(directory_).lexically_normal().string();
-            if (!prefix.empty() && prefix.back() != '/' && prefix.back() != '\\') {
-                prefix += '/';
-            }
             
             int found = 0;
             for (const auto& img : images) {
                 if (stop_requested_) break;
                 
-                std::string norm_path = fs::path(img.path).lexically_normal().string();
-                // Only load images that belong to the currently requested directory
-                if (norm_path.find(prefix) != 0 && norm_path != fs::path(directory_).lexically_normal().string()) {
-                    continue;
-                }
-                
-                db_paths.insert(norm_path);
+                db_paths.insert(img.path);
                 
                 ThumbQuality bq = static_cast<ThumbQuality>(img.best_thumb_size);
                 
@@ -82,7 +70,7 @@ void ScanCoordinator::run() {
                 double ar = img.aspect_ratio;
 
                 UpdateEvent ev = UpdateEvent::make_image_discovered(
-                    norm_path, img.hash,
+                    img.path, img.hash,
                     actual_w, actual_h, ar, 
                     img.file_size, img.file_timestamp,
                     bq, {}, // Skip passing jpeg data to save memory, ThumbnailPipeline will load it

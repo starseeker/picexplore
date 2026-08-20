@@ -269,13 +269,53 @@ int main() {
     auto paths_found = db_reader.get_paths_for_hash("hash_a");
     assert(paths_found.size() == 1 && paths_found[0] == "/photos/a.jpg");
 
-    // Release writer lock
+    // Release writer lock and close test 12
     assert(db_writer.commit_transaction());
-
     db_reader.close();
     db_writer.close();
     fs::remove(conc_db_path);
 
-    std::cout << "All database duplicate, metadata, unified cache, TIFF, and concurrent multi-instance tests passed successfully!" << std::endl;
+    // 13. Test get_images_for_directory and fast metadata resolution
+    std::string filter_db_path = "/tmp/test_dir_filter.db";
+    if (fs::exists(filter_db_path)) fs::remove(filter_db_path);
+
+    DatabaseManager db_filter;
+    assert(db_filter.open(filter_db_path));
+    assert(db_filter.begin_transaction());
+    assert(db_filter.store_key_value("file:/photos/dirA/img1.jpg", "hash_1"));
+    assert(db_filter.add_path_for_hash("hash_1", "/photos/dirA/img1.jpg"));
+    ImageMetadata meta1;
+    meta1.orig_width = 1920;
+    meta1.orig_height = 1080;
+    meta1.file_size = 123456;
+    meta1.file_timestamp = 1700000000;
+    assert(db_filter.store_image_metadata("hash_1", meta1));
+
+    assert(db_filter.store_key_value("file:/photos/dirB/img2.jpg", "hash_2"));
+    assert(db_filter.add_path_for_hash("hash_2", "/photos/dirB/img2.jpg"));
+    ImageMetadata meta2;
+    meta2.orig_width = 800;
+    meta2.orig_height = 600;
+    assert(db_filter.store_image_metadata("hash_2", meta2));
+    assert(db_filter.commit_transaction());
+
+    auto dirA_images = db_filter.get_images_for_directory("/photos/dirA");
+    assert(dirA_images.size() == 1);
+    assert(dirA_images[0].path == "/photos/dirA/img1.jpg");
+    assert(dirA_images[0].orig_width == 1920);
+    assert(dirA_images[0].orig_height == 1080);
+    assert(dirA_images[0].file_size == 123456);
+
+    auto dirB_images = db_filter.get_images_for_directory("/photos/dirB");
+    assert(dirB_images.size() == 1);
+    assert(dirB_images[0].path == "/photos/dirB/img2.jpg");
+
+    auto all_images = db_filter.get_images_for_directory("/photos");
+    assert(all_images.size() == 2);
+
+    db_filter.close();
+    fs::remove(filter_db_path);
+
+    std::cout << "All database duplicate, metadata, unified cache, TIFF, concurrent, and directory filter tests passed successfully!" << std::endl;
     return 0;
 }

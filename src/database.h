@@ -95,6 +95,7 @@ class DatabaseManager {
 
 	// Database querying
 	std::vector<ImageInfo> get_all_images();
+	std::vector<ImageInfo> get_images_for_directory(const std::string& directory);
 	bool has_thumbnails(const std::string& hash);
 
     private:
