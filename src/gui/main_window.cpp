@@ -475,6 +475,9 @@ void MainWindow::apply_directory_filter(const std::string& dir) {
         directory_filter_ = dir;
     }
 
+    current_generation_++;
+    pipeline_->set_generation(current_generation_);
+    last_visible_.clear();
     layout_dirty_ = true;
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
@@ -484,6 +487,9 @@ void MainWindow::apply_directory_filter(const std::string& dir) {
 
 void MainWindow::reset_directory_filter() {
     directory_filter_.clear();
+    current_generation_++;
+    pipeline_->set_generation(current_generation_);
+    last_visible_.clear();
     layout_dirty_ = true;
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
@@ -870,6 +876,9 @@ void MainWindow::poll_events() {
 void MainWindow::set_layout_mode(LayoutEngine::LayoutType type) {
     if (active_layout_ == type) return;
     active_layout_ = type;
+    current_generation_++;
+    pipeline_->set_generation(current_generation_);
+    last_visible_.clear();
     layout_dirty_ = true;
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
@@ -880,8 +889,12 @@ void MainWindow::set_layout_mode(LayoutEngine::LayoutType type) {
 }
 
 void MainWindow::set_treemap_metric(LayoutEngine::TreemapMetric metric) {
+    if (treemap_metric_ == metric) return;
     treemap_metric_ = metric;
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
+        current_generation_++;
+        pipeline_->set_generation(current_generation_);
+        last_visible_.clear();
         layout_dirty_ = true;
         rebuild_menu();
         recompute_layout(true);
@@ -891,6 +904,9 @@ void MainWindow::set_treemap_metric(LayoutEngine::TreemapMetric metric) {
 void MainWindow::set_treemap_style(VirtualViewport::TreemapRenderStyle style) {
     if (treemap_style_ == style) return;
     treemap_style_ = style;
+    current_generation_++;
+    pipeline_->set_generation(current_generation_);
+    last_visible_.clear();
     viewport_->set_treemap_render_style(style);
     rebuild_menu();
     resize(x(), y(), w(), h());
@@ -986,18 +1002,55 @@ void MainWindow::reprioritize_thumbnails() {
     store_.mark_visible(visible);
     
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
-        bool size_or_style_changed = (viewport_->w() != last_viewport_width_ ||
-                                      viewport_->h() != last_viewport_height_ ||
-                                      visible.size() != last_visible_.size() ||
-                                      treemap_style_ != last_treemap_style_);
+        bool all_thumbs = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS);
+        double min_size = all_thumbs ? 1.0 : 36.0;
+
+        bool view_changed = (viewport_->w() != last_viewport_width_ ||
+                             viewport_->h() != last_viewport_height_ ||
+                             visible.size() != last_visible_.size() ||
+                             active_layout_ != last_active_layout_ ||
+                             directory_filter_ != last_directory_filter_ ||
+                             treemap_metric_ != last_treemap_metric_ ||
+                             treemap_style_ != last_treemap_style_);
         
-        if (size_or_style_changed) {
+        if (!view_changed) {
+            for (const auto& box : layout_result_.boxes) {
+                if (box.w < min_size || box.h < min_size) continue;
+                const auto& entry = store_.get(box.image_index);
+                if (all_thumbs) {
+                    if (entry.square_thumb.rgb_data.empty() && entry.last_requested_generation < current_generation_) {
+                        view_changed = true;
+                        break;
+                    }
+                } else {
+                    double max_dim = std::max(box.w, box.h);
+                    ThumbQuality needed = (max_dim <= 64) ? ThumbQuality::SMALL :
+                                          (max_dim <= 128) ? ThumbQuality::MEDIUM :
+                                          (max_dim <= 256) ? ThumbQuality::LARGE :
+                                          (max_dim <= 512) ? ThumbQuality::XLARGE :
+                                          (max_dim <= 1024) ? static_cast<ThumbQuality>(1024) : ThumbQuality::FULL;
+                    bool size_mismatch = (entry.scaled.layout_width != static_cast<int>(box.w) ||
+                                          entry.scaled.layout_height != static_cast<int>(box.h));
+                    bool needs_upgrade = (entry.scaled.quality < needed);
+                    bool missing_or_mismatch = (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch || needs_upgrade);
+                    if (missing_or_mismatch && entry.last_requested_generation < current_generation_) {
+                        view_changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (view_changed) {
             current_generation_++;
             pipeline_->set_generation(current_generation_);
             last_visible_ = visible;
             last_target_height_ = 0.0;
             last_viewport_width_ = viewport_->w();
             last_viewport_height_ = viewport_->h();
+            last_active_layout_ = active_layout_;
+            last_directory_filter_ = directory_filter_;
+            last_treemap_metric_ = treemap_metric_;
             last_treemap_style_ = treemap_style_;
         }
 
@@ -1009,9 +1062,6 @@ void MainWindow::reprioritize_thumbnails() {
         };
         std::vector<ReqItem> req_items;
         req_items.reserve(layout_result_.boxes.size());
-
-        bool all_thumbs = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS);
-        double min_size = all_thumbs ? 1.0 : 36.0;
 
         for (const auto& box : layout_result_.boxes) {
             if (box.w >= min_size && box.h >= min_size) {

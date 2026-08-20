@@ -109,6 +109,9 @@ private:
     double last_target_height_ = 0.0;
     int last_viewport_width_ = 0;
     int last_viewport_height_ = 0;
+    LayoutEngine::LayoutType last_active_layout_ = LayoutEngine::LayoutType::JUSTIFIED;
+    std::string last_directory_filter_;
+    LayoutEngine::TreemapMetric last_treemap_metric_ = LayoutEngine::TreemapMetric::FILE_SIZE;
     VirtualViewport::TreemapRenderStyle last_treemap_style_ = VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS;
     double target_height_ = 150.0;
     uint64_t current_generation_ = 0;
