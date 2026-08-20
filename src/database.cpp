@@ -37,11 +37,43 @@
 #include "stb_image_resize2.h"
 #include <jpeglib.h>
 #include <jerror.h>
+#include <csetjmp>
 #include "TinyEXIF.h"
 
 #define MAX_DB_SIZE 549755813888
 
 namespace fs = std::filesystem;
+
+namespace {
+struct CustomJpegErrorMgr {
+    struct jpeg_error_mgr pub;
+    jmp_buf setjmp_buffer;
+    const char* filepath = nullptr;
+};
+
+static void custom_jpeg_error_exit(j_common_ptr cinfo) {
+    CustomJpegErrorMgr* myerr = reinterpret_cast<CustomJpegErrorMgr*>(cinfo->err);
+    char buffer[JMSG_LENGTH_MAX];
+    (*cinfo->err->format_message)(cinfo, buffer);
+    if (myerr && myerr->filepath && myerr->filepath[0] != '\0') {
+        fprintf(stderr, "JPEG [%s]: %s\n", myerr->filepath, buffer);
+    } else {
+        fprintf(stderr, "JPEG error: %s\n", buffer);
+    }
+    longjmp(myerr->setjmp_buffer, 1);
+}
+
+static void custom_jpeg_output_message(j_common_ptr cinfo) {
+    CustomJpegErrorMgr* myerr = reinterpret_cast<CustomJpegErrorMgr*>(cinfo->err);
+    char buffer[JMSG_LENGTH_MAX];
+    (*cinfo->err->format_message)(cinfo, buffer);
+    if (myerr && myerr->filepath && myerr->filepath[0] != '\0') {
+        fprintf(stderr, "JPEG [%s]: %s\n", myerr->filepath, buffer);
+    } else {
+        fprintf(stderr, "JPEG: %s\n", buffer);
+    }
+}
+} // anonymous namespace
 DatabaseManager::DatabaseManager() : env_(nullptr), txn_(nullptr), dbi_(0), is_open_(false), stop_processing_(false) {
 }
 
@@ -276,9 +308,18 @@ std::vector<uint8_t> DatabaseManager::decode_jpeg_thumbnail_rgb(const std::strin
 
     // Initialize JPEG decompression
     struct jpeg_decompress_struct cinfo;
-    struct jpeg_error_mgr jerr;
+    struct CustomJpegErrorMgr jerr;
+    jerr.filepath = filepath.c_str();
 
-    cinfo.err = jpeg_std_error(&jerr);
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = custom_jpeg_error_exit;
+    jerr.pub.output_message = custom_jpeg_output_message;
+
+    if (setjmp(jerr.setjmp_buffer)) {
+        jpeg_destroy_decompress(&cinfo);
+        return {};
+    }
+
     jpeg_create_decompress(&cinfo);
 
     // Set up memory source

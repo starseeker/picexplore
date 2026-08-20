@@ -64,11 +64,30 @@ size_t ImageStore::add_image(const std::string& filepath, double aspect_ratio,
 struct my_error_mgr {
     struct jpeg_error_mgr pub;
     jmp_buf setjmp_buffer;
+    const char* filepath = nullptr;
 };
 
 static void my_error_exit(j_common_ptr cinfo) {
     my_error_mgr* myerr = (my_error_mgr*)cinfo->err;
+    char buffer[JMSG_LENGTH_MAX];
+    (*cinfo->err->format_message)(cinfo, buffer);
+    if (myerr && myerr->filepath && myerr->filepath[0] != '\0') {
+        fprintf(stderr, "JPEG [%s]: %s\n", myerr->filepath, buffer);
+    } else {
+        fprintf(stderr, "JPEG error: %s\n", buffer);
+    }
     longjmp(myerr->setjmp_buffer, 1);
+}
+
+static void my_output_message(j_common_ptr cinfo) {
+    my_error_mgr* myerr = (my_error_mgr*)cinfo->err;
+    char buffer[JMSG_LENGTH_MAX];
+    (*cinfo->err->format_message)(cinfo, buffer);
+    if (myerr && myerr->filepath && myerr->filepath[0] != '\0') {
+        fprintf(stderr, "JPEG [%s]: %s\n", myerr->filepath, buffer);
+    } else {
+        fprintf(stderr, "JPEG: %s\n", buffer);
+    }
 }
 
 bool ImageStore::decode_jpeg(const uint8_t* jpeg_data, size_t jpeg_size, std::vector<uint8_t>& rgb_data, int& width, int& height) {
@@ -76,9 +95,11 @@ bool ImageStore::decode_jpeg(const uint8_t* jpeg_data, size_t jpeg_size, std::ve
 
     struct jpeg_decompress_struct cinfo;
     struct my_error_mgr jerr;
+    jerr.filepath = nullptr;
 
     cinfo.err = jpeg_std_error(&jerr.pub);
     jerr.pub.error_exit = my_error_exit;
+    jerr.pub.output_message = my_output_message;
 
     if (setjmp(jerr.setjmp_buffer)) {
         jpeg_destroy_decompress(&cinfo);
