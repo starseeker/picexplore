@@ -39,7 +39,8 @@ std::vector<size_t> VirtualViewport::get_visible_indices(int margin_y) const {
     std::vector<size_t> visible;
     if (!layout_) return visible;
 
-    if (layout_->layout_type == LayoutEngine::LayoutType::TREEMAP) {
+    if (layout_->layout_type == LayoutEngine::LayoutType::TREEMAP ||
+        layout_->layout_type == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
         for (const auto& box : layout_->boxes) {
             if (box.w > 0 && box.h > 0) {
                 visible.push_back(box.image_index);
@@ -64,7 +65,8 @@ std::vector<size_t> VirtualViewport::get_visible_indices(int margin_y) const {
 void VirtualViewport::draw() {
     if (view_mode_ == ViewMode::SINGLE_IMAGE) {
         draw_single_image();
-    } else if (layout_ && layout_->layout_type == LayoutEngine::LayoutType::TREEMAP) {
+    } else if (layout_ && (layout_->layout_type == LayoutEngine::LayoutType::TREEMAP ||
+                          layout_->layout_type == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP)) {
         draw_treemap();
     } else {
         draw_grid();

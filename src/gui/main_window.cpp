@@ -427,7 +427,7 @@ void MainWindow::exit_single_image_mode() {
     int vp_w = w();
     if (info_panel_visible_) vp_w -= info_w;
 
-    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+    if (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
         scrollbar_->hide();
         viewport_->resize(0, MENU_H, vp_w, vp_h);
     } else {
