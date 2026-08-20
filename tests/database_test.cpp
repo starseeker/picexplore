@@ -242,10 +242,40 @@ int main() {
         tiff_db.abort_transaction();
     }
 
-    tiff_db.close();
-    fs::remove_all(tiff_dir);
-    fs::remove(tiff_db_path);
+    // 12. Test Concurrent Multi-Instance Open & Non-Blocking Read While Writer Is Active
+    std::string conc_db_path = "/tmp/test_concurrent_instance.db";
+    if (fs::exists(conc_db_path)) fs::remove(conc_db_path);
 
-    std::cout << "All database duplicate, metadata, unified cache, and TIFF scanning tests passed successfully!" << std::endl;
+    DatabaseManager db_writer;
+    assert(db_writer.open(conc_db_path));
+    assert(db_writer.begin_transaction());
+    assert(db_writer.store_key_value("file:/photos/a.jpg", "hash_a"));
+    assert(db_writer.add_path_for_hash("hash_a", "/photos/a.jpg"));
+    assert(db_writer.commit_transaction());
+
+    // Hold an active write transaction in db_writer
+    assert(db_writer.begin_transaction());
+    assert(db_writer.store_key_value("file:/photos/b.jpg", "hash_b"));
+
+    // Concurrently open db_reader in second instance/thread while db_writer holds write lock
+    DatabaseManager db_reader;
+    bool reader_opened = db_reader.open(conc_db_path);
+    assert(reader_opened && "Second instance should open database immediately without blocking on writer");
+
+    std::string found_hash;
+    assert(db_reader.get_hash_for_path("/photos/a.jpg", found_hash));
+    assert(found_hash == "hash_a");
+
+    auto paths_found = db_reader.get_paths_for_hash("hash_a");
+    assert(paths_found.size() == 1 && paths_found[0] == "/photos/a.jpg");
+
+    // Release writer lock
+    assert(db_writer.commit_transaction());
+
+    db_reader.close();
+    db_writer.close();
+    fs::remove(conc_db_path);
+
+    std::cout << "All database duplicate, metadata, unified cache, TIFF, and concurrent multi-instance tests passed successfully!" << std::endl;
     return 0;
 }

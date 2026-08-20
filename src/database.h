@@ -135,6 +135,7 @@ class DatabaseManager {
 	bool store_key_data(const std::string& key, const std::vector<uint8_t>& data);
 	bool delete_key(const std::string& key);
 	bool get_key_value(const std::string& key, std::string& value);
+	bool get_key_value_concurrent(const std::string& key, std::string& value) const;
 	bool get_key_data(const std::string& key, std::vector<uint8_t>& data);
 	bool get_key_data_concurrent(const std::string& key, std::vector<uint8_t>& data) const;
 	bool get_hash_for_path(const std::string& filepath, std::string& hash_out);

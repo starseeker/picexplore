@@ -111,8 +111,20 @@ bool DatabaseManager::open(const std::string& db_path) {
 	return false;
     }
 
-    // Open the DBI handle once for all transactions
-    MDB_txn* setup_txn;
+    // Open the DBI handle once for all transactions.
+    // Try opening with MDB_RDONLY first so we never block waiting for exclusive write locks from another process.
+    MDB_txn* setup_txn = nullptr;
+    rc = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &setup_txn);
+    if (rc == 0) {
+        rc = mdb_dbi_open(setup_txn, nullptr, 0, &dbi_);
+        mdb_txn_abort(setup_txn);
+        if (rc == 0) {
+            is_open_ = true;
+            return true;
+        }
+    }
+
+    // Fallback: if database is newly created and DBI does not exist yet, use write transaction with MDB_CREATE
     rc = mdb_txn_begin(env_, nullptr, 0, &setup_txn);
     if (rc != 0) {
 	mdb_env_close(env_);
@@ -213,7 +225,9 @@ bool DatabaseManager::delete_key(const std::string& key) {
 }
 
 bool DatabaseManager::get_key_value(const std::string& key, std::string& value) {
-    if (!txn_) return false;
+    if (!txn_) {
+        return get_key_value_concurrent(key, value);
+    }
 
     MDB_val k, v;
     k.mv_data = (void*)key.c_str();
@@ -226,8 +240,38 @@ bool DatabaseManager::get_key_value(const std::string& key, std::string& value) 
     return false;
 }
 
+bool DatabaseManager::get_key_value_concurrent(const std::string& key, std::string& value) const {
+    if (!is_open_ || !env_) return false;
+
+    MDB_txn* read_txn = nullptr;
+    if (mdb_txn_begin(env_, nullptr, MDB_RDONLY, &read_txn) != 0) {
+        return false;
+    }
+
+    MDB_dbi dbi;
+    if (mdb_dbi_open(read_txn, nullptr, 0, &dbi) != 0) {
+        mdb_txn_abort(read_txn);
+        return false;
+    }
+
+    MDB_val k, v;
+    k.mv_data = (void*)key.c_str();
+    k.mv_size = key.length();
+
+    bool found = false;
+    if (mdb_get(read_txn, dbi, &k, &v) == 0) {
+        value.assign((char*)v.mv_data, v.mv_size);
+        found = true;
+    }
+
+    mdb_txn_abort(read_txn);
+    return found;
+}
+
 bool DatabaseManager::get_key_data(const std::string& key, std::vector<uint8_t>& data) {
-    if (!txn_) return false;
+    if (!txn_) {
+        return get_key_data_concurrent(key, data);
+    }
 
     MDB_val k, v;
     k.mv_data = (void*)key.c_str();
@@ -269,13 +313,7 @@ bool DatabaseManager::get_key_data_concurrent(const std::string& key, std::vecto
 }
 
 bool DatabaseManager::get_hash_for_path_concurrent(const std::string& filepath, std::string& hash_out) const {
-    std::string key = "file:" + filepath;
-    std::vector<uint8_t> data;
-    if (get_key_data_concurrent(key, data)) {
-        hash_out.assign((char*)data.data(), data.size());
-        return true;
-    }
-    return false;
+    return get_key_value_concurrent("file:" + filepath, hash_out);
 }
 
 int DatabaseManager::calculate_scale_factor(int image_width, int image_height, int target_width, int target_height) {
@@ -628,16 +666,12 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
     snprintf(hash_str, sizeof(hash_str), "%016llx%016llx",
              (unsigned long long)hash.high64, (unsigned long long)hash.low64);
 
-    // Check if this hash already exists (duplicate detection)
+    // Check if this hash already exists (duplicate detection) using non-blocking read
     bool has_existing = false;
-    {
-        std::lock_guard<std::mutex> lock(db_mutex_);
-        if (begin_transaction()) {
-            std::string val;
-            has_existing = get_key_value(std::string(hash_str) + ":paths", val) ||
-                           get_key_value(std::string(hash_str) + ":path", val);
-            abort_transaction();
-        }
+    std::string dummy_val;
+    if (get_key_value_concurrent(std::string(hash_str) + ":paths", dummy_val) ||
+        get_key_value_concurrent(std::string(hash_str) + ":path", dummy_val)) {
+        has_existing = true;
     }
 
     if (has_existing) {
@@ -1072,39 +1106,22 @@ std::string DatabaseManager::extract_hash_from_key(const char* key, size_t key_s
 
 bool DatabaseManager::has_thumbnails(const std::string& hash) {
     if (hash.empty()) return false;
-    bool manage_txn = (txn_ == nullptr);
-    if (manage_txn) {
-	if (!begin_transaction()) return false;
-    }
     std::vector<uint8_t> data;
-    bool exists = get_key_data(hash + ":32", data) ||
-		  get_key_data(hash + ":64", data) ||
-		  get_key_data(hash + ":128", data) ||
-		  get_key_data(hash + ":256", data) ||
-		  get_key_data(hash + ":512", data) ||
-		  get_key_data(hash + ":1024", data);
-    if (manage_txn) {
-	abort_transaction();
-    }
-    return exists;
+    return get_key_data(hash + ":32", data) ||
+	   get_key_data(hash + ":64", data) ||
+	   get_key_data(hash + ":128", data) ||
+	   get_key_data(hash + ":256", data) ||
+	   get_key_data(hash + ":512", data) ||
+	   get_key_data(hash + ":1024", data);
 }
 
 std::vector<std::string> DatabaseManager::get_paths_for_hash(const std::string& hash) {
     if (hash.empty()) return {};
 
-    bool manage_txn = (txn_ == nullptr);
-    if (manage_txn) {
-	if (!begin_transaction()) return {};
-    }
-
     std::string val;
     bool found = get_key_value(hash + ":paths", val);
     if (!found) {
 	found = get_key_value(hash + ":path", val);
-    }
-
-    if (manage_txn) {
-	abort_transaction();
     }
 
     if (found) {
