@@ -23,8 +23,9 @@ public:
     ViewMode current_mode() const { return view_mode_; }
 
     enum class TreemapRenderStyle {
-        FILE_TYPE_COLORS,
-        ALL_THUMBNAILS
+        ALL_THUMBNAILS,
+        CUSHION_TREEMAP,
+        FILE_TYPE_COLORS
     };
 
     void set_treemap_render_style(TreemapRenderStyle style) {
@@ -113,6 +114,9 @@ private:
     std::vector<uint8_t> draw_tmp_buf_;
     std::vector<uint8_t> tint_tmp_buf_;
     std::vector<int>     x_coords_buf_;
+    std::vector<double>  cushion_nx_buf_;
+    std::vector<double>  cushion_ny_buf_;
+    std::vector<uint8_t> cushion_rgb_buf_;
 
     void draw_single_image();
     void draw_grid();

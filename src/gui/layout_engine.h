@@ -23,6 +23,10 @@ public:
         struct Box {
             size_t image_index;
             double x, y, w, h;
+            double cushion_ax = 0.0;
+            double cushion_bx = 0.0;
+            double cushion_ay = 0.0;
+            double cushion_by = 0.0;
         };
         std::vector<Box> boxes;
         std::vector<ContainerBox> container_boxes;

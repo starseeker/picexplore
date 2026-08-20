@@ -71,7 +71,7 @@ LayoutEngine::LayoutResult LayoutEngine::compute_treemap(const std::vector<Treem
     auto tboxes = SquarifiedTreemap::compute(items, 0.0, 0.0, viewport_width, viewport_height, padding);
     result.boxes.reserve(tboxes.size());
     for (const auto& tb : tboxes) {
-        result.boxes.push_back({tb.id, tb.x, tb.y, tb.w, tb.h});
+        result.boxes.push_back({tb.id, tb.x, tb.y, tb.w, tb.h, tb.cushion_ax, tb.cushion_bx, tb.cushion_ay, tb.cushion_by});
     }
 
     return result;
@@ -94,7 +94,7 @@ LayoutEngine::LayoutResult LayoutEngine::compute_hierarchical_treemap(const std:
     auto hres = HierarchicalTreemap::compute(items, base_root_dir, current_filter_dir, 0.0, 0.0, viewport_width, viewport_height, item_padding);
     result.boxes.reserve(hres.boxes.size());
     for (const auto& tb : hres.boxes) {
-        result.boxes.push_back({tb.id, tb.x, tb.y, tb.w, tb.h});
+        result.boxes.push_back({tb.id, tb.x, tb.y, tb.w, tb.h, tb.cushion_ax, tb.cushion_bx, tb.cushion_ay, tb.cushion_by});
     }
     result.container_boxes = std::move(hres.container_boxes);
 

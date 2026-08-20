@@ -213,6 +213,72 @@ void test_hierarchical_zoom_in_and_parent_bar() {
     std::cout << "[PASS] Hierarchical zoom in and parent bar test\n";
 }
 
+void test_cushion_treemap_math() {
+    std::vector<TreemapItem> items = {
+        {0, 500.0, 1.0},
+        {1, 300.0, 1.0}
+    };
+
+    double W = 800.0;
+    double H = 600.0;
+    auto boxes = SquarifiedTreemap::compute(items, 0, 0, W, H, 0.0);
+    assert(boxes.size() == 2);
+
+    for (const auto& b : boxes) {
+        assert(b.cushion_ax < 0.0); // Negative curvature (parabola opening downward)
+        assert(b.cushion_ay < 0.0);
+
+        // Center of the cushion must have zero gradient (slope = 0 at peak)
+        double cx = b.x + b.w / 2.0;
+        double cy = b.y + b.h / 2.0;
+        double nx = b.cushion_ax * cx + b.cushion_bx;
+        double ny = b.cushion_ay * cy + b.cushion_by;
+        assert(std::abs(nx) < 1e-6);
+        assert(std::abs(ny) < 1e-6);
+
+        // Verify surface normal and lighting model
+        constexpr double lx = -0.436739;
+        constexpr double ly = -0.436739;
+        constexpr double lz = 0.786130;
+        constexpr double Ia = 0.20;
+        constexpr double Id = 0.80;
+
+        // Top-left pixel should be tilted towards top-left light (bright highlight)
+        double tl_nx = b.cushion_ax * b.x + b.cushion_bx;
+        double tl_ny = b.cushion_ay * b.y + b.cushion_by;
+        double tl_num = -tl_nx * lx - tl_ny * ly + lz;
+        double tl_den = std::sqrt(tl_nx * tl_nx + tl_ny * tl_ny + 1.0);
+        double tl_cos = tl_num / tl_den;
+        double tl_intensity = Ia + Id * std::max(0.0, tl_cos);
+
+        // Bottom-right pixel should be tilted away from light (soft shadow)
+        double br_nx = b.cushion_ax * (b.x + b.w) + b.cushion_bx;
+        double br_ny = b.cushion_ay * (b.y + b.h) + b.cushion_by;
+        double br_num = -br_nx * lx - br_ny * ly + lz;
+        double br_den = std::sqrt(br_nx * br_nx + br_ny * br_ny + 1.0);
+        double br_cos = br_num / br_den;
+        double br_intensity = Ia + Id * std::max(0.0, br_cos);
+
+        assert(tl_intensity > br_intensity);
+        assert(tl_intensity >= 0.2 && tl_intensity <= 1.0);
+        assert(br_intensity >= 0.2 && br_intensity <= 1.0);
+    }
+
+    // Test Hierarchical Cushion Multi-Level Accumulation
+    std::vector<HierarchicalTreemapItem> h_items = {
+        {0, "/root/folder1/img1.jpg", 400.0, 1.0},
+        {1, "/root/folder2/img2.jpg", 600.0, 1.0}
+    };
+    auto h_res = HierarchicalTreemap::compute(h_items, "/root", 0, 0, W, H, 0.0, 0.0, 0.0);
+    assert(h_res.boxes.size() == 2);
+    for (const auto& b : h_res.boxes) {
+        assert(b.cushion_ax < 0.0);
+        assert(b.cushion_ay < 0.0);
+    }
+
+    std::cout << "[PASS] Cushion Treemap mathematical and lighting pipeline test\n";
+}
+
 int main() {
     try {
         test_empty();
@@ -222,6 +288,7 @@ int main() {
         test_hierarchical_treemap();
         test_hierarchical_zoom_in_and_parent_bar();
         test_hierarchical_performance();
+        test_cushion_treemap_math();
         std::cout << "All Treemap layout unit tests passed successfully!\n";
         return 0;
     } catch (const std::exception& e) {

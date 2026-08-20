@@ -22,6 +22,10 @@ struct TreemapBox {
     double y = 0.0;
     double w = 0.0;
     double h = 0.0;
+    double cushion_ax = 0.0;
+    double cushion_bx = 0.0;
+    double cushion_ay = 0.0;
+    double cushion_by = 0.0;
 };
 
 struct HierarchicalTreemapItem {
@@ -209,6 +213,17 @@ public:
             }
         }
 
+        // Compute cushion surface parameters for each box (van Wijk & van de Wetering)
+        for (auto& box : results) {
+            if (box.w > 0.0 && box.h > 0.0) {
+                double h_val = 0.5;
+                box.cushion_ax = -8.0 * h_val / (box.w * box.w);
+                box.cushion_bx = 4.0 * h_val * (2.0 * box.x + box.w) / (box.w * box.w);
+                box.cushion_ay = -8.0 * h_val / (box.h * box.h);
+                box.cushion_by = 4.0 * h_val * (2.0 * box.y + box.h) / (box.h * box.h);
+            }
+        }
+
         return results;
     }
 };
@@ -338,8 +353,25 @@ public:
         compute_weights(compute_weights, &root);
 
         // 3. Layout directory nodes recursively
-        auto layout_node = [&](auto& self, TreeNode* node, double bx, double by, double bw, double bh) -> void {
+        auto layout_node = [&](auto& self, TreeNode* node, double bx, double by, double bw, double bh,
+                               double c_ax, double c_bx, double c_ay, double c_by) -> void {
             if (bw <= 0.0 || bh <= 0.0) return;
+
+            // Height scaling factor h_i for this depth (van Wijk & van de Wetering)
+            // h_i = h_0 * (f ^ depth), where h_0 = 0.5, f = 0.65
+            double h_val = 0.5 * std::pow(0.65, node->depth);
+
+            double cur_ax = c_ax;
+            double cur_bx = c_bx;
+            double cur_ay = c_ay;
+            double cur_by = c_by;
+
+            if (bw > 0.0 && bh > 0.0) {
+                cur_ax += -8.0 * h_val / (bw * bw);
+                cur_bx += 4.0 * h_val * (2.0 * bx + bw) / (bw * bw);
+                cur_ay += -8.0 * h_val / (bh * bh);
+                cur_by += 4.0 * h_val * (2.0 * by + bh) / (bh * bh);
+            }
 
             // If not root, record container box
             if (node->depth > 0) {
@@ -402,7 +434,7 @@ public:
                 if (cbox.id >= child_refs.size()) continue;
                 const auto& ref = child_refs[cbox.id];
                 if (ref.is_subdir) {
-                    self(self, ref.subdir_ptr, cbox.x, cbox.y, cbox.w, cbox.h);
+                    self(self, ref.subdir_ptr, cbox.x, cbox.y, cbox.w, cbox.h, cur_ax, cur_bx, cur_ay, cur_by);
                 } else {
                     double fx = cbox.x;
                     double fy = cbox.y;
@@ -417,15 +449,30 @@ public:
                             fh -= item_padding;
                         }
                     }
+
+                    // Add leaf cushion profile contribution
+                    double leaf_h = h_val * 0.65;
+                    double leaf_ax = cur_ax;
+                    double leaf_bx = cur_bx;
+                    double leaf_ay = cur_ay;
+                    double leaf_by = cur_by;
+                    if (fw > 0.0 && fh > 0.0) {
+                        leaf_ax += -8.0 * leaf_h / (fw * fw);
+                        leaf_bx += 4.0 * leaf_h * (2.0 * fx + fw) / (fw * fw);
+                        leaf_ay += -8.0 * leaf_h / (fh * fh);
+                        leaf_by += 4.0 * leaf_h * (2.0 * fy + fh) / (fh * fh);
+                    }
+
                     result.boxes.push_back(TreemapBox{
                         ref.file_id,
-                        fx, fy, fw, fh
+                        fx, fy, fw, fh,
+                        leaf_ax, leaf_bx, leaf_ay, leaf_by
                     });
                 }
             }
         };
 
-        layout_node(layout_node, &root, bounds_x, bounds_y, bounds_w, bounds_h);
+        layout_node(layout_node, &root, bounds_x, bounds_y, bounds_w, bounds_h, 0.0, 0.0, 0.0, 0.0);
         return result;
     }
 

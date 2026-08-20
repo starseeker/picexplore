@@ -644,9 +644,11 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Layout/Flat Treemap",         FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO | (is_flat_treemap ? FL_MENU_VALUE : 0));
         menubar_->add("View/Layout/Hierarchical Treemap", FL_CTRL | '3', menu_cb, (void*)27, FL_MENU_RADIO | (is_hier_treemap ? FL_MENU_VALUE : 0));
 
-        int val_fc = (treemap_style_ == VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS) ? FL_MENU_VALUE : 0;
         int val_at = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS) ? FL_MENU_VALUE : 0;
+        int val_ct = (treemap_style_ == VirtualViewport::TreemapRenderStyle::CUSHION_TREEMAP) ? FL_MENU_VALUE : 0;
+        int val_fc = (treemap_style_ == VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS) ? FL_MENU_VALUE : 0;
         menubar_->add("View/Treemap Style/All Thumbnails",   0, menu_cb, (void*)26, FL_MENU_RADIO | val_at);
+        menubar_->add("View/Treemap Style/Cushion Treemap",  0, menu_cb, (void*)28, FL_MENU_RADIO | val_ct);
         menubar_->add("View/Treemap Style/File Type Colors", 0, menu_cb, (void*)25, FL_MENU_RADIO | val_fc);
 
         menubar_->add("View/Information Panel", 0, menu_cb, (void*)10, FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0));
@@ -1268,7 +1270,8 @@ void MainWindow::resize(int X, int Y, int W, int H) {
     bool is_treemap = (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP);
     bool show_legend = (viewport_->current_mode() == VirtualViewport::ViewMode::GRID &&
                         is_treemap &&
-                        treemap_style_ == VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS);
+                        (treemap_style_ == VirtualViewport::TreemapRenderStyle::CUSHION_TREEMAP ||
+                         treemap_style_ == VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS));
     int legend_w = std::min(450, std::max(200, W - 200));
 
     if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
@@ -1364,6 +1367,7 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 24: win->set_treemap_metric(LayoutEngine::TreemapMetric::EQUAL_SIZE); break;
         case 25: win->set_treemap_style(VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS); break;
         case 26: win->set_treemap_style(VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS); break;
+        case 28: win->set_treemap_style(VirtualViewport::TreemapRenderStyle::CUSHION_TREEMAP); break;
         case 7: win->target_height_ = std::min(win->target_height_ * 1.2, 800.0); win->layout_dirty_ = true; break;
         case 8: win->target_height_ = std::max(win->target_height_ / 1.2,  50.0); win->layout_dirty_ = true; break;
         case 9: win->target_height_ = 150.0; win->layout_dirty_ = true; break;
