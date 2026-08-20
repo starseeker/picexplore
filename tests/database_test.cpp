@@ -2,6 +2,7 @@
 #include <fstream>
 #include <cassert>
 #include <filesystem>
+#include <tiffio.h>
 #include "database.h"
 
 namespace fs = std::filesystem;
@@ -195,9 +196,56 @@ int main() {
         udb.close();
     }
 
-    fs::remove_all(unified_dir);
-    fs::remove(unified_db_path);
+    // 11. Test Batch Scanning of TIFF Files
+    std::string tiff_dir = "/tmp/test_tiff_scan_dir";
+    fs::create_directories(tiff_dir);
+    std::string tiff_file = tiff_dir + "/sample.tif";
 
-    std::cout << "All database duplicate, metadata, and unified cache sharing tests passed successfully!" << std::endl;
+    TIFF* tif = TIFFOpen(tiff_file.c_str(), "w");
+    assert(tif != nullptr);
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, 120);
+    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, 90);
+    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 3);
+    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 8);
+    TIFFSetField(tif, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT);
+    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB);
+    std::vector<uint8_t> tiff_row(120 * 3, 180);
+    for (int y = 0; y < 90; ++y) {
+        assert(TIFFWriteScanline(tif, tiff_row.data(), y, 0) >= 0);
+    }
+    TIFFClose(tif);
+
+    std::string tiff_db_path = "/tmp/test_tiff_scan.db";
+    if (fs::exists(tiff_db_path)) fs::remove(tiff_db_path);
+
+    DatabaseManager tiff_db;
+    assert(tiff_db.open(tiff_db_path));
+    Timer tt;
+    StatusReporter tr(10);
+    int tiff_scanned = tiff_db.scan_directory_parallel(tiff_dir, tt, tr, 2);
+    assert(tiff_scanned == 1);
+
+    auto tiff_imgs = tiff_db.get_all_images();
+    assert(tiff_imgs.size() == 1);
+    assert(tiff_imgs[0].orig_width == 120);
+    assert(tiff_imgs[0].orig_height == 90);
+    assert(!tiff_imgs[0].hash.empty());
+
+    // Verify square and standard thumbnails were created for the TIFF
+    if (tiff_db.begin_transaction()) {
+        std::vector<uint8_t> sq_data, sz_data;
+        assert(tiff_db.get_key_data(tiff_imgs[0].hash + ":sq128", sq_data));
+        assert(!sq_data.empty());
+        assert(tiff_db.get_key_data(tiff_imgs[0].hash + ":64", sz_data));
+        assert(!sz_data.empty());
+        tiff_db.abort_transaction();
+    }
+
+    tiff_db.close();
+    fs::remove_all(tiff_dir);
+    fs::remove(tiff_db_path);
+
+    std::cout << "All database duplicate, metadata, unified cache, and TIFF scanning tests passed successfully!" << std::endl;
     return 0;
 }

@@ -569,32 +569,56 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	Timer& timer, bool& should_skip) {
     should_skip = false;
 
-    // Load image with stb_image forced to 3 channels (RGB)
-    int width, height, channels;
-    unsigned char* image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 3);
-    if (!image_data) {
-	fprintf(stderr, "Error: Failed to load image '%s': %s\n", filepath.c_str(), stbi_failure_reason());
-	should_skip = true;
-	return false;
+    auto ext = fs::path(filepath).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+    int width = 0, height = 0, channels = 3;
+    unsigned char* image_data = nullptr;
+    std::vector<uint8_t> decoded_buf;
+    bool needs_free_stbi = false;
+    bool needs_free_malloc = false;
+
+    if (ext == ".tif" || ext == ".tiff") {
+        if (load_tiff_file(filepath, 0, 0, decoded_buf, width, height)) {
+            image_data = decoded_buf.data();
+        }
+    } else if (ext == ".webp") {
+        if (load_webp_file(filepath, 0, 0, decoded_buf, width, height)) {
+            image_data = decoded_buf.data();
+        }
+    } else if (ext == ".png") {
+        int info_w, info_h, info_c;
+        if (stbi_info(filepath.c_str(), &info_w, &info_h, &info_c) && (long long)info_w * info_h > 25000000LL) {
+            if (load_png_file(filepath, 0, 0, decoded_buf, width, height)) {
+                image_data = decoded_buf.data();
+            }
+        } else {
+            image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 3);
+            if (image_data) needs_free_stbi = true;
+        }
+    } else {
+        image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 3);
+        if (image_data) needs_free_stbi = true;
+    }
+
+    if (!image_data || width <= 0 || height <= 0) {
+        fprintf(stderr, "Error: Failed to load image '%s'\n", filepath.c_str());
+        if (needs_free_stbi && image_data) stbi_image_free(image_data);
+        should_skip = true;
+        return false;
     }
     channels = 3;
-
-    // Check for zero width or height
-    if (width <= 0 || height <= 0) {
-	fprintf(stderr, "Error: Invalid image dimensions for '%s': %dx%d\n", filepath.c_str(), width, height);
-	stbi_image_free(image_data);
-	should_skip = true;
-	return false;
-    }
 
     // Read EXIF orientation and apply transformation if needed
     int orientation = get_exif_orientation(filepath);
     if (orientation > 1) {
-	unsigned char* rgb_data = (unsigned char*)malloc(width * height * 3);
-	memcpy(rgb_data, image_data, width * height * 3);
-	apply_orientation_transform(rgb_data, width, height, orientation);
-	stbi_image_free(image_data);
-	image_data = rgb_data;
+        unsigned char* rgb_data = (unsigned char*)malloc(width * height * 3);
+        memcpy(rgb_data, image_data, width * height * 3);
+        apply_orientation_transform(rgb_data, width, height, orientation);
+        if (needs_free_stbi) stbi_image_free(image_data);
+        image_data = rgb_data;
+        needs_free_stbi = false;
+        needs_free_malloc = true;
     }
 
     // Compute content hash using fast SIMD-vectorized 128-bit hash
@@ -607,21 +631,22 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
     // Check if this hash already exists (duplicate detection)
     bool has_existing = false;
     {
-	std::lock_guard<std::mutex> lock(db_mutex_);
-	if (begin_transaction()) {
-	    std::string val;
-	    has_existing = get_key_value(std::string(hash_str) + ":paths", val) ||
-	                   get_key_value(std::string(hash_str) + ":path", val);
-	    abort_transaction();
-	}
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        if (begin_transaction()) {
+            std::string val;
+            has_existing = get_key_value(std::string(hash_str) + ":paths", val) ||
+                           get_key_value(std::string(hash_str) + ":path", val);
+            abort_transaction();
+        }
     }
 
     if (has_existing) {
-	stbi_image_free(image_data);
-	write_tasks.emplace_back(WriteTask::ADD_PATH_FOR_HASH, std::string(hash_str), filepath);
-	write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, std::string(hash_str));
-	should_skip = true;
-	return true; // Not an error, just a duplicate
+        if (needs_free_stbi && image_data) stbi_image_free(image_data);
+        else if (needs_free_malloc && image_data) free(image_data);
+        write_tasks.emplace_back(WriteTask::ADD_PATH_FOR_HASH, std::string(hash_str), filepath);
+        write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, std::string(hash_str));
+        should_skip = true;
+        return true; // Not an error, just a duplicate
     }
 
     // Store file path as write task
@@ -643,9 +668,6 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 
     // Generate and store thumbnails
     std::vector<int> thumb_sizes = {32, 64, 128, 256, 512, 1024, 2048};
-    auto ext = fs::path(filepath).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
     bool thumbnails_generated = true;
 
     if (ext == ".jpg" || ext == ".jpeg") {
@@ -812,7 +834,11 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
         }
     }
 
-    stbi_image_free(image_data);
+    if (needs_free_stbi && image_data) {
+        stbi_image_free(image_data);
+    } else if (needs_free_malloc && image_data) {
+        free(image_data);
+    }
     return thumbnails_generated;
 }
 
@@ -1003,135 +1029,7 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
 }
 
 int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, StatusReporter& reporter) {
-
-    timer.start("Directory Scanning");
-    reporter.update_status("Scanning directory for images...");
-
-    // Count total image files first
-    std::vector<std::string> image_files;
-    try {
-	fs::recursive_directory_iterator it(directory), end;
-	while (it != end) {
-	    const auto& entry = *it;
-	    std::string path = fs::path(entry.path()).lexically_normal().string();
-	    if (entry.is_directory()) {
-		if (is_cache_or_db_path(path)) {
-		    it.disable_recursion_pending();
-		}
-	    } else if (entry.is_regular_file()) {
-		if (!is_cache_or_db_path(path) && is_image_file(path)) {
-		    image_files.push_back(path);
-		}
-	    }
-	    ++it;
-	}
-    } catch (const fs::filesystem_error& ex) {
-	return -1;
-    }
-
-    timer.stop("Directory Scanning");
-
-    if (image_files.empty()) {
-	reporter.update_status("No image files found");
-	return 0;
-    }
-
-    reporter.set_total_count(image_files.size());
-    reporter.update_status("Processing images...");
-
-    if (!begin_transaction()) {
-	return -1;
-    }
-
-    int processed_count = 0;
-    int skipped_count = 0;
-
-    timer.start("Image Processing");
-
-    for (size_t i = 0; i < image_files.size(); i++) {
-	const std::string& filepath = image_files[i];
-	reporter.set_current_count(i + 1);
-
-	timer.start("Image Loading");
-
-	// Load image with stb_image
-	int width, height, channels;
-	unsigned char* image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 0);
-	if (!image_data) {
-	    fprintf(stderr, "Error: Failed to load image '%s': %s\n", filepath.c_str(), stbi_failure_reason());
-	    skipped_count++;
-	    timer.stop("Image Loading");
-	    continue;
-	}
-
-	// Check for zero width or height
-	if (width <= 0 || height <= 0) {
-	    fprintf(stderr, "Error: Invalid image dimensions for '%s': %dx%d\n", filepath.c_str(), width, height);
-	    stbi_image_free(image_data);
-	    skipped_count++;
-	    timer.stop("Image Loading");
-	    continue;
-	}
-
-	timer.stop("Image Loading");
-	timer.start("Hash Computation");
-
-	// Compute content hash using fast SIMD-vectorized 128-bit hash
-	size_t data_size = width * height * channels;
-	XXH128_hash_t hash = XXH3_128bits(image_data, data_size);
-	char hash_str[33];
-	snprintf(hash_str, sizeof(hash_str), "%016llx%016llx",
-	         (unsigned long long)hash.high64, (unsigned long long)hash.low64);
-
-	timer.stop("Hash Computation");
-
-	// Check if this hash already exists (duplicate detection)
-	std::string path_key = std::string(hash_str) + ":path";
-	std::string existing_path;
-	if (get_key_value(path_key, existing_path)) {
-	    stbi_image_free(image_data);
-	    skipped_count++;
-	    continue;
-	}
-
-	timer.start("Database Update");
-
-	// Store file path and reverse lookup
-	if (!store_key_value(path_key, filepath) || !store_key_value("file:" + filepath, std::string(hash_str))) {
-	    stbi_image_free(image_data);
-	    continue;
-	}
-
-	timer.stop("Database Update");
-	timer.start("Thumbnail Generation");
-
-	// Generate and store thumbnails
-	bool thumbnails_ok = generate_thumbnails(filepath, hash_str, image_data, width, height, channels);
-
-	timer.stop("Thumbnail Generation");
-
-	stbi_image_free(image_data);
-
-	if (thumbnails_ok) {
-	    processed_count++;
-	} else {
-	    skipped_count++;
-	}
-    }
-
-    timer.stop("Image Processing");
-    timer.start("Database Commit");
-
-    bool success = commit_transaction();
-
-    timer.stop("Database Commit");
-
-    if (!success) {
-	return -1;
-    }
-
-    reporter.update_status("Scanning complete");
-    return processed_count;
+    return scan_directory_parallel(directory, timer, reporter, 1);
 }
 
 static std::vector<std::string> parse_paths(const std::string& val) {
