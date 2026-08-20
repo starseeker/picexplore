@@ -85,38 +85,6 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     menubar_->color(fl_rgb_color(28, 28, 28));
     menubar_->textcolor(fl_rgb_color(220, 220, 220));
     menubar_->selection_color(fl_rgb_color(60, 160, 255));
-    menubar_->add("Sort/Alphabetical (A-Z)",    0, menu_cb, (void*)1);
-    menubar_->add("Sort/Alphabetical (Z-A)",    0, menu_cb, (void*)2);
-    menubar_->add("Sort/File Size (Smallest)",  0, menu_cb, (void*)3);
-    menubar_->add("Sort/File Size (Largest)",   0, menu_cb, (void*)4);
-    menubar_->add("Sort/Pixel Area (Smallest)", 0, menu_cb, (void*)17);
-    menubar_->add("Sort/Pixel Area (Largest)",  0, menu_cb, (void*)18);
-    menubar_->add("Sort/Date (Oldest)",         0, menu_cb, (void*)5);
-    menubar_->add("Sort/Date (Newest)",         0, menu_cb, (void*)6);
-
-    menubar_->add("View/Layout/Justified Grid", FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO | FL_MENU_VALUE);
-    menubar_->add("View/Layout/Treemap",        FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO);
-
-    menubar_->add("View/Treemap Sizing/File Size",  0, menu_cb, (void*)22, FL_MENU_RADIO | FL_MENU_VALUE);
-    menubar_->add("View/Treemap Sizing/Pixel Area", 0, menu_cb, (void*)23, FL_MENU_RADIO);
-    menubar_->add("View/Treemap Sizing/Equal Size", 0, menu_cb, (void*)24, FL_MENU_RADIO);
-
-    menubar_->add("View/Treemap Style/File Type Colors", 0, menu_cb, (void*)25, FL_MENU_RADIO | FL_MENU_VALUE);
-    menubar_->add("View/Treemap Style/All Thumbnails",   0, menu_cb, (void*)26, FL_MENU_RADIO);
-
-    menubar_->add("View/Zoom In (Ctrl+Wheel Up)",    FL_CTRL | '=', menu_cb, (void*)7);
-    menubar_->add("View/Zoom Out (Ctrl+Wheel Down)", FL_CTRL | '-', menu_cb, (void*)8);
-    menubar_->add("View/Reset Zoom",                 FL_CTRL | '0', menu_cb, (void*)9);
-    menubar_->add("View/Navigator (Minimap)",        0,             menu_cb, (void*)19, FL_MENU_TOGGLE | FL_MENU_VALUE);
-    menubar_->add("View/Information Panel",          0,             menu_cb, (void*)10, FL_MENU_TOGGLE);
-
-    menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO);
-    menubar_->add("View/Info Panel Font Size/Medium (14pt)",  0, menu_cb, (void*)12, FL_MENU_RADIO);
-    menubar_->add("View/Info Panel Font Size/Large (18pt)",   0, menu_cb, (void*)13, FL_MENU_RADIO);
-    menubar_->add("View/Info Panel Font Size/X-Large (24pt)", 0, menu_cb, (void*)14, FL_MENU_RADIO);
-    menubar_->add("View/Info Panel Font Size/Custom...",      0, menu_cb, (void*)15, 0);
-
-    menubar_->add("View/Reset Directory Filter", FL_CTRL | 'r', menu_cb, (void*)16, 0);
 
     viewport_  = new VirtualViewport(0, MENU_H, w - SCROLL_W, vp_h, store_);
     scrollbar_ = new Fl_Scrollbar(w - SCROLL_W, MENU_H, SCROLL_W, vp_h);
@@ -325,7 +293,7 @@ void MainWindow::start() {
     watcher_->start(directory_, update_queue_);
 
     update_statusbar();
-    update_menu_states();
+    rebuild_menu();
 
     Fl::add_timeout(0.016, timer_cb, this);
 }
@@ -407,7 +375,7 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     scrollbar_->hide();
     info_panel_->set_single_image_mode(true);
     viewport_->resize(0, MENU_H, vp_w, vp_h); // Expand over scrollbar
-    update_menu_states();
+    rebuild_menu();
 }
 
 void MainWindow::navigate_single_image(int delta) {
@@ -471,7 +439,7 @@ void MainWindow::exit_single_image_mode() {
     
     last_visible_.clear();
     update_statusbar();
-    update_menu_states();
+    rebuild_menu();
     recompute_layout();
 
     size_t sel = viewport_->get_selected_image();
@@ -612,69 +580,88 @@ void MainWindow::update_statusbar() {
     statusbar_->redraw();
 }
 
-void MainWindow::update_menu_states() {
+void MainWindow::rebuild_menu() {
+    menubar_->clear();
+
+    bool is_single = (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE);
     bool is_treemap = (active_layout_ == LayoutEngine::LayoutType::TREEMAP);
-    bool is_grid = (viewport_->current_mode() == VirtualViewport::ViewMode::GRID);
+    int font_sz = info_panel_ ? info_panel_->get_font_size() : 14;
 
-    // List of menu paths to disable in Treemap mode
-    const char* treemap_disabled_sorts[] = {
-        "Sort/Alphabetical (A-Z)",
-        "Sort/Alphabetical (Z-A)",
-        "Sort/Date (Oldest)",
-        "Sort/Date (Newest)",
-        nullptr
-    };
-
-    for (int i = 0; treemap_disabled_sorts[i]; ++i) {
-        Fl_Menu_Item* item = const_cast<Fl_Menu_Item*>(menubar_->find_item(treemap_disabled_sorts[i]));
-        if (item) {
-            if (is_treemap || !is_grid) {
-                item->deactivate();
-            } else {
-                item->activate();
-            }
-        }
+    if (is_single) {
+        menubar_->add("View/Exit Viewer (Esc)", FL_Escape, menu_cb, (void*)30);
+        menubar_->add("View/Information Panel", 0, menu_cb, (void*)10, FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO | (font_sz == 11 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/Medium (14pt)",  0, menu_cb, (void*)12, FL_MENU_RADIO | (font_sz == 14 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/Large (18pt)",   0, menu_cb, (void*)13, FL_MENU_RADIO | (font_sz == 18 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/X-Large (24pt)", 0, menu_cb, (void*)14, FL_MENU_RADIO | (font_sz == 24 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/Custom...",      0, menu_cb, (void*)15, 0);
+        menubar_->add("View/Reset Directory Filter", FL_CTRL | 'r', menu_cb, (void*)16, 0);
+        menubar_->redraw();
+        return;
     }
 
-    // Treemap specific submenus in View
-    const char* treemap_only_menus[] = {
-        "View/Treemap Sizing/File Size",
-        "View/Treemap Sizing/Pixel Area",
-        "View/Treemap Sizing/Equal Size",
-        "View/Treemap Style/File Type Colors",
-        "View/Treemap Style/All Thumbnails",
-        nullptr
-    };
+    if (is_treemap) {
+        // Sort menu for Treemap mode: only relevant sizing metrics (File Size, Pixel Area, Equal Size)
+        int val_fs = (treemap_metric_ == LayoutEngine::TreemapMetric::FILE_SIZE) ? FL_MENU_VALUE : 0;
+        int val_pa = (treemap_metric_ == LayoutEngine::TreemapMetric::PIXEL_AREA) ? FL_MENU_VALUE : 0;
+        int val_eq = (treemap_metric_ == LayoutEngine::TreemapMetric::EQUAL_SIZE) ? FL_MENU_VALUE : 0;
 
-    for (int i = 0; treemap_only_menus[i]; ++i) {
-        Fl_Menu_Item* item = const_cast<Fl_Menu_Item*>(menubar_->find_item(treemap_only_menus[i]));
-        if (item) {
-            if (!is_treemap || !is_grid) {
-                item->deactivate();
-            } else {
-                item->activate();
-            }
-        }
-    }
+        menubar_->add("Sort/File Size",  0, menu_cb, (void*)22, FL_MENU_RADIO | val_fs);
+        menubar_->add("Sort/Pixel Area", 0, menu_cb, (void*)23, FL_MENU_RADIO | val_pa);
+        menubar_->add("Sort/Equal Size", 0, menu_cb, (void*)24, FL_MENU_RADIO | val_eq);
 
-    // Zoom and Minimap are only applicable in Justified Grid
-    const char* justified_only_menus[] = {
-        "View/Zoom In (Ctrl+Wheel Up)",
-        "View/Zoom Out (Ctrl+Wheel Down)",
-        "View/Reset Zoom",
-        "View/Navigator (Minimap)",
-        nullptr
-    };
+        // View menu for Treemap mode
+        menubar_->add("View/Layout/Justified Grid", FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO);
+        menubar_->add("View/Layout/Treemap",        FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO | FL_MENU_VALUE);
 
-    for (int i = 0; justified_only_menus[i]; ++i) {
-        Fl_Menu_Item* item = const_cast<Fl_Menu_Item*>(menubar_->find_item(justified_only_menus[i]));
-        if (item) {
-            if (is_treemap || !is_grid) {
-                item->deactivate();
-            } else {
-                item->activate();
-            }
-        }
+        int val_fc = (treemap_style_ == VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS) ? FL_MENU_VALUE : 0;
+        int val_at = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS) ? FL_MENU_VALUE : 0;
+        menubar_->add("View/Treemap Style/File Type Colors", 0, menu_cb, (void*)25, FL_MENU_RADIO | val_fc);
+        menubar_->add("View/Treemap Style/All Thumbnails",   0, menu_cb, (void*)26, FL_MENU_RADIO | val_at);
+
+        menubar_->add("View/Information Panel", 0, menu_cb, (void*)10, FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO | (font_sz == 11 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/Medium (14pt)",  0, menu_cb, (void*)12, FL_MENU_RADIO | (font_sz == 14 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/Large (18pt)",   0, menu_cb, (void*)13, FL_MENU_RADIO | (font_sz == 18 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/X-Large (24pt)", 0, menu_cb, (void*)14, FL_MENU_RADIO | (font_sz == 24 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/Custom...",      0, menu_cb, (void*)15, 0);
+        menubar_->add("View/Reset Directory Filter", FL_CTRL | 'r', menu_cb, (void*)16, 0);
+    } else {
+        // Justified Grid mode
+        int val_az  = (current_sort_criteria_ == ImageStore::SortCriteria::ALPHABETICAL && sort_ascending_)  ? FL_MENU_VALUE : 0;
+        int val_za  = (current_sort_criteria_ == ImageStore::SortCriteria::ALPHABETICAL && !sort_ascending_) ? FL_MENU_VALUE : 0;
+        int val_fss = (current_sort_criteria_ == ImageStore::SortCriteria::FILE_SIZE    && sort_ascending_)  ? FL_MENU_VALUE : 0;
+        int val_fsl = (current_sort_criteria_ == ImageStore::SortCriteria::FILE_SIZE    && !sort_ascending_) ? FL_MENU_VALUE : 0;
+        int val_pas = (current_sort_criteria_ == ImageStore::SortCriteria::PIXEL_AREA  && sort_ascending_)  ? FL_MENU_VALUE : 0;
+        int val_pal = (current_sort_criteria_ == ImageStore::SortCriteria::PIXEL_AREA  && !sort_ascending_) ? FL_MENU_VALUE : 0;
+        int val_do  = (current_sort_criteria_ == ImageStore::SortCriteria::TIMESTAMP   && sort_ascending_)  ? FL_MENU_VALUE : 0;
+        int val_dn  = (current_sort_criteria_ == ImageStore::SortCriteria::TIMESTAMP   && !sort_ascending_) ? FL_MENU_VALUE : 0;
+
+        menubar_->add("Sort/Alphabetical (A-Z)",    0, menu_cb, (void*)1,  FL_MENU_RADIO | val_az);
+        menubar_->add("Sort/Alphabetical (Z-A)",    0, menu_cb, (void*)2,  FL_MENU_RADIO | val_za);
+        menubar_->add("Sort/File Size (Smallest)",  0, menu_cb, (void*)3,  FL_MENU_RADIO | val_fss);
+        menubar_->add("Sort/File Size (Largest)",   0, menu_cb, (void*)4,  FL_MENU_RADIO | val_fsl);
+        menubar_->add("Sort/Pixel Area (Smallest)", 0, menu_cb, (void*)17, FL_MENU_RADIO | val_pas);
+        menubar_->add("Sort/Pixel Area (Largest)",  0, menu_cb, (void*)18, FL_MENU_RADIO | val_pal);
+        menubar_->add("Sort/Date (Oldest)",         0, menu_cb, (void*)5,  FL_MENU_RADIO | val_do);
+        menubar_->add("Sort/Date (Newest)",         0, menu_cb, (void*)6,  FL_MENU_RADIO | val_dn);
+
+        menubar_->add("View/Layout/Justified Grid", FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO | FL_MENU_VALUE);
+        menubar_->add("View/Layout/Treemap",        FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO);
+
+        menubar_->add("View/Zoom In (Ctrl+Wheel Up)",    FL_CTRL | '=', menu_cb, (void*)7);
+        menubar_->add("View/Zoom Out (Ctrl+Wheel Down)", FL_CTRL | '-', menu_cb, (void*)8);
+        menubar_->add("View/Reset Zoom",                 FL_CTRL | '0', menu_cb, (void*)9);
+        menubar_->add("View/Navigator (Minimap)",        0,             menu_cb, (void*)19, FL_MENU_TOGGLE | (viewport_->show_minimap() ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Information Panel",          0,             menu_cb, (void*)10, FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0));
+
+        menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO | (font_sz == 11 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/Medium (14pt)",  0, menu_cb, (void*)12, FL_MENU_RADIO | (font_sz == 14 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/Large (18pt)",   0, menu_cb, (void*)13, FL_MENU_RADIO | (font_sz == 18 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/X-Large (24pt)", 0, menu_cb, (void*)14, FL_MENU_RADIO | (font_sz == 24 ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Info Panel Font Size/Custom...",      0, menu_cb, (void*)15, 0);
+
+        menubar_->add("View/Reset Directory Filter", FL_CTRL | 'r', menu_cb, (void*)16, 0);
     }
 
     menubar_->redraw();
@@ -858,16 +845,7 @@ void MainWindow::set_layout_mode(LayoutEngine::LayoutType type) {
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
 
-    // Sync menu radio checkmark
-    if (type == LayoutEngine::LayoutType::JUSTIFIED) {
-        Fl_Menu_Item* mi = const_cast<Fl_Menu_Item*>(menubar_->find_item("View/Layout/Justified Grid"));
-        if (mi) mi->setonly();
-    } else if (type == LayoutEngine::LayoutType::TREEMAP) {
-        Fl_Menu_Item* mi = const_cast<Fl_Menu_Item*>(menubar_->find_item("View/Layout/Treemap"));
-        if (mi) mi->setonly();
-    }
-
-    update_menu_states();
+    rebuild_menu();
     resize(x(), y(), w(), h());
     recompute_layout(true);
 }
@@ -876,6 +854,7 @@ void MainWindow::set_treemap_metric(LayoutEngine::TreemapMetric metric) {
     treemap_metric_ = metric;
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
         layout_dirty_ = true;
+        rebuild_menu();
         recompute_layout(true);
     }
 }
@@ -884,6 +863,7 @@ void MainWindow::set_treemap_style(VirtualViewport::TreemapRenderStyle style) {
     if (treemap_style_ == style) return;
     treemap_style_ = style;
     viewport_->set_treemap_render_style(style);
+    rebuild_menu();
     resize(x(), y(), w(), h());
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
         reprioritize_thumbnails();
@@ -1273,18 +1253,20 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 9: win->target_height_ = 150.0; win->layout_dirty_ = true; break;
         case 10:
             win->info_panel_visible_ = !win->info_panel_visible_;
+            win->rebuild_menu();
             win->resize(win->x(), win->y(), win->w(), win->h());
             break;
-        case 11: win->info_panel_->set_font_size(11); break;
-        case 12: win->info_panel_->set_font_size(14); break;
-        case 13: win->info_panel_->set_font_size(18); break;
-        case 14: win->info_panel_->set_font_size(24); break;
+        case 11: win->info_panel_->set_font_size(11); win->rebuild_menu(); break;
+        case 12: win->info_panel_->set_font_size(14); win->rebuild_menu(); break;
+        case 13: win->info_panel_->set_font_size(18); win->rebuild_menu(); break;
+        case 14: win->info_panel_->set_font_size(24); win->rebuild_menu(); break;
         case 15: {
             const char* val = fl_input("Enter font size (8\u201348):", "14");
             if (val) {
                 int sz = std::atoi(val);
                 if (sz >= 8 && sz <= 48) {
                     win->info_panel_->set_font_size(sz);
+                    win->rebuild_menu();
                 } else {
                     fl_alert("Please enter a size between 8 and 48.");
                 }
@@ -1293,30 +1275,25 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         }
         case 16: win->reset_directory_filter(); break;
         case 19: {
-            const Fl_Menu_Item* m = win->menubar_->mvalue();
-            bool enabled = m ? (m->value() != 0) : true;
+            bool enabled = !win->viewport_->show_minimap();
             win->viewport_->set_show_minimap(enabled);
+            win->rebuild_menu();
             break;
         }
+        case 30:
+            win->exit_single_image_mode();
+            return;
         default: return;
     }
     
     if ((choice >= 1 && choice <= 6) || choice == 17 || choice == 18) {
-        if (win->active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
-            if (choice == 3 || choice == 4) {
-                win->set_treemap_metric(LayoutEngine::TreemapMetric::FILE_SIZE);
-                Fl_Menu_Item* mi = const_cast<Fl_Menu_Item*>(win->menubar_->find_item("View/Treemap Sizing/File Size"));
-                if (mi) mi->setonly();
-            } else if (choice == 17 || choice == 18) {
-                win->set_treemap_metric(LayoutEngine::TreemapMetric::PIXEL_AREA);
-                Fl_Menu_Item* mi = const_cast<Fl_Menu_Item*>(win->menubar_->find_item("View/Treemap Sizing/Pixel Area"));
-                if (mi) mi->setonly();
-            }
-        }
+        win->current_sort_criteria_ = criteria;
+        win->sort_ascending_ = ascending;
         win->store_.sort_entries(criteria, ascending);
         win->layout_dirty_ = true;
         win->viewport_->set_scroll_offset(0);
         win->recompute_layout(true);
+        win->rebuild_menu();
     }
 }
 

@@ -59,6 +59,8 @@ private:
     LayoutEngine::LayoutType active_layout_ = LayoutEngine::LayoutType::JUSTIFIED;
     LayoutEngine::TreemapMetric treemap_metric_ = LayoutEngine::TreemapMetric::FILE_SIZE;
     VirtualViewport::TreemapRenderStyle treemap_style_ = VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS;
+    ImageStore::SortCriteria current_sort_criteria_ = ImageStore::SortCriteria::ALPHABETICAL;
+    bool sort_ascending_ = true;
 
     TileManager*     tile_manager_ = nullptr;
     VirtualViewport* viewport_;
@@ -86,7 +88,7 @@ private:
     void apply_directory_filter(const std::string& dir);
     void reset_directory_filter();
     void update_statusbar();
-    void update_menu_states();
+    void rebuild_menu();
     void recompute_layout(bool reprioritize = true);
 
     std::vector<std::string> reconcile_and_get_duplicates(const std::string& hash, const std::string& current_filepath);
