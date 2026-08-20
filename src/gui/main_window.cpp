@@ -1017,26 +1017,30 @@ void MainWindow::reprioritize_thumbnails() {
             for (const auto& box : layout_result_.boxes) {
                 if (box.w < min_size || box.h < min_size) continue;
                 const auto& entry = store_.get(box.image_index);
-                if (all_thumbs) {
-                    if (entry.square_thumb.rgb_data.empty() && entry.last_requested_generation < current_generation_) {
-                        view_changed = true;
-                        break;
-                    }
-                } else {
-                    double max_dim = std::max(box.w, box.h);
-                    ThumbQuality needed = (max_dim <= 64) ? ThumbQuality::SMALL :
-                                          (max_dim <= 128) ? ThumbQuality::MEDIUM :
-                                          (max_dim <= 256) ? ThumbQuality::LARGE :
-                                          (max_dim <= 512) ? ThumbQuality::XLARGE :
-                                          (max_dim <= 1024) ? static_cast<ThumbQuality>(1024) : ThumbQuality::FULL;
-                    bool size_mismatch = (entry.scaled.layout_width != static_cast<int>(box.w) ||
-                                          entry.scaled.layout_height != static_cast<int>(box.h));
-                    bool needs_upgrade = (entry.scaled.quality < needed);
-                    bool missing_or_mismatch = (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch || needs_upgrade);
-                    if (missing_or_mismatch && entry.last_requested_generation < current_generation_) {
-                        view_changed = true;
-                        break;
-                    }
+                double max_dim = std::max(box.w, box.h);
+                ThumbQuality needed = (max_dim <= 64) ? ThumbQuality::SMALL :
+                                      (max_dim <= 128) ? ThumbQuality::MEDIUM :
+                                      (max_dim <= 256) ? ThumbQuality::LARGE :
+                                      (max_dim <= 512) ? ThumbQuality::XLARGE :
+                                      (max_dim <= 1024) ? static_cast<ThumbQuality>(1024) : ThumbQuality::FULL;
+
+                int current_max_res = 0;
+                if (!entry.square_thumb.rgb_data.empty()) {
+                    current_max_res = std::max(current_max_res, std::max(entry.square_thumb.width, entry.square_thumb.height));
+                }
+                if (entry.best_quality != ThumbQuality::NONE && !entry.scaled.rgb_data.empty()) {
+                    current_max_res = std::max(current_max_res, std::max(entry.scaled.width, entry.scaled.height));
+                }
+                if (entry.best_quality != ThumbQuality::NONE && !entry.decoded.rgb_data.empty()) {
+                    current_max_res = std::max(current_max_res, std::max(entry.decoded.width, entry.decoded.height));
+                }
+
+                bool needs_upgrade = (current_max_res < static_cast<int>(needed));
+                bool missing = (current_max_res == 0);
+
+                if ((needs_upgrade || missing) && entry.last_requested_generation < current_generation_) {
+                    view_changed = true;
+                    break;
                 }
             }
         }
@@ -1075,32 +1079,37 @@ void MainWindow::reprioritize_thumbnails() {
 
         for (const auto& item : req_items) {
             const auto& entry = store_.get(item.idx);
+            double max_dim = std::max(item.w, item.h);
+            ThumbQuality needed = (max_dim <= 64) ? ThumbQuality::SMALL :
+                                  (max_dim <= 128) ? ThumbQuality::MEDIUM :
+                                  (max_dim <= 256) ? ThumbQuality::LARGE :
+                                  (max_dim <= 512) ? ThumbQuality::XLARGE :
+                                  (max_dim <= 1024) ? static_cast<ThumbQuality>(1024) : ThumbQuality::FULL;
 
-            if (all_thumbs) {
-                bool missing_square = entry.square_thumb.rgb_data.empty();
-                if (missing_square && entry.last_requested_generation < current_generation_) {
+            int current_max_res = 0;
+            if (!entry.square_thumb.rgb_data.empty()) {
+                current_max_res = std::max(current_max_res, std::max(entry.square_thumb.width, entry.square_thumb.height));
+            }
+            if (entry.best_quality != ThumbQuality::NONE && !entry.scaled.rgb_data.empty()) {
+                current_max_res = std::max(current_max_res, std::max(entry.scaled.width, entry.scaled.height));
+            }
+            if (entry.best_quality != ThumbQuality::NONE && !entry.decoded.rgb_data.empty()) {
+                current_max_res = std::max(current_max_res, std::max(entry.decoded.width, entry.decoded.height));
+            }
+
+            bool needs_upgrade = (current_max_res < static_cast<int>(needed));
+            bool missing = (current_max_res == 0);
+
+            if (all_thumbs && max_dim <= 128) {
+                if (missing && entry.last_requested_generation < current_generation_) {
                     store_.get(item.idx).last_requested_generation = current_generation_;
-                    ThumbQuality sq_q = (std::max(item.w, item.h) <= 64.0) ? ThumbQuality::SQUARE_64 : ThumbQuality::SQUARE_128;
+                    ThumbQuality sq_q = (max_dim <= 64.0) ? ThumbQuality::SQUARE_64 : ThumbQuality::SQUARE_128;
                     pipeline_->request_thumbnail(item.idx, entry.filepath, entry.content_hash,
                                                  sq_q, true, current_generation_,
                                                  static_cast<int>(item.w), static_cast<int>(item.h));
                 }
             } else {
-                ThumbQuality needed = ThumbQuality::SMALL;
-                double max_dim = std::max(item.w, item.h);
-                if (max_dim <= 64)       needed = ThumbQuality::SMALL;
-                else if (max_dim <= 128) needed = ThumbQuality::MEDIUM;
-                else if (max_dim <= 256) needed = ThumbQuality::LARGE;
-                else if (max_dim <= 512) needed = ThumbQuality::XLARGE;
-                else if (max_dim <= 1024) needed = static_cast<ThumbQuality>(1024);
-                else                      needed = ThumbQuality::FULL;
-
-                bool size_mismatch = (entry.scaled.layout_width  != static_cast<int>(item.w) ||
-                                      entry.scaled.layout_height != static_cast<int>(item.h));
-                bool needs_upgrade = (entry.scaled.quality < needed);
-                bool missing_or_mismatch = (entry.best_quality == ThumbQuality::NONE || entry.scaled.rgb_data.empty() || size_mismatch || needs_upgrade);
-
-                if (missing_or_mismatch && entry.last_requested_generation < current_generation_) {
+                if ((needs_upgrade || missing) && entry.last_requested_generation < current_generation_) {
                     store_.get(item.idx).last_requested_generation = current_generation_;
                     ThumbQuality req_quality = std::max(needed, entry.best_quality);
                     pipeline_->request_thumbnail(item.idx, entry.filepath, entry.content_hash,

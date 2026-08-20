@@ -355,18 +355,33 @@ void VirtualViewport::draw_treemap() {
 
         const uint8_t* src_thumb = nullptr;
         int src_w = 0, src_h = 0;
-        if (all_thumbs_mode && !entry.square_thumb.rgb_data.empty() && entry.square_thumb.width > 0 && entry.square_thumb.height > 0) {
+        int best_res = 0;
+
+        if (!entry.square_thumb.rgb_data.empty() && entry.square_thumb.width > 0 && entry.square_thumb.height > 0) {
             src_thumb = entry.square_thumb.rgb_data.data();
             src_w = entry.square_thumb.width;
             src_h = entry.square_thumb.height;
-        } else if (entry.best_quality != ThumbQuality::NONE && !entry.scaled.rgb_data.empty() && entry.scaled.width > 0 && entry.scaled.height > 0) {
-            src_thumb = entry.scaled.rgb_data.data();
-            src_w = entry.scaled.width;
-            src_h = entry.scaled.height;
-        } else if (entry.best_quality != ThumbQuality::NONE && !entry.decoded.rgb_data.empty() && entry.decoded.width > 0 && entry.decoded.height > 0) {
-            src_thumb = entry.decoded.rgb_data.data();
-            src_w = entry.decoded.width;
-            src_h = entry.decoded.height;
+            best_res = std::max(src_w, src_h);
+        }
+
+        if (entry.best_quality != ThumbQuality::NONE && !entry.scaled.rgb_data.empty() && entry.scaled.width > 0 && entry.scaled.height > 0) {
+            int cur_res = std::max(entry.scaled.width, entry.scaled.height);
+            if (cur_res > best_res) {
+                src_thumb = entry.scaled.rgb_data.data();
+                src_w = entry.scaled.width;
+                src_h = entry.scaled.height;
+                best_res = cur_res;
+            }
+        }
+
+        if (entry.best_quality != ThumbQuality::NONE && !entry.decoded.rgb_data.empty() && entry.decoded.width > 0 && entry.decoded.height > 0) {
+            int cur_res = std::max(entry.decoded.width, entry.decoded.height);
+            if (cur_res > best_res) {
+                src_thumb = entry.decoded.rgb_data.data();
+                src_w = entry.decoded.width;
+                src_h = entry.decoded.height;
+                best_res = cur_res;
+            }
         }
 
         if (all_thumbs_mode) {
