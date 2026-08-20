@@ -62,7 +62,7 @@ void ThumbnailPipeline::request_thumbnail(size_t image_index, const std::string&
         normal_queue_.enqueue(req);
     }
     pending_requests_++;
-    wake_cv_.notify_one();
+    wake_cv_.notify_all();
 }
 
 void ThumbnailPipeline::worker_thread() {
@@ -96,11 +96,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
     try {
         std::string hash = req.hash;
         if (hash.empty() && db_.is_open()) {
-            std::lock_guard<std::mutex> lock(db_.get_mutex());
-            if (db_.begin_transaction()) {
-                db_.get_hash_for_path(req.filepath, hash);
-                db_.abort_transaction();
-            }
+            db_.get_hash_for_path_concurrent(req.filepath, hash);
         }
 
         std::vector<uint8_t> jpeg_data;
@@ -108,42 +104,38 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
         ThumbQuality found_quality = ThumbQuality::NONE;
 
         if (!hash.empty() && db_.is_open()) {
-            std::lock_guard<std::mutex> lock(db_.get_mutex());
-            if (db_.begin_transaction()) {
-                if (req.target_quality == ThumbQuality::SQUARE_128 || req.target_quality == ThumbQuality::SQUARE_64) {
-                    std::string sq_key = (req.target_quality == ThumbQuality::SQUARE_64) ? (hash + ":sq64") : (hash + ":sq128");
-                    if (db_.get_key_data(sq_key, jpeg_data)) {
-                        target_found = true;
-                        found_quality = req.target_quality;
-                    } else if (db_.get_key_data(hash + ":sq128", jpeg_data)) {
-                        target_found = true;
-                        found_quality = ThumbQuality::SQUARE_128;
-                    } else if (db_.get_key_data(hash + ":sq64", jpeg_data)) {
-                        target_found = true;
-                        found_quality = ThumbQuality::SQUARE_64;
-                    }
+            if (req.target_quality == ThumbQuality::SQUARE_128 || req.target_quality == ThumbQuality::SQUARE_64) {
+                std::string sq_key = (req.target_quality == ThumbQuality::SQUARE_64) ? (hash + ":sq64") : (hash + ":sq128");
+                if (db_.get_key_data_concurrent(sq_key, jpeg_data)) {
+                    target_found = true;
+                    found_quality = req.target_quality;
+                } else if (db_.get_key_data_concurrent(hash + ":sq128", jpeg_data)) {
+                    target_found = true;
+                    found_quality = ThumbQuality::SQUARE_128;
+                } else if (db_.get_key_data_concurrent(hash + ":sq64", jpeg_data)) {
+                    target_found = true;
+                    found_quality = ThumbQuality::SQUARE_64;
                 }
+            }
 
-                if (!target_found) {
-                    // 1. Try exact target quality first
-                    std::string key = hash + ":" + std::to_string(static_cast<int>(req.target_quality));
-                    if (db_.get_key_data(key, jpeg_data)) {
-                        target_found = true;
-                        found_quality = req.target_quality;
-                    } else {
-                        // 2. Try best available quality in DB: check sizes from largest down to smallest
-                        std::vector<int> candidate_sizes = {2048, 1024, 512, 256, 128, 64, 32};
-                        for (int sz : candidate_sizes) {
-                            std::string cand_key = hash + ":" + std::to_string(sz);
-                            if (db_.get_key_data(cand_key, jpeg_data)) {
-                                target_found = true;
-                                found_quality = static_cast<ThumbQuality>(sz);
-                                break;
-                            }
+            if (!target_found) {
+                // 1. Try exact target quality first
+                std::string key = hash + ":" + std::to_string(static_cast<int>(req.target_quality));
+                if (db_.get_key_data_concurrent(key, jpeg_data)) {
+                    target_found = true;
+                    found_quality = req.target_quality;
+                } else {
+                    // 2. Try best available quality in DB: check sizes from largest down to smallest
+                    std::vector<int> candidate_sizes = {2048, 1024, 512, 256, 128, 64, 32};
+                    for (int sz : candidate_sizes) {
+                        std::string cand_key = hash + ":" + std::to_string(sz);
+                        if (db_.get_key_data_concurrent(cand_key, jpeg_data)) {
+                            target_found = true;
+                            found_quality = static_cast<ThumbQuality>(sz);
+                            break;
                         }
                     }
                 }
-                db_.abort_transaction();
             }
         }
 

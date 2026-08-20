@@ -146,13 +146,13 @@ void ImageStore::remove_image(const std::string& filepath) {
     }
     lru_map_ = std::move(new_lru_map);
     
-    std::vector<size_t> new_visible;
-    for (size_t vis_idx : currently_visible_) {
+    std::unordered_set<size_t> new_visible;
+    for (size_t vis_idx : currently_visible_set_) {
         if (vis_idx == index) continue;
-        if (vis_idx > index) new_visible.push_back(vis_idx - 1);
-        else new_visible.push_back(vis_idx);
+        if (vis_idx > index) new_visible.insert(vis_idx - 1);
+        else new_visible.insert(vis_idx);
     }
-    currently_visible_ = std::move(new_visible);
+    currently_visible_set_ = std::move(new_visible);
     
     for (size_t i = 0; i < entries_.size(); ++i) {
         entries_[i].index = i;
@@ -423,7 +423,7 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
     aspects_dirty_ = true;
     
     // Clear visibility state because indices changed completely
-    currently_visible_.clear();
+    currently_visible_set_.clear();
     
     // We cannot just clear lru_list_ because the entries still hold memory.
     // If we clear lru_list_, the eviction engine cannot free the memory of sorted images,
@@ -456,19 +456,13 @@ void ImageStore::update_lru(size_t index) {
 }
 
 void ImageStore::mark_visible(const std::vector<size_t>& visible_indices) {
-    currently_visible_ = visible_indices;
-    // Mark these as recently used
-    for (size_t idx : visible_indices) {
-        update_lru(idx);
-    }
+    currently_visible_set_.clear();
+    currently_visible_set_.insert(visible_indices.begin(), visible_indices.end());
 }
 
 void ImageStore::evict_memory_if_needed() {
-    decoded_rgb_memory_used_ = 0;
-    scaled_rgb_memory_used_ = 0;
-    for (const auto& entry : entries_) {
-        decoded_rgb_memory_used_ += entry.decoded.rgb_data.size();
-        scaled_rgb_memory_used_ += entry.scaled.rgb_data.size();
+    if (decoded_rgb_memory_used_ <= MAX_DECODED_MEMORY && scaled_rgb_memory_used_ <= MAX_SCALED_MEMORY) {
+        return;
     }
 
     while ((decoded_rgb_memory_used_ > MAX_DECODED_MEMORY || 
@@ -478,11 +472,12 @@ void ImageStore::evict_memory_if_needed() {
         bool found = false;
         for (auto it = lru_list_.rbegin(); it != lru_list_.rend(); ++it) {
             size_t idx = *it;
-            if (std::find(currently_visible_.begin(), currently_visible_.end(), idx) == currently_visible_.end()) {
+            if (currently_visible_set_.find(idx) == currently_visible_set_.end()) {
                 // Evict this one
                 auto& entry = entries_[idx];
                 decoded_rgb_memory_used_ -= entry.decoded.rgb_data.size();
                 scaled_rgb_memory_used_ -= entry.scaled.rgb_data.size();
+                decoded_rgb_memory_used_ -= entry.square_thumb.rgb_data.size();
                 
                 entry.decoded.rgb_data.clear();
                 entry.decoded.rgb_data.shrink_to_fit();
@@ -491,7 +486,6 @@ void ImageStore::evict_memory_if_needed() {
                 entry.decoded.quality = ThumbQuality::NONE;
                 entry.best_quality = ThumbQuality::NONE; 
                 
-                decoded_rgb_memory_used_ -= entry.square_thumb.rgb_data.size();
                 entry.square_thumb.rgb_data.clear();
                 entry.square_thumb.rgb_data.shrink_to_fit();
                 entry.square_thumb.width = 0;
@@ -507,8 +501,10 @@ void ImageStore::evict_memory_if_needed() {
                 entry.scaled.quality = ThumbQuality::NONE;
                 
                 auto map_it = lru_map_.find(idx);
-                lru_list_.erase(map_it->second);
-                lru_map_.erase(map_it);
+                if (map_it != lru_map_.end()) {
+                    lru_list_.erase(map_it->second);
+                    lru_map_.erase(map_it);
+                }
                 
                 found = true;
                 break;

@@ -136,7 +136,9 @@ class DatabaseManager {
 	bool delete_key(const std::string& key);
 	bool get_key_value(const std::string& key, std::string& value);
 	bool get_key_data(const std::string& key, std::vector<uint8_t>& data);
+	bool get_key_data_concurrent(const std::string& key, std::vector<uint8_t>& data) const;
 	bool get_hash_for_path(const std::string& filepath, std::string& hash_out);
+	bool get_hash_for_path_concurrent(const std::string& filepath, std::string& hash_out) const;
 	std::vector<std::string> get_paths_for_hash(const std::string& hash);
 	bool set_paths_for_hash(const std::string& hash, const std::vector<std::string>& paths);
 	bool add_path_for_hash(const std::string& hash, const std::string& filepath);
@@ -146,6 +148,7 @@ class DatabaseManager {
 	bool store_image_metadata(const std::string& hash, const ImageMetadata& meta);
 	bool get_image_metadata(const std::string& hash, ImageMetadata& meta);
 	bool is_open() const { return is_open_; }
+	MDB_env* get_env() const { return env_; }
 	std::mutex& get_mutex() { return db_mutex_; }
 
 	// Image processing helper

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <list>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include "update_events.h"
 
@@ -113,7 +114,7 @@ private:
     mutable bool aspects_dirty_ = true;
 
     // To manage memory budget, we track LRU of DecodedThumb and ScaledImage
-    std::vector<size_t> currently_visible_;
+    std::unordered_set<size_t> currently_visible_set_;
     
     // Configurable memory budgets (in bytes)
     size_t max_memory_bytes_;

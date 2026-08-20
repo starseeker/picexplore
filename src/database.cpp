@@ -208,6 +208,44 @@ bool DatabaseManager::get_key_data(const std::string& key, std::vector<uint8_t>&
     return false;
 }
 
+bool DatabaseManager::get_key_data_concurrent(const std::string& key, std::vector<uint8_t>& data) const {
+    if (!is_open_ || !env_) return false;
+
+    MDB_txn* read_txn = nullptr;
+    if (mdb_txn_begin(env_, nullptr, MDB_RDONLY, &read_txn) != 0) {
+        return false;
+    }
+
+    MDB_dbi dbi;
+    if (mdb_dbi_open(read_txn, nullptr, 0, &dbi) != 0) {
+        mdb_txn_abort(read_txn);
+        return false;
+    }
+
+    MDB_val k, v;
+    k.mv_data = (void*)key.c_str();
+    k.mv_size = key.length();
+
+    bool found = false;
+    if (mdb_get(read_txn, dbi, &k, &v) == 0) {
+        data.assign((uint8_t*)v.mv_data, (uint8_t*)v.mv_data + v.mv_size);
+        found = true;
+    }
+
+    mdb_txn_abort(read_txn);
+    return found;
+}
+
+bool DatabaseManager::get_hash_for_path_concurrent(const std::string& filepath, std::string& hash_out) const {
+    std::string key = "file:" + filepath;
+    std::vector<uint8_t> data;
+    if (get_key_data_concurrent(key, data)) {
+        hash_out.assign((char*)data.data(), data.size());
+        return true;
+    }
+    return false;
+}
+
 int DatabaseManager::calculate_scale_factor(int image_width, int image_height, int target_width, int target_height) {
     if (target_width == 0 || target_height == 0) return 1;
     int scale_x = image_width / target_width;
