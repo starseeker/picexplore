@@ -3,8 +3,11 @@
 ![PicExplore GUI viewing NARA images with default justified layout](doc/nara_example.png)
 *Justified Grid Layout: fluid, multi-resolution row-based photo gallery.*
 
-![PicExplore GUI viewing NARA images with treemap](doc/nara_treemap.png)
-*Squarified Treemap Layout: full-collection thumbnail mosaic proportionally weighted by file size or pixel dimensions.*
+![PicExplore GUI viewing NARA images with flat treemap](doc/nara_treemap.png)
+*Flat Squarified Treemap: full-collection thumbnail mosaic proportionally weighted by file size or pixel dimensions.*
+
+![PicExplore GUI viewing NARA images with hierarchical treemap](doc/nara_hierarchy_treemap.png)
+*Hierarchical (Nested) Treemap: multi-level directory clustering with depth-themed container frames, folder headers, and square thumbnail mosaics.*
 
 ![PicExplore GUI viewing large NARA image](doc/nara_large_image_viewing.png)
 *Single-Image Deep Zoom: full-resolution inspection with level-of-detail (LOD) tiling and interactive minimap navigator.*
@@ -13,7 +16,7 @@
 
 **PicExplore** is a high-performance, lightweight image browser, content-based deduplicator, batch scanner, and PDF gallery generator for local photo collections.
 
-It combines an interactive FLTK GUI featuring Flickr-style justified layouts, squarified treemap visualizations, multi-resolution progressive thumbnail streaming, and deep-zoom tiling with high-throughput headless batch tools backed by an embedded LMDB database.
+It combines an interactive FLTK GUI featuring Flickr-style justified layouts, flat and hierarchical squarified treemaps, multi-resolution progressive thumbnail streaming, and deep-zoom tiling with high-throughput headless batch tools backed by an embedded LMDB database.
 
 ---
 
