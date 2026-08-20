@@ -63,6 +63,7 @@ target_include_directories(lmdb PUBLIC ${LMDB_DIR})
 target_compile_definitions(lmdb PRIVATE MDB_MAXKEYSIZE=511)
 
 # Test programs
+enable_testing()
 add_subdirectory(tests)
 
 # Single unified picexplore executable

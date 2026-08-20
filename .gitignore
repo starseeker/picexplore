@@ -31,10 +31,11 @@ Makefile
 .DS_Store
 
 # Test files and databases
-test_*.db
-test_*.db-lock
-test_*.pdf
-test*
+/test_*.db
+/test_*.db-lock
+/test_*.pdf
+/test*
+!tests/
 
 # LMDB database files (created by application)
 *.db

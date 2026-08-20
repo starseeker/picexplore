@@ -140,6 +140,51 @@ static std::vector<uint8_t> extract_png_exif(std::ifstream& file) {
     return {};
 }
 
+// Container for duplicate header + duplicate browser inside Fl_Tile
+class DupTileGroup : public Fl_Group {
+public:
+    DupTileGroup(int X, int Y, int W, int H, const char* L = 0)
+        : Fl_Group(X, Y, W, H, L) {}
+
+    void set_children(Fl_Box* header, Fl_Hold_Browser* browser) {
+        header_ = header;
+        browser_ = browser;
+    }
+
+    void set_header_height(int hh) {
+        header_h_ = hh;
+        layout_children();
+    }
+
+    void resize(int X, int Y, int W, int H) override {
+        Fl_Group::resize(X, Y, W, H);
+        layout_children();
+        if (on_resized) on_resized(H);
+    }
+
+    void layout_children() {
+        if (header_ && browser_) {
+            header_->resize(x() + 5, y() + 2, w() - 10, header_h_);
+            int bh = std::max(h() - header_h_ - 6, 10);
+            browser_->resize(x() + 5, y() + header_h_ + 2, w() - 10, bh);
+        }
+    }
+
+    void draw() override {
+        Fl_Group::draw();
+        // Draw a subtle horizontal splitter divider line at the top seam
+        fl_color(fl_lighter(FL_DARK2));
+        fl_line(x() + 5, y(), x() + w() - 5, y());
+    }
+
+    std::function<void(int)> on_resized;
+
+private:
+    int header_h_ = 22;
+    Fl_Box* header_ = nullptr;
+    Fl_Hold_Browser* browser_ = nullptr;
+};
+
 // ── construction ───────────────────────────────────────────────────────────
 
 InfoPanel::InfoPanel(int X, int Y, int W, int H, const char* L)
@@ -155,9 +200,14 @@ InfoPanel::InfoPanel(int X, int Y, int W, int H, const char* L)
     breadcrumb_bar_->color(fl_darker(FL_DARK2));
     breadcrumb_bar_->end();
 
-    // Text display fills the whole panel until an image is selected.
+    // Tile group allows user-adjustable vertical split between text info and duplicate list
+    tile_group_ = new Fl_Tile(X, Y, W, H - ACTION_BTN_H - 10);
+    tile_group_->box(FL_FLAT_BOX);
+    tile_group_->color(FL_DARK2);
+
+    // Text display occupies the top pane of tile_group_
     text_buffer_  = new Fl_Text_Buffer();
-    text_display_ = new Fl_Text_Display(X + 5, Y + 5, W - 10, H - 10);
+    text_display_ = new Fl_Text_Display(X + 5, Y + 5, W - 10, H - ACTION_BTN_H - 20);
     text_display_->buffer(text_buffer_);
     text_display_->box(FL_FLAT_BOX);
     text_display_->color(FL_DARK2);
@@ -167,6 +217,50 @@ InfoPanel::InfoPanel(int X, int Y, int W, int H, const char* L)
     text_display_->wrap_mode(Fl_Text_Display::WRAP_AT_BOUNDS, 0);
 
     text_buffer_->text("No image selected.\nClick an image to view details.");
+
+    // DupTileGroup occupies the bottom pane of tile_group_
+    dup_group_ = new DupTileGroup(X, Y + H / 2, W, H / 2);
+    dup_group_->box(FL_FLAT_BOX);
+    dup_group_->color(FL_DARK2);
+
+    dup_header_ = new Fl_Box(X + 5, Y + H / 2 + 2, W - 10, font_size_ + 10, "Duplicate Copies:");
+    dup_header_->box(FL_FLAT_BOX);
+    dup_header_->color(FL_DARK2);
+    dup_header_->labelcolor(fl_rgb_color(220, 220, 220));
+    dup_header_->labelsize(font_size_);
+    dup_header_->labelfont(FL_HELVETICA_BOLD);
+    dup_header_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+
+    dup_browser_ = new Fl_Hold_Browser(X + 5, Y + H / 2 + font_size_ + 12, W - 10, 100);
+    dup_browser_->box(FL_FLAT_BOX);
+    dup_browser_->color(fl_darker(FL_DARK2));
+    dup_browser_->textcolor(FL_FOREGROUND_COLOR);
+    dup_browser_->textfont(FL_HELVETICA);
+    dup_browser_->textsize(font_size_);
+    dup_browser_->selection_color(fl_rgb_color(60, 160, 255));
+    dup_browser_->callback([](Fl_Widget* w, void* ud) {
+        auto* panel = static_cast<InfoPanel*>(ud);
+        int val = panel->dup_browser_->value();
+        if (val > 0 && val <= static_cast<int>(panel->current_duplicates_.size())) {
+            const std::string& path = panel->current_duplicates_[val - 1];
+            if (Fl::event_clicks() > 0 && panel->on_duplicate_double_clicked) {
+                panel->on_duplicate_double_clicked(path);
+            } else if (panel->on_duplicate_clicked) {
+                panel->on_duplicate_clicked(path);
+            }
+        }
+    }, this);
+
+    dup_group_->set_children(dup_header_, dup_browser_);
+    dup_group_->on_resized = [this](int h) {
+        if (!current_duplicates_.empty() && dup_group_ && dup_group_->visible()) {
+            user_dup_height_ = h;
+        }
+    };
+    dup_group_->end();
+    dup_group_->hide();
+
+    tile_group_->end();
 
     action_btn_ = new Fl_Button(X + 5, Y + H - ACTION_BTN_H - 5, W - 10, ACTION_BTN_H, "Scroll to Image");
     action_btn_->hide();
@@ -183,8 +277,12 @@ InfoPanel::InfoPanel(int X, int Y, int W, int H, const char* L)
 }
 
 InfoPanel::~InfoPanel() {
-    delete text_display_;
+    clear_breadcrumb();
+    if (text_display_) {
+        text_display_->buffer(nullptr);
+    }
     delete text_buffer_;
+    text_buffer_ = nullptr;
 }
 
 // ── layout ─────────────────────────────────────────────────────────────────
@@ -201,6 +299,9 @@ void InfoPanel::resize(int X, int Y, int W, int H) {
 void InfoPanel::set_font_size(int size) {
     font_size_ = size;
     text_display_->textsize(size);
+    if (dup_header_) dup_header_->labelsize(size);
+    if (dup_browser_) dup_browser_->textsize(size);
+    if (dup_group_) dup_group_->set_header_height(size + 10);
     // Reflow the breadcrumb — row height and label widths both depend on font size.
     rebuild_breadcrumb();
 }
@@ -233,16 +334,40 @@ void InfoPanel::update_action_button() {
         }
     }
 
-    int td_y = panel_y + crumb_h_;
+    int tile_y = panel_y + crumb_h_;
     int text_bottom_margin = action_btn_->visible() ? ACTION_BTN_H + 10 : 5;
-    int td_h = panel_h - crumb_h_ - text_bottom_margin;
-    text_display_->resize(panel_x + 5, td_y + 5, panel_w - 10, std::max(td_h, 1));
+    int total_avail_h = std::max(panel_h - crumb_h_ - text_bottom_margin, 1);
+
+    tile_group_->resize(panel_x, tile_y, panel_w, total_avail_h);
+
+    if (current_duplicates_.empty() || !dup_group_ || !dup_browser_ || !dup_header_) {
+        if (dup_group_) dup_group_->hide();
+        text_display_->resize(panel_x + 5, tile_y + 5, panel_w - 10, std::max(total_avail_h - 10, 1));
+        tile_group_->init_sizes();
+    } else {
+        dup_group_->show();
+        int header_h = font_size_ + 10;
+        dup_group_->set_header_height(header_h);
+
+        int dup_h = user_dup_height_ > 0 ? user_dup_height_ : (total_avail_h * 35 / 100);
+        int min_dup_h = header_h + 30;
+        int min_td_h = 60;
+        dup_h = std::clamp(dup_h, min_dup_h, std::max(min_dup_h, total_avail_h - min_td_h));
+        int td_h = std::max(total_avail_h - dup_h, min_td_h);
+
+        text_display_->resize(panel_x + 5, tile_y + 5, panel_w - 10, td_h - 5);
+        dup_group_->resize(panel_x, tile_y + td_h, panel_w, dup_h);
+        tile_group_->init_sizes();
+    }
+
     action_btn_->redraw();
-    text_display_->redraw();
+    tile_group_->redraw();
 }
 
 void InfoPanel::clear_info() {
     current_filepath_.clear();
+    current_duplicates_.clear();
+    if (dup_browser_) dup_browser_->clear();
     clear_breadcrumb();
     text_buffer_->text("No image selected.\nClick an image to view details.");
     update_action_button();
@@ -461,20 +586,27 @@ void InfoPanel::rebuild_breadcrumb() {
     }
     breadcrumb_bar_->end();
 
-    // Resize text display to occupy whatever height remains below the breadcrumb.
-    int td_y = panel_y + crumb_h_;
-    int text_bottom_margin = action_btn_->visible() ? ACTION_BTN_H + 10 : 5;
-    int td_h = panel_h - crumb_h_ - text_bottom_margin;
-    text_display_->resize(panel_x + 5, td_y + 5, panel_w - 10, std::max(td_h, 1));
-
+    update_action_button();
     breadcrumb_bar_->redraw();
-    text_display_->redraw();
 }
 
 // ── display_info ───────────────────────────────────────────────────────────
 
-void InfoPanel::display_info(const ImageEntry& entry) {
+void InfoPanel::display_info(const ImageEntry& entry, const std::vector<std::string>& duplicates) {
     current_filepath_ = entry.filepath;
+    current_duplicates_ = duplicates;
+
+    if (dup_browser_ && dup_header_) {
+        dup_browser_->clear();
+        if (!duplicates.empty()) {
+            std::string header = "=== Duplicate Copies (" + std::to_string(duplicates.size()) + ") ===";
+            dup_header_->copy_label(header.c_str());
+            for (const auto& dup : duplicates) {
+                dup_browser_->add(dup.c_str());
+            }
+        }
+    }
+
     rebuild_breadcrumb();
 
     std::stringstream ss;
@@ -485,7 +617,6 @@ void InfoPanel::display_info(const ImageEntry& entry) {
     ss << "=== File Information ===\n";
     ss << "Path: " << entry.filepath << "\n";
     ss << "Name: " << filename << "\n";
-
 
     uintmax_t fsize = entry.file_size;
     uintmax_t ftime = entry.file_timestamp;
@@ -503,6 +634,12 @@ void InfoPanel::display_info(const ImageEntry& entry) {
         ss << "Modified: " << format_time(ftime) << "\n";
     } else {
         ss << "Metadata: Not yet loaded\n";
+    }
+
+    if (duplicates.empty()) {
+        ss << "Duplicates: None\n";
+    } else {
+        ss << "Duplicates: " << duplicates.size() << " other copy/copies (listed below)\n";
     }
     ss << "\n";
 

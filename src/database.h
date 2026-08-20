@@ -51,7 +51,8 @@ struct ImageInfo {
 struct WriteTask {
     enum TaskType {
 	STORE_PATH,
-	STORE_THUMBNAIL
+	STORE_THUMBNAIL,
+	ADD_PATH_FOR_HASH
     };
 
     TaskType type;
@@ -124,6 +125,10 @@ class DatabaseManager {
 	bool get_key_value(const std::string& key, std::string& value);
 	bool get_key_data(const std::string& key, std::vector<uint8_t>& data);
 	bool get_hash_for_path(const std::string& filepath, std::string& hash_out);
+	std::vector<std::string> get_paths_for_hash(const std::string& hash);
+	bool set_paths_for_hash(const std::string& hash, const std::vector<std::string>& paths);
+	bool add_path_for_hash(const std::string& hash, const std::string& filepath);
+	bool remove_path_for_hash(const std::string& hash, const std::string& filepath);
 	std::string extract_hash_from_key(const char* key, size_t key_size);
 	bool load_image_info(const std::string& hash, ImageInfo& info);
 	bool is_open() const { return is_open_; }

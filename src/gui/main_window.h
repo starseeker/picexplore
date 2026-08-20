@@ -47,6 +47,11 @@ private:
     Fl_Box*          statusbar_hint_;
     
     bool info_panel_visible_ = false;
+    int  info_panel_width_ = 280;
+    bool dragging_h_splitter_ = false;
+    bool in_splitter_hover_ = false;
+    int  drag_start_x_ = 0;
+    int  drag_start_info_w_ = 0;
 
     // Database build progress tracking
     int db_build_total_ = 0;
@@ -59,6 +64,8 @@ private:
     void reset_directory_filter();
     void update_statusbar();
     void recompute_layout(bool reprioritize = true);
+
+    std::vector<std::string> reconcile_and_get_duplicates(const std::string& hash, const std::string& current_filepath);
 
     moodycamel::ConcurrentQueue<UpdateEvent> update_queue_;
     ScanCoordinator* scanner_ = nullptr;

@@ -28,6 +28,8 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <set>
+#include <unordered_set>
 
 // Third-party dependencies
 #include "xxhash.h"
@@ -555,30 +557,27 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
              (unsigned long long)hash.high64, (unsigned long long)hash.low64);
 
     // Check if this hash already exists (duplicate detection)
-    std::string path_key = std::string(hash_str) + ":path";
-    std::string existing_path;
-
-    // Thread-safe check for existing path
+    bool has_existing = false;
     {
 	std::lock_guard<std::mutex> lock(db_mutex_);
-	if (!begin_transaction()) {
-	    stbi_image_free(image_data);
-	    should_skip = true;
-	    return false;
-	}
-
-	bool exists = get_key_value(path_key, existing_path);
-	abort_transaction();
-
-	if (exists) {
-	    stbi_image_free(image_data);
-	    should_skip = true;
-	    return true; // Not an error, just a duplicate
+	if (begin_transaction()) {
+	    std::string val;
+	    has_existing = get_key_value(std::string(hash_str) + ":paths", val) ||
+	                   get_key_value(std::string(hash_str) + ":path", val);
+	    abort_transaction();
 	}
     }
 
+    if (has_existing) {
+	stbi_image_free(image_data);
+	write_tasks.emplace_back(WriteTask::ADD_PATH_FOR_HASH, std::string(hash_str), filepath);
+	write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, std::string(hash_str));
+	should_skip = true;
+	return true; // Not an error, just a duplicate
+    }
+
     // Store file path as write task
-    write_tasks.emplace_back(WriteTask::STORE_PATH, path_key, filepath);
+    write_tasks.emplace_back(WriteTask::ADD_PATH_FOR_HASH, std::string(hash_str), filepath);
     write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, std::string(hash_str));
 
     // Generate and store thumbnails
@@ -803,6 +802,8 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
 
 		if (write_task.type == WriteTask::STORE_PATH) {
 		    success = store_key_value(write_task.key, write_task.string_value);
+		} else if (write_task.type == WriteTask::ADD_PATH_FOR_HASH) {
+		    success = add_path_for_hash(write_task.key, write_task.string_value);
 		} else if (write_task.type == WriteTask::STORE_THUMBNAIL) {
 		    success = store_key_data(write_task.key, write_task.data);
 		}
@@ -1049,12 +1050,168 @@ int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, 
     return processed_count;
 }
 
+static std::vector<std::string> parse_paths(const std::string& val) {
+    std::vector<std::string> result;
+    if (val.empty()) return result;
+    size_t start = 0;
+    while (start < val.size()) {
+	size_t end = val.find('\n', start);
+	if (end == std::string::npos) {
+	    std::string p = val.substr(start);
+	    if (!p.empty()) result.push_back(p);
+	    break;
+	}
+	std::string p = val.substr(start, end - start);
+	if (!p.empty()) result.push_back(p);
+	start = end + 1;
+    }
+    return result;
+}
+
+static std::string serialize_paths(const std::vector<std::string>& paths) {
+    std::string result;
+    for (size_t i = 0; i < paths.size(); ++i) {
+	if (i > 0) result += '\n';
+	result += paths[i];
+    }
+    return result;
+}
+
 std::string DatabaseManager::extract_hash_from_key(const char* key, size_t key_size) {
     std::string key_str(key, key_size);
+    if (key_str.length() > 6 && key_str.substr(key_str.length() - 6) == ":paths") {
+	return key_str.substr(0, key_str.length() - 6);
+    }
     if (key_str.length() > 5 && key_str.substr(key_str.length() - 5) == ":path") {
 	return key_str.substr(0, key_str.length() - 5);
     }
     return "";
+}
+
+bool DatabaseManager::has_thumbnails(const std::string& hash) {
+    if (hash.empty()) return false;
+    bool manage_txn = (txn_ == nullptr);
+    if (manage_txn) {
+	if (!begin_transaction()) return false;
+    }
+    std::vector<uint8_t> data;
+    bool exists = get_key_data(hash + ":32", data) ||
+		  get_key_data(hash + ":64", data) ||
+		  get_key_data(hash + ":128", data) ||
+		  get_key_data(hash + ":256", data) ||
+		  get_key_data(hash + ":512", data) ||
+		  get_key_data(hash + ":1024", data);
+    if (manage_txn) {
+	abort_transaction();
+    }
+    return exists;
+}
+
+std::vector<std::string> DatabaseManager::get_paths_for_hash(const std::string& hash) {
+    if (hash.empty()) return {};
+
+    bool manage_txn = (txn_ == nullptr);
+    if (manage_txn) {
+	if (!begin_transaction()) return {};
+    }
+
+    std::string val;
+    bool found = get_key_value(hash + ":paths", val);
+    if (!found) {
+	found = get_key_value(hash + ":path", val);
+    }
+
+    if (manage_txn) {
+	abort_transaction();
+    }
+
+    if (found) {
+	return parse_paths(val);
+    }
+    return {};
+}
+
+bool DatabaseManager::set_paths_for_hash(const std::string& hash, const std::vector<std::string>& paths) {
+    if (hash.empty()) return false;
+
+    bool manage_txn = (txn_ == nullptr);
+    if (manage_txn) {
+	if (!begin_transaction()) return false;
+    }
+
+    bool success = true;
+    if (paths.empty()) {
+	delete_key(hash + ":paths");
+	delete_key(hash + ":path");
+    } else {
+	std::string val = serialize_paths(paths);
+	success = store_key_value(hash + ":paths", val);
+	delete_key(hash + ":path"); // Cleanup legacy key if present
+    }
+
+    if (manage_txn) {
+	if (success) commit_transaction();
+	else abort_transaction();
+    }
+
+    return success;
+}
+
+bool DatabaseManager::add_path_for_hash(const std::string& hash, const std::string& filepath) {
+    if (hash.empty() || filepath.empty()) return false;
+
+    bool manage_txn = (txn_ == nullptr);
+    if (manage_txn) {
+	if (!begin_transaction()) return false;
+    }
+
+    std::vector<std::string> paths = get_paths_for_hash(hash);
+    bool exists = false;
+    for (const auto& p : paths) {
+	if (p == filepath) {
+	    exists = true;
+	    break;
+	}
+    }
+
+    bool success = true;
+    if (!exists) {
+	paths.push_back(filepath);
+	success = set_paths_for_hash(hash, paths);
+    }
+
+    if (manage_txn) {
+	if (success) commit_transaction();
+	else abort_transaction();
+    }
+
+    return success;
+}
+
+bool DatabaseManager::remove_path_for_hash(const std::string& hash, const std::string& filepath) {
+    if (hash.empty() || filepath.empty()) return false;
+
+    bool manage_txn = (txn_ == nullptr);
+    if (manage_txn) {
+	if (!begin_transaction()) return false;
+    }
+
+    std::vector<std::string> paths = get_paths_for_hash(hash);
+    std::vector<std::string> remaining;
+    for (const auto& p : paths) {
+	if (p != filepath) {
+	    remaining.push_back(p);
+	}
+    }
+
+    bool success = set_paths_for_hash(hash, remaining);
+
+    if (manage_txn) {
+	if (success) commit_transaction();
+	else abort_transaction();
+    }
+
+    return success;
 }
 
 bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) {
@@ -1114,13 +1271,13 @@ std::vector<ImageInfo> DatabaseManager::get_all_images() {
 	return images;
     }
 
+    std::unordered_set<std::string> seen_paths;
     MDB_val key, data;
     while (mdb_cursor_get(cursor, &key, &data, MDB_NEXT) == 0) {
 	std::string hash = extract_hash_from_key((char*)key.mv_data, key.mv_size);
 	if (!hash.empty()) {
-	    ImageInfo info;
-	    info.hash = hash;
-	    info.path = std::string((char*)data.mv_data, data.mv_size);
+	    std::vector<std::string> paths = parse_paths(std::string((char*)data.mv_data, data.mv_size));
+	    if (paths.empty()) continue;
 
 	    // Temporarily store current transaction state
 	    MDB_txn* temp_txn = txn_;
@@ -1130,10 +1287,19 @@ std::vector<ImageInfo> DatabaseManager::get_all_images() {
 	    txn_ = read_txn;
 	    dbi_ = read_dbi;
 
-	    if (load_image_info(hash, info)) {
-		images.push_back(std::move(info));
+	    ImageInfo base_info;
+	    base_info.hash = hash;
+
+	    if (load_image_info(hash, base_info)) {
+		for (const auto& p : paths) {
+		    if (seen_paths.insert(p).second) {
+			ImageInfo info = base_info;
+			info.path = p;
+			images.push_back(std::move(info));
+		    }
+		}
 	    } else {
-		fprintf(stderr, "Warning: Failed to load image info for '%s' (hash: %s)\n", info.path.c_str(), hash.c_str());
+		fprintf(stderr, "Warning: Failed to load image info for hash '%s'\n", hash.c_str());
 	    }
 
 	    // Restore transaction state

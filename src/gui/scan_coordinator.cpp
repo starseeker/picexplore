@@ -133,7 +133,7 @@ void ScanCoordinator::run() {
                 if (db.begin_transaction()) {
                     std::string hash;
                     if (db.get_hash_for_path(db_path, hash)) {
-                        db.delete_key(hash + ":path");
+                        db.remove_path_for_hash(hash, db_path);
                     }
                     db.delete_key("file:" + db_path);
                     db.commit_transaction();

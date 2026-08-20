@@ -253,7 +253,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
             if (db_.begin_transaction()) {
                 std::string key = hash + ":" + std::to_string(static_cast<int>(req.target_quality));
                 if (db_.store_key_data(key, jpeg_data_out)) {
-                    db_.store_key_value(hash + ":path", req.filepath);
+                    db_.add_path_for_hash(hash, req.filepath);
                     db_.store_key_value("file:" + req.filepath, hash);
                     db_.commit_transaction();
                 } else {

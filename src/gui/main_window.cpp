@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <thread>
 #include <unordered_set>
+#include <set>
 #include <xxhash.h>
 
 static constexpr int MENU_H   = 25;
@@ -62,7 +63,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     scrollbar_->type(FL_VERTICAL);
     scrollbar_->callback(scroll_cb, this);
 
-    info_panel_ = new InfoPanel(w, MENU_H, INFO_W, vp_h);
+    info_panel_ = new InfoPanel(w - info_panel_width_, MENU_H, info_panel_width_, vp_h);
     info_panel_->hide();
     info_panel_->set_root_dir(directory_);
 
@@ -110,6 +111,42 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
         }
     };
 
+    info_panel_->on_duplicate_clicked = [this](const std::string& path) {
+        size_t idx = store_.find_by_filepath(path);
+        if (idx != (size_t)-1) {
+            namespace fs = std::filesystem;
+            if (!directory_filter_.empty()) {
+                std::string prefix = fs::path(directory_filter_).lexically_normal().string();
+                if (!prefix.empty() && prefix.back() != '/' && prefix.back() != '\\') prefix += '/';
+                std::string norm = fs::path(path).lexically_normal().string();
+                if (norm.find(prefix) != 0 && norm != fs::path(directory_filter_).lexically_normal().string()) {
+                    reset_directory_filter();
+                }
+            }
+            if (!scrollbar_->visible()) {
+                // Single image mode
+                enter_single_image_mode(idx, path);
+            } else {
+                // Grid mode
+                int target_y = viewport_->scroll_to_image(idx);
+                scrollbar_->value(target_y);
+                viewport_->set_scroll_offset(target_y);
+                viewport_->set_selected_image(idx);
+                current_selected_filepath_ = path;
+                auto dups = reconcile_and_get_duplicates(store_.get(idx).content_hash, path);
+                info_panel_->display_info(store_.get(idx), dups);
+                reprioritize_thumbnails();
+            }
+        }
+    };
+
+    info_panel_->on_duplicate_double_clicked = [this](const std::string& path) {
+        size_t idx = store_.find_by_filepath(path);
+        if (idx != (size_t)-1) {
+            enter_single_image_mode(idx, path);
+        }
+    };
+
     info_panel_->on_exit_image_view = [this]() {
         exit_single_image_mode();
     };
@@ -130,7 +167,15 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
                 info_panel_->clear_info();
             } else {
                 current_selected_filepath_ = path;
-                info_panel_->display_info(store_.get(idx));
+                auto& entry = store_.get(idx);
+                if (entry.content_hash.empty() && db_ && db_->is_open()) {
+                    std::string h;
+                    if (db_->get_hash_for_path(path, h)) {
+                        entry.content_hash = h;
+                    }
+                }
+                auto dups = reconcile_and_get_duplicates(entry.content_hash, path);
+                info_panel_->display_info(entry, dups);
                 viewport_->set_selected_image(idx);
             }
         }
@@ -254,6 +299,10 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
         entry.content_hash = buf;
     }
 
+    current_selected_filepath_ = filepath;
+    auto dups = reconcile_and_get_duplicates(entry.content_hash, filepath);
+    info_panel_->display_info(entry, dups);
+
     ThumbQuality target_quality = static_cast<ThumbQuality>(std::max(max_overview_size, screen_dim));
     if (static_cast<int>(entry.scaled.quality) < static_cast<int>(target_quality) || entry.scaled.rgb_data.empty()) {
         entry.last_requested_generation = current_generation_;
@@ -276,8 +325,9 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     }
     
     int vp_h = h() - MENU_H - STATUS_H;
+    int info_w = std::clamp(info_panel_width_, 160, std::max(160, w() - 200));
     int vp_w = w();
-    if (info_panel_visible_) vp_w -= INFO_W;
+    if (info_panel_visible_) vp_w -= info_w;
 
     statusbar_->resize(0, MENU_H + vp_h, w() - 280, STATUS_H);
     statusbar_hint_->resize(w() - 280, MENU_H + vp_h, 280, STATUS_H);
@@ -320,7 +370,8 @@ void MainWindow::navigate_single_image(int delta) {
 
     current_selected_filepath_ = next_entry.filepath;
     viewport_->set_selected_image(next_raw_idx);
-    info_panel_->display_info(next_entry);
+    auto dups = reconcile_and_get_duplicates(next_entry.content_hash, next_entry.filepath);
+    info_panel_->display_info(next_entry, dups);
     enter_single_image_mode(next_raw_idx, next_entry.filepath);
 }
 
@@ -335,9 +386,10 @@ void MainWindow::exit_single_image_mode() {
     statusbar_hint_->hide();
     statusbar_->resize(0, MENU_H + vp_h, w(), STATUS_H);
 
+    int info_w = std::clamp(info_panel_width_, 160, std::max(160, w() - 200));
     scrollbar_->show();
     int vp_w = w() - SCROLL_W;
-    if (info_panel_visible_) vp_w -= INFO_W;
+    if (info_panel_visible_) vp_w -= info_w;
     viewport_->resize(0, MENU_H, vp_w, vp_h);
     
     last_visible_.clear();
@@ -367,6 +419,69 @@ void MainWindow::reset_directory_filter() {
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
     update_statusbar();
+}
+
+std::vector<std::string> MainWindow::reconcile_and_get_duplicates(const std::string& hash, const std::string& current_filepath) {
+    if (hash.empty() || current_filepath.empty()) return {};
+
+    namespace fs = std::filesystem;
+    std::set<std::string> candidate_paths;
+
+    // 1. Query database for paths stored under this hash
+    if (db_ && db_->is_open()) {
+        std::lock_guard<std::mutex> lock(db_->get_mutex());
+        std::vector<std::string> db_paths = db_->get_paths_for_hash(hash);
+        for (const auto& p : db_paths) {
+            candidate_paths.insert(p);
+        }
+    }
+
+    // 2. Query in-memory store for any other image entries with the same hash
+    for (size_t i = 0; i < store_.count(); ++i) {
+        const auto& e = store_.get(i);
+        if (!e.content_hash.empty() && e.content_hash == hash) {
+            candidate_paths.insert(e.filepath);
+        }
+    }
+
+    // 3. Always ensure current filepath is present
+    candidate_paths.insert(current_filepath);
+
+    // 4. Verify candidates against the live filesystem
+    std::vector<std::string> valid_paths;
+    std::vector<std::string> stale_paths;
+
+    for (const auto& p : candidate_paths) {
+        std::error_code ec;
+        if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
+            valid_paths.push_back(p);
+        } else {
+            stale_paths.push_back(p);
+        }
+    }
+
+    // 5. Update LMDB with the verified set and prune stale file keys
+    if (db_ && db_->is_open()) {
+        std::lock_guard<std::mutex> lock(db_->get_mutex());
+        if (db_->begin_transaction()) {
+            db_->set_paths_for_hash(hash, valid_paths);
+            db_->store_key_value("file:" + current_filepath, hash);
+            for (const auto& stale : stale_paths) {
+                db_->delete_key("file:" + stale);
+            }
+            db_->commit_transaction();
+        }
+    }
+
+    // 6. Return list of duplicate copies (excluding current_filepath)
+    std::vector<std::string> duplicates;
+    for (const auto& p : valid_paths) {
+        if (p != current_filepath) {
+            duplicates.push_back(p);
+        }
+    }
+    std::sort(duplicates.begin(), duplicates.end());
+    return duplicates;
 }
 
 void MainWindow::update_statusbar() {
@@ -469,6 +584,10 @@ void MainWindow::poll_events() {
             if (entry.content_hash.empty() && !ev.thumb_rgb.content_hash.empty()) {
                 entry.content_hash = ev.thumb_rgb.content_hash;
             }
+            if (current_selected_filepath_ == entry.filepath && info_panel_visible_) {
+                auto dups = reconcile_and_get_duplicates(entry.content_hash, entry.filepath);
+                info_panel_->display_info(entry, dups);
+            }
             store_.set_thumbnail_rgb(ev.thumb_rgb.image_index, ev.thumb_rgb.filepath,
                                      ev.thumb_rgb.quality, std::move(ev.thumb_rgb.rgb_data),
                                      ev.thumb_rgb.width, ev.thumb_rgb.height, ev.thumb_rgb.generation);
@@ -529,7 +648,7 @@ void MainWindow::poll_events() {
                 if (db_->begin_transaction()) {
                     std::string hash;
                     if (db_->get_hash_for_path(ev.deletion.filepath, hash)) {
-                        db_->delete_key(hash + ":path");
+                        db_->remove_path_for_hash(hash, ev.deletion.filepath);
                     }
                     db_->delete_key("file:" + ev.deletion.filepath);
                     db_->commit_transaction();
@@ -547,7 +666,8 @@ void MainWindow::poll_events() {
                     std::string hash;
                     if (db_->get_hash_for_path(ev.rename.old_filepath, hash)) {
                         db_->delete_key("file:" + ev.rename.old_filepath);
-                        db_->store_key_value(hash + ":path", ev.rename.new_filepath);
+                        db_->remove_path_for_hash(hash, ev.rename.old_filepath);
+                        db_->add_path_for_hash(hash, ev.rename.new_filepath);
                         db_->store_key_value("file:" + ev.rename.new_filepath, hash);
                     }
                     db_->commit_transaction();
@@ -730,6 +850,16 @@ void MainWindow::draw() {
     fl_color(color());
     fl_rectf(0, 0, w(), h());
     draw_children();
+
+    if (info_panel_visible_ && info_panel_->visible()) {
+        int split_x = info_panel_->x();
+        int top_y = MENU_H;
+        int bot_y = h() - STATUS_H;
+        fl_color(fl_rgb_color(24, 24, 24));
+        fl_line(split_x - 1, top_y, split_x - 1, bot_y);
+        fl_color(fl_rgb_color(60, 60, 60));
+        fl_line(split_x, top_y, split_x, bot_y);
+    }
 }
 
 void MainWindow::resize(int X, int Y, int W, int H) {
@@ -738,26 +868,30 @@ void MainWindow::resize(int X, int Y, int W, int H) {
     Fl_Double_Window::resize(X, Y, W, H);
     int vp_h = H - MENU_H - STATUS_H;
 
-    int info_w = INFO_W;
-    int vp_w = W - SCROLL_W;
+    int info_w = std::clamp(info_panel_width_, 160, std::max(160, W - 200));
+    int vp_w = W;
     if (info_panel_visible_) {
         vp_w -= info_w;
     }
 
     menubar_->resize(0, 0, W, MENU_H);
-    viewport_->resize(0, MENU_H, vp_w, vp_h);
-    scrollbar_->resize(vp_w, MENU_H, SCROLL_W, vp_h);
 
     if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
-        statusbar_->resize(0, MENU_H + vp_h, W - 220, STATUS_H);
-        statusbar_hint_->resize(W - 220, MENU_H + vp_h, 220, STATUS_H);
+        viewport_->resize(0, MENU_H, vp_w, vp_h);
+        scrollbar_->hide();
+        statusbar_->resize(0, MENU_H + vp_h, W - 280, STATUS_H);
+        statusbar_hint_->resize(W - 280, MENU_H + vp_h, 280, STATUS_H);
     } else {
+        int content_w = std::max(vp_w - SCROLL_W, 10);
+        viewport_->resize(0, MENU_H, content_w, vp_h);
+        scrollbar_->resize(content_w, MENU_H, SCROLL_W, vp_h);
+        scrollbar_->show();
         statusbar_->resize(0, MENU_H + vp_h, W, STATUS_H);
-        statusbar_hint_->resize(W - 220, MENU_H + vp_h, 220, STATUS_H);
+        statusbar_hint_->resize(W - 280, MENU_H + vp_h, 280, STATUS_H);
     }
 
     if (info_panel_visible_) {
-        info_panel_->resize(vp_w + SCROLL_W, MENU_H, info_w, vp_h);
+        info_panel_->resize(vp_w, MENU_H, info_w, vp_h);
         info_panel_->show();
     } else {
         info_panel_->hide();
@@ -851,6 +985,64 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
 }
 
 int MainWindow::handle(int event) {
+    int split_x = info_panel_->x();
+    int ey = Fl::event_y();
+    int ex = Fl::event_x();
+    bool in_split_zone = (info_panel_visible_ && ey >= MENU_H && ey <= h() - STATUS_H && std::abs(ex - split_x) <= 4);
+
+    if (dragging_h_splitter_) {
+        if (event == FL_DRAG) {
+            int delta = drag_start_x_ - ex;
+            int new_w = std::clamp(drag_start_info_w_ + delta, 160, std::max(160, w() - 250));
+            if (new_w != info_panel_width_) {
+                info_panel_width_ = new_w;
+                resize(x(), y(), w(), h());
+            }
+            fl_cursor(FL_CURSOR_WE);
+            return 1;
+        } else if (event == FL_RELEASE) {
+            dragging_h_splitter_ = false;
+            if (!in_split_zone) {
+                in_splitter_hover_ = false;
+                fl_cursor(FL_CURSOR_DEFAULT);
+            }
+            return 1;
+        }
+        return 1;
+    }
+
+    if (event == FL_MOVE) {
+        if (in_split_zone) {
+            if (!in_splitter_hover_) {
+                in_splitter_hover_ = true;
+                fl_cursor(FL_CURSOR_WE);
+            }
+            return 1;
+        } else if (in_splitter_hover_) {
+            in_splitter_hover_ = false;
+            fl_cursor(FL_CURSOR_DEFAULT);
+        }
+    } else if (event == FL_LEAVE) {
+        if (in_splitter_hover_) {
+            in_splitter_hover_ = false;
+            fl_cursor(FL_CURSOR_DEFAULT);
+        }
+    } else if (event == FL_PUSH) {
+        if (in_split_zone && Fl::event_button() == FL_LEFT_MOUSE) {
+            if (Fl::event_clicks() > 0) {
+                // Double-click resets width to default (280px)
+                info_panel_width_ = 280;
+                resize(x(), y(), w(), h());
+                return 1;
+            }
+            dragging_h_splitter_ = true;
+            drag_start_x_ = ex;
+            drag_start_info_w_ = info_panel_width_;
+            fl_cursor(FL_CURSOR_WE);
+            return 1;
+        }
+    }
+
     if (event == FL_MOUSEWHEEL) {
         if (!scrollbar_->visible()) {
             return Fl_Double_Window::handle(event);

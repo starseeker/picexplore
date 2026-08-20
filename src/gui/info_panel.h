@@ -1,8 +1,10 @@
 #pragma once
 
 #include <FL/Fl_Group.H>
+#include <FL/Fl_Tile.H>
 #include <FL/Fl_Text_Display.H>
 #include <FL/Fl_Text_Buffer.H>
+#include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
 #include <string>
@@ -15,7 +17,7 @@ public:
     InfoPanel(int X, int Y, int W, int H, const char* L = 0);
     virtual ~InfoPanel();
 
-    void display_info(const ImageEntry& entry);
+    void display_info(const ImageEntry& entry, const std::vector<std::string>& duplicates = {});
     void clear_info();
     void set_font_size(int size);
     int  get_font_size() const { return font_size_; }
@@ -34,6 +36,12 @@ public:
     // Called when the scroll-to-image button is clicked in grid mode.
     std::function<void(const std::string&)> on_scroll_to_image;
 
+    // Called when a duplicate entry in the duplicate list is clicked.
+    std::function<void(const std::string&)> on_duplicate_clicked;
+
+    // Called when a duplicate entry in the duplicate list is double-clicked.
+    std::function<void(const std::string&)> on_duplicate_double_clicked;
+
     // Called when the exit-image-view button is clicked in single image mode.
     std::function<void()> on_exit_image_view;
 
@@ -47,8 +55,15 @@ private:
     int              crumb_h_ = 0;
 
     Fl_Group*        breadcrumb_bar_;
+    Fl_Tile*         tile_group_ = nullptr;
     Fl_Text_Display* text_display_;
     Fl_Text_Buffer*  text_buffer_;
+    class DupTileGroup* dup_group_ = nullptr;
+    Fl_Box*          dup_header_ = nullptr;
+    Fl_Hold_Browser* dup_browser_ = nullptr;
+    std::vector<std::string> current_duplicates_;
+    int              user_dup_height_ = 0;
+
     int              font_size_ = 12;
     std::string      root_dir_;
     std::string      current_filepath_; // path of last selected image
