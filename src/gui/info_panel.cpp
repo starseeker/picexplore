@@ -483,17 +483,12 @@ void InfoPanel::rebuild_breadcrumb() {
 
     update_action_button();
 
-    // ── measure & wrap ────────────────────────────────────────────────────
-    // ROW_H scales with font size so everything stays proportional.
+    // ── measure & layout: one line per directory ───────────────────────────
     fl_font(FL_HELVETICA, font_size_);
-    const int ROW_H  = font_size_ + 10; // button height per row
-    const int SEP_W  = static_cast<int>(fl_width("/")) + 6;
-    const int PAD    = 6;   // horizontal label padding inside each widget
-    const int MARGIN = 6;   // left edge inset
-    const int max_x  = panel_w - MARGIN; // right boundary (panel-relative)
-
-    // The maximum width any single item may occupy (panel minus both margins).
-    const int item_max_w = max_x - MARGIN;
+    const int ROW_H   = font_size_ + 8; // button height per row
+    const int ROW_GAP = 2;              // gap between rows
+    const int MARGIN  = 6;              // left/right edge inset
+    const int PAD     = 6;              // label padding inside widget
 
     // Helper: truncate label with "\u2026" until it fits within max_pixels.
     auto truncate = [&](const std::string& s, int max_pixels) -> std::string {
@@ -502,121 +497,61 @@ void InfoPanel::rebuild_breadcrumb() {
         const std::string ellipsis = "\u2026"; // UTF-8 HORIZONTAL ELLIPSIS
         int ew = static_cast<int>(fl_width(ellipsis.c_str()));
         std::string r = s;
-        // Trim one character at a time; fast enough for typical directory names.
         while (!r.empty() &&
                static_cast<int>(fl_width(r.c_str())) + ew + PAD * 2 > max_pixels)
             r.pop_back();
         return r + ellipsis;
     };
 
-    // Pre-compute widget widths and display labels for each segment.
-    // display_label may be shorter than the segment name if it had to be truncated.
-    struct SegmentLayout {
-        int         item_w;
-        int         sep_w;         // 0 for the last segment
-        std::string display_label; // possibly truncated version of the segment name
-    };
-    std::vector<SegmentLayout> layouts;
-    layouts.reserve(segments.size());
-    for (size_t i = 0; i < segments.size(); ++i) {
-        const std::string& name = segments[i].first;
-        std::string dlabel = truncate(name, item_max_w);
-        int iw = std::max(static_cast<int>(fl_width(dlabel.c_str())) + PAD * 2, 16);
-        iw = std::min(iw, item_max_w); // never wider than the panel
-        int sw = (i + 1 < segments.size()) ? SEP_W : 0;
-        layouts.push_back({iw, sw, std::move(dlabel)});
-    }
-
-    // Single pass: determine (row, x_offset) for every item and separator.
-    struct PlacedWidget {
-        int row, x;   // row index and panel-relative x
-        int w, h;     // size
-        size_t seg_idx;
-        bool is_sep;
-    };
-    std::vector<PlacedWidget> placed;
-    placed.reserve(segments.size() * 2);
-
-    int cur_x   = MARGIN;
-    int cur_row = 0;
-
-    for (size_t i = 0; i < segments.size(); ++i) {
-        int iw = layouts[i].item_w;
-        int sw = layouts[i].sep_w;
-
-        // Wrap before item if it won't fit (but never wrap an empty row).
-        if (cur_x + iw > max_x && cur_x > MARGIN) {
-            cur_x = MARGIN;
-            cur_row++;
-        }
-        placed.push_back({cur_row, cur_x, iw, ROW_H, i, false});
-        cur_x += iw;
-
-        if (sw > 0) {
-            // Wrap before separator if it won't fit either.
-            if (cur_x + sw > max_x && cur_x > MARGIN) {
-                cur_x = MARGIN;
-                cur_row++;
-            }
-            placed.push_back({cur_row, cur_x, sw, ROW_H, i, true});
-            cur_x += sw;
-        }
-    }
-
     // Total bar height: rows * (ROW_H + row gap) + top/bottom margins.
-    const int ROW_GAP = 4;
-    crumb_h_ = (cur_row + 1) * (ROW_H + ROW_GAP) + ROW_GAP * 2;
-
-    // ── create widgets ───────────────────────────────────────────────────
+    crumb_h_ = static_cast<int>(segments.size()) * (ROW_H + ROW_GAP) + ROW_GAP * 2;
     breadcrumb_bar_->resize(panel_x, panel_y, panel_w, crumb_h_);
 
     breadcrumb_bar_->begin();
-    for (const auto& pw : placed) {
-        int bx = panel_x + pw.x;
-        int by = panel_y + ROW_GAP + pw.row * (ROW_H + ROW_GAP);
+    for (size_t i = 0; i < segments.size(); ++i) {
+        const auto& [label, abs_path] = segments[i];
+        bool is_dir = !abs_path.empty();
 
-        if (pw.is_sep) {
-            Fl_Box* sep = new Fl_Box(bx, by, pw.w, pw.h, "/");
-            sep->box(FL_NO_BOX);
-            sep->labelcolor(fl_rgb_color(140, 140, 140));
-            sep->labelsize(font_size_);
+        int indent = std::min(static_cast<int>(i) * 8, std::max(0, (panel_w - 40) / 4));
+        int bx = panel_x + MARGIN + indent;
+        int by = panel_y + ROW_GAP + static_cast<int>(i) * (ROW_H + ROW_GAP);
+        int bw = std::max(panel_w - MARGIN * 2 - indent, 20);
+
+        std::string display_name = is_dir ? ("📁 " + label) : ("📄 " + label);
+        std::string dlabel = truncate(display_name, bw);
+
+        if (is_dir) {
+            auto* d = new CrumbData{abs_path, this, false};
+            Fl_Button* btn = new Fl_Button(bx, by, bw, ROW_H);
+            btn->copy_label(dlabel.c_str());
+            btn->box(FL_FLAT_BOX);
+            btn->color(fl_darker(FL_DARK2));
+            btn->labelcolor(fl_rgb_color(100, 180, 255));
+            btn->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+            btn->labelsize(font_size_);
+            btn->labelfont(FL_HELVETICA);
+            btn->tooltip(d->path.c_str());
+            btn->user_data(d);
+            btn->callback([](Fl_Widget*, void* ud) {
+                auto* d = static_cast<CrumbData*>(ud);
+                if (d->panel->on_dir_clicked) d->panel->on_dir_clicked(d->path);
+            }, d);
         } else {
-            const auto& [label, abs_path] = segments[pw.seg_idx];
-            // Use the pre-computed (possibly truncated) display label.
-            const std::string& dlabel = layouts[pw.seg_idx].display_label;
-            bool is_dir = !abs_path.empty();
-            if (is_dir) {
-                auto* d = new CrumbData{abs_path, this, false};
-                Fl_Button* btn = new Fl_Button(bx, by, pw.w, pw.h);
-                btn->copy_label(dlabel.c_str());
-                btn->box(FL_FLAT_BOX);
-                btn->color(fl_darker(FL_DARK2));
-                btn->labelcolor(fl_rgb_color(100, 180, 255));
-                btn->labelsize(font_size_);
-                btn->labelfont(FL_HELVETICA);
-                // Tooltip shows the full path so truncated labels remain accessible.
-                btn->tooltip(d->path.c_str());
-                btn->user_data(d);
-                btn->callback([](Fl_Widget* w, void* ud) {
-                    auto* d = static_cast<CrumbData*>(ud);
-                    if (d->panel->on_dir_clicked) d->panel->on_dir_clicked(d->path);
-                }, d);
-            } else {
-                auto* d = new CrumbData{current_filepath_, this, true};
-                Fl_Button* btn = new Fl_Button(bx, by, pw.w, pw.h);
-                btn->copy_label(dlabel.c_str());
-                btn->box(FL_FLAT_BOX);
-                btn->color(fl_darker(FL_DARK2));
-                btn->labelcolor(FL_WHITE);
-                btn->labelsize(font_size_);
-                btn->labelfont(FL_HELVETICA);
-                btn->tooltip(d->path.c_str());
-                btn->user_data(d);
-                btn->callback([](Fl_Widget* w, void* ud) {
-                    auto* d = static_cast<CrumbData*>(ud);
-                    if (d->panel->on_file_clicked) d->panel->on_file_clicked(d->path);
-                }, d);
-            }
+            auto* d = new CrumbData{current_filepath_, this, true};
+            Fl_Button* btn = new Fl_Button(bx, by, bw, ROW_H);
+            btn->copy_label(dlabel.c_str());
+            btn->box(FL_FLAT_BOX);
+            btn->color(fl_darker(FL_DARK2));
+            btn->labelcolor(FL_WHITE);
+            btn->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+            btn->labelsize(font_size_);
+            btn->labelfont(FL_HELVETICA);
+            btn->tooltip(d->path.c_str());
+            btn->user_data(d);
+            btn->callback([](Fl_Widget*, void* ud) {
+                auto* d = static_cast<CrumbData*>(ud);
+                if (d->panel->on_file_clicked) d->panel->on_file_clicked(d->path);
+            }, d);
         }
     }
     breadcrumb_bar_->end();
