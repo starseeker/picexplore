@@ -11,7 +11,7 @@ struct AppSettings {
     int window_x = -1;
     int window_y = -1;
     double hierarchy_thumbnail_threshold = 8.0;
-    bool deduplicate_flat_views = true;
+    bool deduplicate_flat_views = false;
     std::string last_directory;
 
     static std::string get_cache_dir();

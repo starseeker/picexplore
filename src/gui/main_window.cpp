@@ -794,6 +794,17 @@ void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string
         items.push_back({"Information Panel", 0, info_flag, [this]() {
             toggle_info_panel();
         }});
+        int dedup_flag = FL_MENU_TOGGLE | (settings_.deduplicate_flat_views ? FL_MENU_VALUE : 0);
+        items.push_back({"Deduplicate Copies in Flat Views", 0, dedup_flag, [this]() {
+            settings_.deduplicate_flat_views = !settings_.deduplicate_flat_views;
+            settings_.save();
+            current_generation_++;
+            pipeline_->set_generation(current_generation_);
+            last_visible_.clear();
+            layout_dirty_ = true;
+            rebuild_menu();
+            recompute_layout(true);
+        }});
         items.push_back({"Open Directory... (Ctrl+O)", FL_CTRL | 'o', 0, [this]() {
             open_directory_dialog();
         }});
