@@ -9,6 +9,9 @@
 ![PicExplore GUI viewing NARA images with default justified layout](doc/nara_example.png)
 *Justified Grid Layout: fluid, multi-resolution row-based photo gallery.*
 
+![PicExplore GUI viewing NARA images with SIFT sorting order](doc/nara_sift.png)
+*Justified Grid Layout: SIFT image similarity sorting.*
+
 ![PicExplore GUI viewing large NARA image](doc/nara_large_image_viewing.png)
 *Single-Image Deep Zoom: full-resolution inspection with level-of-detail (LOD) tiling and interactive minimap navigator.*
 
