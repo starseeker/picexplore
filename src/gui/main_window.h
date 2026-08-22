@@ -53,6 +53,7 @@ protected:
 private:
     std::string directory_;
     std::string db_path_;
+    std::string cache_dir_;
     ImageStore store_;
     LayoutEngine layout_engine_;
     LayoutEngine::LayoutResult layout_result_;
@@ -91,6 +92,7 @@ private:
     void navigate_to_parent_directory();
     void open_directory_dialog();
     void switch_directory(const std::string& new_dir);
+    void start_garbage_collection();
     void set_hierarchy_thumbnail_threshold(double threshold);
     void show_context_menu(int screen_x, int screen_y, const std::string& hit_image, const std::string& hit_dir);
     void handle_escape();
@@ -98,6 +100,10 @@ private:
     void update_statusbar();
     void rebuild_menu();
     void recompute_layout(bool reprioritize = true);
+
+    std::thread gc_thread_;
+    std::atomic<bool> gc_running_{false};
+    std::atomic<bool> gc_stop_requested_{false};
 
     AppSettings settings_;
     double hierarchy_thumbnail_threshold_ = 8.0;

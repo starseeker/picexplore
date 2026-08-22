@@ -30,10 +30,19 @@ struct UpdateEvent {
         FULL_RES_READY,
         SCAN_PROGRESS,
         SCAN_COMPLETE,
-        TILE_GENERATION_PROGRESS
+        TILE_GENERATION_PROGRESS,
+        GC_PROGRESS,
+        GC_COMPLETE
     };
 
     Type type;
+
+    // Payload for GC_PROGRESS / GC_COMPLETE
+    struct {
+        int checked;
+        int total;
+        int pruned;
+    } gc;
 
     // Payload for IMAGE_DISCOVERED
     struct {
@@ -120,6 +129,24 @@ struct UpdateEvent {
     } tile_progress;
 
     // Helper constructors
+    static UpdateEvent make_gc_progress(int checked, int total, int pruned) {
+        UpdateEvent ev;
+        ev.type = Type::GC_PROGRESS;
+        ev.gc.checked = checked;
+        ev.gc.total = total;
+        ev.gc.pruned = pruned;
+        return ev;
+    }
+
+    static UpdateEvent make_gc_complete(int checked, int total, int pruned) {
+        UpdateEvent ev;
+        ev.type = Type::GC_COMPLETE;
+        ev.gc.checked = checked;
+        ev.gc.total = total;
+        ev.gc.pruned = pruned;
+        return ev;
+    }
+
     static UpdateEvent make_tile_progress(size_t index, const std::string& filepath, int current, int total) {
         UpdateEvent ev;
         ev.type = Type::TILE_GENERATION_PROGRESS;

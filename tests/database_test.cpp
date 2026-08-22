@@ -316,6 +316,82 @@ int main() {
     db_filter.close();
     fs::remove(filter_db_path);
 
-    std::cout << "All database duplicate, metadata, unified cache, TIFF, concurrent, and directory filter tests passed successfully!" << std::endl;
+    // 12. Test Garbage Collection of stale database entries and tile cache
+    std::string gc_db_path = "/tmp/test_picexplore_gc.db";
+    std::string gc_test_dir = "/tmp/test_picexplore_gc_files";
+    std::string gc_tile_dir = "/tmp/test_picexplore_gc_cache";
+    if (fs::exists(gc_db_path)) fs::remove(gc_db_path);
+    if (fs::exists(gc_test_dir)) fs::remove_all(gc_test_dir);
+    if (fs::exists(gc_tile_dir)) fs::remove_all(gc_tile_dir);
+
+    fs::create_directories(gc_test_dir);
+    std::string real_file = gc_test_dir + "/real_image.jpg";
+    std::string stale_file = gc_test_dir + "/deleted_image.jpg";
+    {
+        std::ofstream ofs(real_file);
+        ofs << "dummy image data";
+    }
+
+    fs::create_directories(gc_tile_dir + "/tiles/hash_real");
+    fs::create_directories(gc_tile_dir + "/tiles/hash_stale");
+    {
+        std::ofstream ofs1(gc_tile_dir + "/tiles/hash_real/tile_0.png");
+        ofs1 << "tile";
+        std::ofstream ofs2(gc_tile_dir + "/tiles/hash_stale/tile_0.png");
+        ofs2 << "tile";
+    }
+
+    DatabaseManager db_gc;
+    assert(db_gc.open(gc_db_path));
+    assert(db_gc.begin_transaction());
+    assert(db_gc.store_key_value("file:" + real_file, "hash_real"));
+    assert(db_gc.add_path_for_hash("hash_real", real_file));
+    assert(db_gc.store_key_data("hash_real:128", {1, 2, 3}));
+    ImageMetadata real_meta{100, 1700000000, 800, 600};
+    assert(db_gc.store_image_metadata("hash_real", real_meta));
+
+    assert(db_gc.store_key_value("file:" + stale_file, "hash_stale"));
+    assert(db_gc.add_path_for_hash("hash_stale", stale_file));
+    assert(db_gc.store_key_data("hash_stale:128", {4, 5, 6}));
+    ImageMetadata stale_meta{200, 1700000000, 1024, 768};
+    assert(db_gc.store_image_metadata("hash_stale", stale_meta));
+    assert(db_gc.commit_transaction());
+
+    int gc_checked = 0, gc_total = 0, gc_pruned = 0;
+    int pruned_count = db_gc.garbage_collect(
+        gc_tile_dir,
+        [&](int c, int t, int p) {
+            gc_checked = c;
+            gc_total = t;
+            gc_pruned = p;
+        }
+    );
+
+    assert(pruned_count == 1);
+    assert(gc_pruned == 1);
+    assert(gc_checked == 2);
+
+    // Verify hash_real still intact
+    found_hash.clear();
+    assert(db_gc.get_hash_for_path(real_file, found_hash));
+    assert(found_hash == "hash_real");
+    std::vector<uint8_t> thumb;
+    assert(db_gc.get_key_data("hash_real:128", thumb));
+    assert(thumb.size() == 3);
+    assert(fs::exists(gc_tile_dir + "/tiles/hash_real/tile_0.png"));
+
+    // Verify hash_stale completely removed
+    assert(!db_gc.get_hash_for_path(stale_file, found_hash));
+    assert(!db_gc.get_key_data("hash_stale:128", thumb));
+    ImageMetadata dummy_meta;
+    assert(!db_gc.get_image_metadata("hash_stale", dummy_meta));
+    assert(!fs::exists(gc_tile_dir + "/tiles/hash_stale"));
+
+    db_gc.close();
+    fs::remove(gc_db_path);
+    fs::remove_all(gc_test_dir);
+    fs::remove_all(gc_tile_dir);
+
+    std::cout << "All database duplicate, metadata, unified cache, TIFF, concurrent, directory filter, and garbage collection tests passed successfully!" << std::endl;
     return 0;
 }

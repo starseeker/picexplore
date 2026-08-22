@@ -153,6 +153,11 @@ class DatabaseManager {
 	MDB_env* get_env() const { return env_; }
 	std::mutex& get_mutex() { return db_mutex_; }
 
+	// Database maintenance & cleanup
+	int garbage_collect(const std::string& tile_cache_dir,
+	                    std::function<void(int checked, int total, int pruned)> progress_cb = nullptr,
+	                    std::atomic<bool>* stop_flag = nullptr);
+
 	// Image processing helper
 	bool process_image_file(const std::string& filepath,
 		std::vector<WriteTask>& write_tasks,

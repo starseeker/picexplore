@@ -76,9 +76,9 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     if (hierarchy_thumbnail_threshold_ <= 0.0) hierarchy_thumbnail_threshold_ = 8.0;
 
     // Create ~/.cache/picexplore for tiles
-    std::string cache_dir = AppSettings::get_cache_dir();
+    cache_dir_ = AppSettings::get_cache_dir();
     tile_manager_ = new TileManager(update_queue_);
-    tile_manager_->init(cache_dir);
+    tile_manager_->init(cache_dir_);
 
     int vp_h = h - MENU_H - STATUS_H;
 
@@ -268,10 +268,15 @@ MainWindow::~MainWindow() {
         settings_.window_y = y();
         settings_.save();
     }
+    if (gc_running_) {
+        gc_stop_requested_ = true;
+        if (gc_thread_.joinable()) gc_thread_.join();
+    }
     if (scanner_) { scanner_->stop(); delete scanner_; }
     if (pipeline_) { pipeline_->stop(); delete pipeline_; }
     if (full_res_loader_) { delete full_res_loader_; }
     if (watcher_) { watcher_->stop(); delete watcher_; }
+    if (tile_manager_) { delete tile_manager_; }
     if (db_) { delete db_; }
     Fl::remove_timeout(timer_cb, this);
 }
@@ -561,6 +566,12 @@ void MainWindow::switch_directory(const std::string& new_dir) {
 
     if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
         exit_single_image_mode();
+    }
+
+    if (gc_running_) {
+        gc_stop_requested_ = true;
+        if (gc_thread_.joinable()) gc_thread_.join();
+        gc_running_ = false;
     }
 
     if (scanner_) { scanner_->stop(); delete scanner_; scanner_ = nullptr; }
@@ -898,12 +909,17 @@ std::vector<std::string> MainWindow::reconcile_and_get_duplicates(const std::str
 }
 
 void MainWindow::update_statusbar() {
+    if (gc_running_) return;
     std::string label;
     
     if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
         size_t idx = viewport_->current_single_image();
-        std::string filename = std::filesystem::path(store_.get(idx).filepath).filename().string();
-        label = "  Viewing: " + filename;
+        if (idx < store_.size()) {
+            std::string filename = std::filesystem::path(store_.get(idx).filepath).filename().string();
+            label = "  Viewing: " + filename;
+        } else {
+            label = "  Viewing Image";
+        }
         statusbar_->copy_label(label.c_str());
         statusbar_->redraw();
         return;
@@ -963,6 +979,7 @@ void MainWindow::rebuild_menu() {
     // File menu (placed to the left of Sort)
     menubar_->add("File/Open Directory...", FL_CTRL | 'o', menu_cb, (void*)50, 0);
     menubar_->add("File/Save Window Size",  0,             menu_cb, (void*)51, FL_MENU_TOGGLE | (settings_.save_window_size ? FL_MENU_VALUE : 0));
+    menubar_->add("File/Garbage Collect Database", 0,      menu_cb, (void*)53, 0);
     menubar_->add("File/Exit",              FL_CTRL | 'q', menu_cb, (void*)52, 0);
 
     bool is_single = (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE);
@@ -1227,6 +1244,21 @@ void MainWindow::poll_events() {
             std::cout << "Scan complete." << std::endl;
             scan_complete_ = true;
             status_dirty = true;
+        } else if (ev.type == UpdateEvent::Type::GC_PROGRESS) {
+            std::string msg = "  Garbage Collecting: Checked " + std::to_string(ev.gc.checked) +
+                              " / " + std::to_string(ev.gc.total) +
+                              " (" + std::to_string(ev.gc.pruned) + " pruned)...";
+            statusbar_->copy_label(msg.c_str());
+            statusbar_->redraw();
+        } else if (ev.type == UpdateEvent::Type::GC_COMPLETE) {
+            gc_running_ = false;
+            if (gc_thread_.joinable()) {
+                gc_thread_.join();
+            }
+            std::string msg = "  Garbage Collection Complete: Checked " + std::to_string(ev.gc.checked) +
+                              ", pruned " + std::to_string(ev.gc.pruned) + " stale entries.";
+            statusbar_->copy_label(msg.c_str());
+            statusbar_->redraw();
         }
     }
 
@@ -1856,6 +1888,9 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
             win->settings_.save();
             win->rebuild_menu();
             return;
+        case 53:
+            win->start_garbage_collection();
+            return;
         case 52:
             win->hide();
             return;
@@ -1985,3 +2020,45 @@ int MainWindow::handle(int event) {
     }
     return Fl_Double_Window::handle(event);
 }
+
+void MainWindow::start_garbage_collection() {
+    if (gc_running_) {
+        fl_alert("Garbage collection is already running in the background.");
+        return;
+    }
+    if (db_path_.empty()) {
+        fl_alert("No active database to garbage collect.");
+        return;
+    }
+
+    gc_stop_requested_ = false;
+    gc_running_ = true;
+    statusbar_->copy_label("  Garbage Collecting: Starting database check...");
+    statusbar_->redraw();
+
+    if (gc_thread_.joinable()) {
+        gc_thread_.join();
+    }
+
+    std::string db_p = db_path_;
+    std::string cache_d = cache_dir_;
+
+    gc_thread_ = std::thread([this, db_p, cache_d]() {
+        DatabaseManager db;
+        int checked = 0, total = 0, pruned = 0;
+        if (db.open(db_p)) {
+            pruned = db.garbage_collect(
+                cache_d,
+                [this, &checked, &total](int chk, int tot, int prn) {
+                    checked = chk;
+                    total = tot;
+                    update_queue_.enqueue(UpdateEvent::make_gc_progress(chk, tot, prn));
+                },
+                &gc_stop_requested_
+            );
+            db.close();
+        }
+        update_queue_.enqueue(UpdateEvent::make_gc_complete(checked, total, pruned));
+    });
+}
+

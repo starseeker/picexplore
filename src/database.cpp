@@ -1601,6 +1601,142 @@ void DatabaseManager::apply_orientation_transform(unsigned char* data, int& widt
     }
 }
 
+int DatabaseManager::garbage_collect(const std::string& tile_cache_dir,
+                                     std::function<void(int checked, int total, int pruned)> progress_cb,
+                                     std::atomic<bool>* stop_flag) {
+    if (!is_open_) return 0;
+
+    struct HashRecord {
+        std::string hash;
+        std::vector<std::string> paths;
+    };
+    std::vector<HashRecord> hash_records;
+    std::vector<std::pair<std::string, std::string>> file_mappings; // {filepath, hash}
+
+    {
+        MDB_txn* read_txn = nullptr;
+        MDB_dbi read_dbi;
+        MDB_cursor* cursor = nullptr;
+
+        if (mdb_txn_begin(env_, nullptr, MDB_RDONLY, &read_txn) == 0 &&
+            mdb_dbi_open(read_txn, nullptr, 0, &read_dbi) == 0 &&
+            mdb_cursor_open(read_txn, read_dbi, &cursor) == 0) {
+
+            MDB_val key, data;
+            int rc = mdb_cursor_get(cursor, &key, &data, MDB_FIRST);
+            while (rc == 0) {
+                if (stop_flag && stop_flag->load()) break;
+                std::string_view k((const char*)key.mv_data, key.mv_size);
+                std::string_view v((const char*)data.mv_data, data.mv_size);
+
+                if (k.rfind("file:", 0) == 0) {
+                    file_mappings.emplace_back(std::string(k.substr(5)), std::string(v));
+                } else if (k.length() > 6 && k.substr(k.length() - 6) == ":paths") {
+                    std::string h(k.substr(0, k.length() - 6));
+                    hash_records.push_back({h, parse_paths(std::string(v))});
+                } else if (k.length() > 5 && k.substr(k.length() - 5) == ":path") {
+                    std::string h(k.substr(0, k.length() - 5));
+                    hash_records.push_back({h, parse_paths(std::string(v))});
+                }
+                rc = mdb_cursor_get(cursor, &key, &data, MDB_NEXT);
+            }
+
+            mdb_cursor_close(cursor);
+            mdb_txn_abort(read_txn);
+        }
+    }
+
+    int total_items = static_cast<int>(hash_records.size());
+    int checked_items = 0;
+    int pruned_hashes = 0;
+
+    std::vector<std::string> hashes_to_delete;
+    std::vector<std::pair<std::string, std::vector<std::string>>> hashes_to_update;
+    std::vector<std::string> stale_file_keys;
+
+    // Check all hash records against filesystem
+    for (const auto& rec : hash_records) {
+        if (stop_flag && stop_flag->load()) break;
+
+        std::vector<std::string> valid_paths;
+        for (const auto& p : rec.paths) {
+            std::error_code ec;
+            if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
+                valid_paths.push_back(p);
+            } else {
+                stale_file_keys.push_back("file:" + p);
+            }
+        }
+
+        if (valid_paths.empty()) {
+            hashes_to_delete.push_back(rec.hash);
+            pruned_hashes++;
+        } else if (valid_paths.size() < rec.paths.size()) {
+            hashes_to_update.push_back({rec.hash, valid_paths});
+        }
+
+        checked_items++;
+        if (progress_cb && (checked_items % 50 == 0 || checked_items == total_items)) {
+            progress_cb(checked_items, total_items, pruned_hashes);
+        }
+    }
+
+    // Check all file: mappings
+    for (const auto& [fpath, fhash] : file_mappings) {
+        if (stop_flag && stop_flag->load()) break;
+        std::error_code ec;
+        if (!fs::exists(fpath, ec) || !fs::is_regular_file(fpath, ec)) {
+            stale_file_keys.push_back("file:" + fpath);
+        }
+    }
+
+    // Apply database cleanup in a write transaction
+    {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        if (begin_transaction()) {
+            for (const auto& key : stale_file_keys) {
+                delete_key(key);
+            }
+            for (const auto& [h, vpaths] : hashes_to_update) {
+                set_paths_for_hash(h, vpaths);
+            }
+            for (const auto& h : hashes_to_delete) {
+                delete_key(h + ":paths");
+                delete_key(h + ":path");
+                delete_key(h + ":meta");
+                delete_key(h + ":32");
+                delete_key(h + ":64");
+                delete_key(h + ":128");
+                delete_key(h + ":256");
+                delete_key(h + ":512");
+                delete_key(h + ":1024");
+                delete_key(h + ":2048");
+                delete_key(h + ":sq64");
+                delete_key(h + ":sq128");
+            }
+            commit_transaction();
+        }
+    }
+
+    // Clean up cached tile directories on disk
+    if (!tile_cache_dir.empty()) {
+        for (const auto& h : hashes_to_delete) {
+            try {
+                fs::path tile_path = fs::path(tile_cache_dir) / "tiles" / h;
+                if (fs::exists(tile_path)) {
+                    fs::remove_all(tile_path);
+                }
+            } catch (...) {}
+        }
+    }
+
+    if (progress_cb) {
+        progress_cb(checked_items, total_items, pruned_hashes);
+    }
+
+    return pruned_hashes;
+}
+
 // Local Variables:
 // tab-width: 8
 // mode: C++
