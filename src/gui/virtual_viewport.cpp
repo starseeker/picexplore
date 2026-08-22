@@ -174,6 +174,50 @@ static void fast_center_crop_scale_image(const uint8_t* src, int sw, int sh,
     }
 }
 
+static void fast_subrect_scale_image(const uint8_t* src, int sw, int sh,
+                                     double s0, double t0, double s1, double t1,
+                                     uint8_t* dst, int dw, int dh,
+                                     std::vector<int>& x_coords_buf) {
+    if (!src || !dst || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+
+    x_coords_buf.resize(dw);
+    int* x_coords = x_coords_buf.data();
+
+    double src_x0 = s0 * sw;
+    double src_x1 = s1 * sw;
+    double src_span_x = src_x1 - src_x0;
+
+    for (int x = 0; x < dw; ++x) {
+        int sx = static_cast<int>(src_x0 + (x * src_span_x) / dw);
+        if (sx < 0) sx = 0;
+        if (sx >= sw) sx = sw - 1;
+        x_coords[x] = sx * 3;
+    }
+
+    double src_y0 = t0 * sh;
+    double src_y1 = t1 * sh;
+    double src_span_y = src_y1 - src_y0;
+
+    int src_stride = sw * 3;
+    int dst_stride = dw * 3;
+
+    for (int y = 0; y < dh; ++y) {
+        int sy = static_cast<int>(src_y0 + (y * src_span_y) / dh);
+        if (sy < 0) sy = 0;
+        if (sy >= sh) sy = sh - 1;
+
+        const uint8_t* src_row = src + sy * src_stride;
+        uint8_t* dst_row = dst + y * dst_stride;
+
+        for (int x = 0; x < dw; ++x) {
+            int sx_off = x_coords[x];
+            dst_row[x * 3 + 0] = src_row[sx_off + 0];
+            dst_row[x * 3 + 1] = src_row[sx_off + 1];
+            dst_row[x * 3 + 2] = src_row[sx_off + 2];
+        }
+    }
+}
+
 static void render_cushion_shading(
     uint8_t* dst, int dw, int dh,
     double origin_x, double origin_y,
@@ -1027,13 +1071,11 @@ void VirtualViewport::draw_single_image() {
             int draw_y = y() + (h() - draw_h) / 2;
 
             if (draw_w > 0 && draw_h > 0 && (draw_w != img_w || draw_h != img_h)) { // Need resize
-                std::vector<uint8_t> scaled_data(draw_w * draw_h * 3);
-                stbir_resize_uint8_linear(
-                    img_data, img_w, img_h, 0,
-                    scaled_data.data(), draw_w, draw_h, 0,
-                    (stbir_pixel_layout)3
-                );
-                fl_draw_image(scaled_data.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
+                draw_tmp_buf_.resize(draw_w * draw_h * 3);
+                fast_scale_image(img_data, img_w, img_h,
+                                 draw_tmp_buf_.data(), draw_w, draw_h,
+                                 x_coords_buf_);
+                fl_draw_image(draw_tmp_buf_.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
             } else if (draw_w > 0 && draw_h > 0) {
                 fl_draw_image(img_data, draw_x, draw_y, draw_w, draw_h, 3, 0);
             }
@@ -1063,16 +1105,13 @@ void VirtualViewport::draw_single_image() {
                 double s1 = (double)(subx + out_w) / draw_w;
                 double t1 = (double)(suby + out_h) / draw_h;
 
-                std::vector<uint8_t> scaled_data(out_w * out_h * 3);
-                STBIR_RESIZE resize;
-                stbir_resize_init(&resize,
-                                  img_data, img_w, img_h, 0,
-                                  scaled_data.data(), out_w, out_h, 0,
-                                  STBIR_RGB, STBIR_TYPE_UINT8);
-                stbir_set_input_subrect(&resize, s0, t0, s1, t1);
-                stbir_resize_extended(&resize);
+                draw_tmp_buf_.resize(out_w * out_h * 3);
+                fast_subrect_scale_image(img_data, img_w, img_h,
+                                         s0, t0, s1, t1,
+                                         draw_tmp_buf_.data(), out_w, out_h,
+                                         x_coords_buf_);
 
-                fl_draw_image(scaled_data.data(), clip_x0, clip_y0, out_w, out_h, 3, 0);
+                fl_draw_image(draw_tmp_buf_.data(), clip_x0, clip_y0, out_w, out_h, 3, 0);
             }
         }
 
@@ -1213,13 +1252,13 @@ void VirtualViewport::draw_minimap(float target_orig_w, float target_orig_h, con
 
     // 2. Draw thumbnail image
     if (thumb_data && thumb_w > 0 && thumb_h > 0 && geom.img_w > 0 && geom.img_h > 0) {
-        std::vector<uint8_t> mini_rgb(geom.img_w * geom.img_h * 3);
-        stbir_resize_uint8_linear(
-            thumb_data, thumb_w, thumb_h, 0,
-            mini_rgb.data(), geom.img_w, geom.img_h, 0,
-            (stbir_pixel_layout)3
+        tint_tmp_buf_.resize(geom.img_w * geom.img_h * 3);
+        fast_scale_image(
+            thumb_data, thumb_w, thumb_h,
+            tint_tmp_buf_.data(), geom.img_w, geom.img_h,
+            x_coords_buf_
         );
-        fl_draw_image(mini_rgb.data(), geom.img_x, geom.img_y, geom.img_w, geom.img_h, 3, 0);
+        fl_draw_image(tint_tmp_buf_.data(), geom.img_x, geom.img_y, geom.img_w, geom.img_h, 3, 0);
     }
 
     // 3. Draw container border
