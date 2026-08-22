@@ -987,6 +987,7 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Treemap Style/File Type Colors", 0, menu_cb, (void*)25, FL_MENU_RADIO | val_fc);
 
         int th = static_cast<int>(std::round(hierarchy_thumbnail_threshold_));
+        int val_th1  = (th <= 1)  ? FL_MENU_VALUE : 0;
         int val_th6  = (th == 6)  ? FL_MENU_VALUE : 0;
         int val_th8  = (th == 8)  ? FL_MENU_VALUE : 0;
         int val_th12 = (th == 12) ? FL_MENU_VALUE : 0;
@@ -994,6 +995,7 @@ void MainWindow::rebuild_menu() {
         int val_th24 = (th == 24) ? FL_MENU_VALUE : 0;
         int val_th32 = (th == 32) ? FL_MENU_VALUE : 0;
 
+        menubar_->add("View/Hierarchy Thumbnail Threshold/All (Visible Pixels)", 0, menu_cb, (void*)40, FL_MENU_RADIO | val_th1);
         menubar_->add("View/Hierarchy Thumbnail Threshold/Dense (6px)",       0, menu_cb, (void*)41, FL_MENU_RADIO | val_th6);
         menubar_->add("View/Hierarchy Thumbnail Threshold/Default (8px)",     0, menu_cb, (void*)42, FL_MENU_RADIO | val_th8);
         menubar_->add("View/Hierarchy Thumbnail Threshold/Balanced (12px)",   0, menu_cb, (void*)43, FL_MENU_RADIO | val_th12);
@@ -1366,7 +1368,7 @@ void MainWindow::reprioritize_thumbnails() {
     
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
         bool all_thumbs = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS);
-        double min_size = all_thumbs ? hierarchy_thumbnail_threshold_ : (hierarchy_thumbnail_threshold_ * 2.0);
+        double min_size = (hierarchy_thumbnail_threshold_ <= 1.0) ? 1.0 : (all_thumbs ? hierarchy_thumbnail_threshold_ : (hierarchy_thumbnail_threshold_ * 2.0));
 
         bool view_changed = (viewport_->w() != last_viewport_width_ ||
                              viewport_->h() != last_viewport_height_ ||
@@ -1440,7 +1442,7 @@ void MainWindow::reprioritize_thumbnails() {
             return a.area > b.area;
         });
 
-        size_t max_treemap_requests = 4000;
+        size_t max_treemap_requests = (hierarchy_thumbnail_threshold_ <= 1.0) ? 100000 : 4000;
         size_t count = 0;
         for (const auto& item : req_items) {
             if (++count > max_treemap_requests) break;
@@ -1774,6 +1776,7 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 52:
             win->hide();
             return;
+        case 40: win->set_hierarchy_thumbnail_threshold(1.0); break;
         case 41: win->set_hierarchy_thumbnail_threshold(6.0); break;
         case 42: win->set_hierarchy_thumbnail_threshold(8.0); break;
         case 43: win->set_hierarchy_thumbnail_threshold(12.0); break;
@@ -1782,13 +1785,13 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 46: win->set_hierarchy_thumbnail_threshold(32.0); break;
         case 47: {
             std::string def_val = std::to_string((int)std::round(win->hierarchy_thumbnail_threshold_));
-            const char* val = fl_input("Enter minimum thumbnail threshold in pixels (2\u2013128):", def_val.c_str());
+            const char* val = fl_input("Enter minimum thumbnail threshold in pixels (1\u2013128):", def_val.c_str());
             if (val) {
                 double th = std::atof(val);
-                if (th >= 2.0 && th <= 128.0) {
+                if (th >= 1.0 && th <= 128.0) {
                     win->set_hierarchy_thumbnail_threshold(th);
                 } else {
-                    fl_alert("Please enter a threshold value between 2 and 128 pixels.");
+                    fl_alert("Please enter a threshold value between 1 and 128 pixels.");
                 }
             }
             break;

@@ -494,8 +494,9 @@ void VirtualViewport::draw_treemap() {
         Fl_Color bg_col = fl_rgb_color(rgb_col.r, rgb_col.g, rgb_col.b);
 
         // Sub-pixel / tiny tile fast path:
-        // Skip fl_draw_image and cushion calculations for tiny boxes < 4x4 px
-        if (draw_w < 4 || draw_h < 4) {
+        // Skip fl_draw_image and cushion calculations for tiny boxes below threshold
+        int min_draw_thresh = (hierarchy_thumbnail_threshold_ <= 1.0) ? 1 : 4;
+        if (draw_w < min_draw_thresh || draw_h < min_draw_thresh) {
             if (is_selected) {
                 fl_color(fl_rgb_color(60, 160, 255));
                 fl_rectf(draw_x, draw_y, std::max(1, draw_w), std::max(1, draw_h));
