@@ -430,7 +430,7 @@ void VirtualViewport::draw_treemap() {
         auto& entry = store_.get(box.image_index);
 
         FileTypeColors::ColorRGB rgb_col = FileTypeColors::get_color_rgb(entry.filepath);
-        Fl_Color bg_col = FileTypeColors::get_fl_color(entry.filepath);
+        Fl_Color bg_col = fl_rgb_color(rgb_col.r, rgb_col.g, rgb_col.b);
 
         // Sub-pixel / tiny tile fast path:
         // Skip fl_draw_image and cushion calculations for tiny boxes < 4x4 px

@@ -7,12 +7,19 @@
 namespace FileTypeColors {
 
 static std::string_view extract_ext(const std::string& filepath) {
-    size_t dot = filepath.rfind('.');
-    size_t slash = filepath.find_last_of("/\\");
-    if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
-        return std::string_view();
+    if (filepath.empty()) return std::string_view();
+    const char* data = filepath.data();
+    size_t len = filepath.size();
+    for (size_t i = len; i > 0; --i) {
+        char c = data[i - 1];
+        if (c == '.') {
+            return std::string_view(data + i - 1, len - (i - 1));
+        }
+        if (c == '/' || c == '\\') {
+            break;
+        }
     }
-    return std::string_view(filepath.data() + dot, filepath.size() - dot);
+    return std::string_view();
 }
 
 ColorRGB get_color_rgb(const std::string& filepath) {
