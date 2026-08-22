@@ -1347,11 +1347,11 @@ std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::stri
         }
 
         if (prefix.empty() || file_path.rfind(prefix, 0) == 0 || file_path == exact_dir) {
-            std::string norm_p = fs::path(file_path).lexically_normal().string();
+            std::string norm_p(file_path);
             if (seen_paths.insert(norm_p).second) {
                 std::string hash((const char*)data.mv_data, data.mv_size);
                 ImageInfo info;
-                info.path = norm_p;
+                info.path = std::move(norm_p);
                 info.hash = hash;
                 if (load_image_info(hash, info)) {
                     images.push_back(std::move(info));
@@ -1361,6 +1361,8 @@ std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::stri
 
         rc = mdb_cursor_get(cursor, &key, &data, MDB_NEXT);
     }
+
+    bool is_fast_path = !images.empty();
 
     // Fallback for legacy DBs without "file:" keys
     if (images.empty()) {
@@ -1400,10 +1402,12 @@ std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::stri
     mdb_cursor_close(cursor);
     mdb_txn_abort(read_txn);
 
-    std::sort(images.begin(), images.end(),
-              [](const ImageInfo& a, const ImageInfo& b) {
-                  return a.path < b.path;
-              });
+    if (!is_fast_path) {
+        std::sort(images.begin(), images.end(),
+                  [](const ImageInfo& a, const ImageInfo& b) {
+                      return a.path < b.path;
+                  });
+    }
 
     return images;
 }

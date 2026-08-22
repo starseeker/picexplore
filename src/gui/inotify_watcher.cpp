@@ -60,7 +60,7 @@ void InotifyWatcher::add_watch_recursive(const std::string& path) {
         for (const auto& entry : fs::directory_iterator(path)) {
             if (stop_requested_) break;
             if (entry.is_directory() && !fs::is_symlink(entry)) {
-                std::string subpath = fs::path(entry.path()).lexically_normal().string();
+                std::string subpath = entry.path().string();
                 if (!is_cache_or_db_path(subpath)) {
                     add_watch_recursive(subpath);
                 }

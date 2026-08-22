@@ -213,39 +213,31 @@ bool is_image_file(const std::string& filepath) {
 bool is_cache_or_db_path(const std::string& path, const std::string& db_path) {
     if (path.empty()) return false;
 
-    namespace fs = std::filesystem;
-    std::string norm_path = fs::path(path).lexically_normal().string();
+    // Fast static cache directory strings
+    static const std::string user_cache = []() {
+        const char* home = getenv("HOME");
+        if (!home) return std::string("/tmp/picexplore");
+        namespace fs = std::filesystem;
+        return (fs::path(home) / ".cache" / "picexplore").lexically_normal().string();
+    }();
+    static const std::string tmp_cache = "/tmp/picexplore";
 
-    // 1. Check known PicExplore cache directories
-    const char* home = getenv("HOME");
-    if (home) {
-        std::string user_cache = (fs::path(home) / ".cache" / "picexplore").lexically_normal().string();
-        if (norm_path == user_cache || norm_path.rfind(user_cache + "/", 0) == 0) {
-            return true;
-        }
-    }
-    std::string tmp_cache = fs::path("/tmp/picexplore").lexically_normal().string();
-    if (norm_path == tmp_cache || norm_path.rfind(tmp_cache + "/", 0) == 0) {
+    std::string_view p = path;
+    if (p.rfind(user_cache, 0) == 0 || p.rfind(tmp_cache, 0) == 0) {
         return true;
     }
 
-    // 2. Check explicitly configured database path
     if (!db_path.empty()) {
-        std::string norm_db = fs::path(db_path).lexically_normal().string();
-        if (norm_path == norm_db || norm_path.rfind(norm_db + "/", 0) == 0) {
+        std::string_view db = db_path;
+        if (p == db || p.rfind(db, 0) == 0) {
             return true;
-        }
-        std::string db_dir = fs::path(norm_db).parent_path().string();
-        if (!db_dir.empty() && (norm_path == db_dir || norm_path.rfind(db_dir + "/", 0) == 0)) {
-            std::string dir_name = fs::path(db_dir).filename().string();
-            if (dir_name == "databases" || dir_name == "picexplore" || dir_name == ".picexplore") {
-                return true;
-            }
         }
     }
 
-    // 3. Check known database and lock filenames
-    std::string filename = fs::path(norm_path).filename().string();
+    // Fast filename check without fs::path construction
+    size_t last_slash = p.find_last_of("/\\");
+    std::string_view filename = (last_slash == std::string_view::npos) ? p : p.substr(last_slash + 1);
+
     if (filename == "images.db" || filename == "images.db-lock" ||
         filename == "cache.db" || filename == "cache.db-lock" ||
         filename == "thumbnails.db" || filename == "thumbnails.db-lock" ||
