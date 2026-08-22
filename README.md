@@ -191,3 +191,18 @@ The resulting executable `picexplore` will be in `build/`.
 ## License
 
 PicExplore is open source under the [MIT License](LICENSE).
+
+---
+
+## AI
+
+I have attempted to create PicExplore a number of times over the years, with
+varying degrees of success.  I started back in the day with an attempt at a
+manual translation of the justified layout algorithm to C, and earlier AIs in
+Gihub Copilot were able to finish/correct that and handle the command line PDF
+mode.  The GUI, however, proved less tractable - I had some notions of what
+architecture I wanted - LMDB, concurrentqueue for async work, FLTK for
+minimalist portability, fast libjpeg thumbnail decoding - but early attempts at
+using AIs to realize it weren't successful.  This effort leveraged Gemini 3.1
+Pro High, replaced by 3.7 Flash High when it became available, and it was able
+to succeed with iterative testing on my part to identify bottlenecks.
