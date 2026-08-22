@@ -86,7 +86,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     menubar_->textcolor(fl_rgb_color(220, 220, 220));
     menubar_->selection_color(fl_rgb_color(60, 160, 255));
 
-    viewport_  = new VirtualViewport(0, MENU_H, w - SCROLL_W, vp_h, store_);
+    viewport_  = new VirtualViewport(0, MENU_H, w, vp_h, store_);
     scrollbar_ = new Fl_Scrollbar(w - SCROLL_W, MENU_H, SCROLL_W, vp_h);
     scrollbar_->type(FL_VERTICAL);
     scrollbar_->box(FL_FLAT_BOX);
@@ -94,6 +94,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     scrollbar_->selection_color(fl_rgb_color(70, 70, 70));
     scrollbar_->labelcolor(fl_rgb_color(210, 210, 210));
     scrollbar_->callback(scroll_cb, this);
+    scrollbar_->hide();
 
     info_panel_ = new InfoPanel(w - info_panel_width_, MENU_H, info_panel_width_, vp_h);
     info_panel_->hide();

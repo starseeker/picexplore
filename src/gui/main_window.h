@@ -56,7 +56,7 @@ private:
     LayoutEngine layout_engine_;
     LayoutEngine::LayoutResult layout_result_;
     
-    LayoutEngine::LayoutType active_layout_ = LayoutEngine::LayoutType::JUSTIFIED;
+    LayoutEngine::LayoutType active_layout_ = LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP;
     LayoutEngine::TreemapMetric treemap_metric_ = LayoutEngine::TreemapMetric::FILE_SIZE;
     VirtualViewport::TreemapRenderStyle treemap_style_ = VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS;
     ImageStore::SortCriteria current_sort_criteria_ = ImageStore::SortCriteria::ALPHABETICAL;
@@ -109,7 +109,7 @@ private:
     double last_target_height_ = 0.0;
     int last_viewport_width_ = 0;
     int last_viewport_height_ = 0;
-    LayoutEngine::LayoutType last_active_layout_ = LayoutEngine::LayoutType::JUSTIFIED;
+    LayoutEngine::LayoutType last_active_layout_ = LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP;
     std::string last_directory_filter_;
     LayoutEngine::TreemapMetric last_treemap_metric_ = LayoutEngine::TreemapMetric::FILE_SIZE;
     VirtualViewport::TreemapRenderStyle last_treemap_style_ = VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS;
