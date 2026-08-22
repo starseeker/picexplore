@@ -855,8 +855,13 @@ void MainWindow::poll_events() {
 
     if (layout_dirty_) {
         auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_layout_recompute_time_).count();
-        if (scan_complete_ || elapsed >= 200) {
+        auto elapsed_scan = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_layout_recompute_time_).count();
+        auto elapsed_resize = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_resize_time_).count();
+        
+        bool resizing = reprioritize_pending_ && elapsed_resize < 100;
+        bool scanning = !scan_complete_ && elapsed_scan < 200;
+        
+        if (!resizing && !scanning) {
             last_layout_recompute_time_ = now;
             recompute_layout(true);
         }
@@ -867,10 +872,14 @@ void MainWindow::poll_events() {
     if (reprioritize_pending_) {
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_resize_time_).count();
-        if (elapsed >= 150) {
+        if (elapsed >= 100) {
             reprioritize_pending_ = false;
             if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
-                reprioritize_thumbnails();
+                if (layout_dirty_) {
+                    recompute_layout(true);
+                } else {
+                    reprioritize_thumbnails();
+                }
             }
         }
     }
@@ -1327,9 +1336,9 @@ void MainWindow::resize(int X, int Y, int W, int H) {
     }
 
     if (viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
-        recompute_layout(false);
         reprioritize_pending_ = true;
         last_resize_time_ = std::chrono::steady_clock::now();
+        layout_dirty_ = true;
     } else {
         layout_dirty_ = true;
     }
