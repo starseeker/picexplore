@@ -4,6 +4,7 @@
 #include <FL/Fl.H>
 #include <FL/Fl_Output.H>
 #include <FL/Fl_Menu_Bar.H>
+#include <FL/Fl_Menu_Item.H>
 #include <FL/fl_ask.H>
 #include <filesystem>
 #include <thread>
@@ -240,6 +241,14 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
 
     viewport_->on_directory_clicked = [this](const std::string& dir) {
         apply_directory_filter(dir);
+    };
+
+    viewport_->on_escape_pressed = [this]() {
+        handle_escape();
+    };
+
+    viewport_->on_context_menu = [this](int sx, int sy, const std::string& hit_image, const std::string& hit_dir) {
+        show_context_menu(sx, sy, hit_image, hit_dir);
     };
 
     end();
@@ -498,6 +507,236 @@ void MainWindow::reset_directory_filter() {
     scrollbar_->value(0);
     update_statusbar();
     recompute_layout(true);
+}
+
+void MainWindow::navigate_to_parent_directory() {
+    if (directory_filter_.empty()) return;
+
+    namespace fs = std::filesystem;
+    try {
+        fs::path cur_p = fs::canonical(directory_filter_);
+        fs::path root_p = fs::canonical(directory_);
+        if (cur_p == root_p || !cur_p.has_parent_path()) {
+            reset_directory_filter();
+            return;
+        }
+        fs::path parent_p = cur_p.parent_path();
+        std::string canon_parent = fs::canonical(parent_p).string();
+        std::string canon_root = root_p.string();
+        if (canon_parent == canon_root || canon_parent.size() < canon_root.size()) {
+            reset_directory_filter();
+        } else {
+            apply_directory_filter(parent_p.string());
+        }
+    } catch (...) {
+        reset_directory_filter();
+    }
+}
+
+void MainWindow::handle_escape() {
+    if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
+        exit_single_image_mode();
+    } else if (!directory_filter_.empty()) {
+        navigate_to_parent_directory();
+    } else if (viewport_->get_selected_image() != (size_t)-1) {
+        viewport_->set_selected_image((size_t)-1);
+        current_selected_filepath_.clear();
+        if (info_panel_visible_) {
+            info_panel_->clear_info();
+        }
+    }
+}
+
+void MainWindow::toggle_info_panel() {
+    info_panel_visible_ = !info_panel_visible_;
+    rebuild_menu();
+    resize(x(), y(), w(), h());
+    if (info_panel_visible_) {
+        size_t sel = viewport_->get_selected_image();
+        if (sel != (size_t)-1) {
+            const auto& entry = store_.get(sel);
+            auto dups = reconcile_and_get_duplicates(entry.content_hash, entry.filepath);
+            info_panel_->display_info(entry, dups);
+        }
+    }
+}
+
+void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string& hit_image, const std::string& hit_dir) {
+    namespace fs = std::filesystem;
+
+    struct ContextItem {
+        std::string text;
+        int shortcut = 0;
+        int flags = 0;
+        std::function<void()> callback;
+    };
+
+    std::vector<ContextItem> items;
+
+    if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
+        // Single Image Mode context menu
+        items.push_back({"Reset Zoom (Fit to Window)", 0, 0, [this]() {
+            viewport_->reset_zoom();
+        }});
+        items.push_back({"Zoom In", 0, 0, [this]() {
+            viewport_->zoom_in_center();
+        }});
+        items.push_back({"Zoom Out", 0, 0, [this]() {
+            viewport_->zoom_out_center();
+        }});
+        items.push_back({"Actual Size (100%)", 0, 0, [this]() {
+            viewport_->zoom_actual_size();
+        }});
+        if (!items.empty()) items.back().flags |= FL_MENU_DIVIDER;
+
+        items.push_back({"Previous Image", FL_Left, 0, [this]() {
+            navigate_single_image(-1);
+        }});
+        items.push_back({"Next Image", FL_Right, 0, [this]() {
+            navigate_single_image(1);
+        }});
+        if (!items.empty()) items.back().flags |= FL_MENU_DIVIDER;
+
+        int info_flag = FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0);
+        items.push_back({"Information Panel", 0, info_flag, [this]() {
+            toggle_info_panel();
+        }});
+        items.push_back({"Exit Image Viewer (Esc)", FL_Escape, 0, [this]() {
+            exit_single_image_mode();
+        }});
+    } else {
+        // Overview Modes (Grid, Flat Treemap, Hierarchical Treemap)
+        if (!hit_image.empty()) {
+            size_t idx = store_.find_by_filepath(hit_image);
+            if (idx != (size_t)-1) {
+                // Select image visually
+                viewport_->set_selected_image(idx);
+                current_selected_filepath_ = hit_image;
+                if (info_panel_visible_) {
+                    auto& entry = store_.get(idx);
+                    if (entry.content_hash.empty() && db_ && db_->is_open()) {
+                        std::string h;
+                        if (db_->get_hash_for_path(hit_image, h)) entry.content_hash = h;
+                    }
+                    auto dups = reconcile_and_get_duplicates(entry.content_hash, hit_image);
+                    info_panel_->display_info(entry, dups);
+                }
+
+                items.push_back({"Open in Image Viewer", 0, 0, [this, idx, hit_image]() {
+                    enter_single_image_mode(idx, hit_image);
+                }});
+                if (!info_panel_visible_) {
+                    items.push_back({"Show in Information Panel", 0, 0, [this]() {
+                        toggle_info_panel();
+                    }});
+                }
+                if (!items.empty()) items.back().flags |= FL_MENU_DIVIDER;
+            }
+        }
+
+        // Hierarchy & Directory navigation
+        std::string target_drill_dir;
+        if (!hit_dir.empty()) {
+            target_drill_dir = hit_dir;
+        } else if (!hit_image.empty()) {
+            try {
+                target_drill_dir = fs::path(hit_image).parent_path().string();
+            } catch (...) {}
+        }
+
+        if (!target_drill_dir.empty()) {
+            std::string canon_drill, canon_current_filter;
+            try { canon_drill = fs::canonical(target_drill_dir).string(); } catch (...) {}
+            try { canon_current_filter = fs::canonical(directory_filter_.empty() ? directory_ : directory_filter_).string(); } catch (...) {}
+
+            if (!canon_drill.empty() && canon_drill != canon_current_filter && canon_drill.find(canon_current_filter) == 0) {
+                std::string folder_name = fs::path(target_drill_dir).filename().string();
+                if (folder_name.empty()) folder_name = target_drill_dir;
+                items.push_back({"Zoom into Folder: \"" + folder_name + "\"", 0, 0, [this, target_drill_dir]() {
+                    apply_directory_filter(target_drill_dir);
+                }});
+            }
+        }
+
+        if (!directory_filter_.empty()) {
+            std::string parent_label = "Go Up to Parent Directory (Esc)";
+            try {
+                fs::path cur_p = fs::canonical(directory_filter_);
+                fs::path root_p = fs::canonical(directory_);
+                if (cur_p.parent_path() == root_p || cur_p.parent_path().string().size() <= root_p.string().size()) {
+                    parent_label = "Go Up to Root (" + root_p.filename().string() + ") (Esc)";
+                } else {
+                    parent_label = "Go Up to \"" + cur_p.parent_path().filename().string() + "\" (Esc)";
+                }
+            } catch (...) {}
+            items.push_back({parent_label, 0, 0, [this]() {
+                navigate_to_parent_directory();
+            }});
+            items.push_back({"Reset to Root Directory (Ctrl+R)", 0, 0, [this]() {
+                reset_directory_filter();
+            }});
+        }
+
+        if (!items.empty() && (items.back().flags & FL_MENU_DIVIDER) == 0) {
+            items.back().flags |= FL_MENU_DIVIDER;
+        }
+
+        // Layout switching shortcuts
+        if (active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
+            items.push_back({"Switch to Justified Grid", FL_CTRL | '1', 0, [this]() {
+                set_layout_mode(LayoutEngine::LayoutType::JUSTIFIED);
+            }});
+            items.push_back({"Switch to Flat Treemap", FL_CTRL | '2', 0, [this]() {
+                set_layout_mode(LayoutEngine::LayoutType::TREEMAP);
+            }});
+        } else if (active_layout_ == LayoutEngine::LayoutType::JUSTIFIED) {
+            items.push_back({"Switch to Hierarchical Treemap", FL_CTRL | '3', 0, [this]() {
+                set_layout_mode(LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP);
+            }});
+            items.push_back({"Switch to Flat Treemap", FL_CTRL | '2', 0, [this]() {
+                set_layout_mode(LayoutEngine::LayoutType::TREEMAP);
+            }});
+        } else {
+            items.push_back({"Switch to Hierarchical Treemap", FL_CTRL | '3', 0, [this]() {
+                set_layout_mode(LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP);
+            }});
+            items.push_back({"Switch to Justified Grid", FL_CTRL | '1', 0, [this]() {
+                set_layout_mode(LayoutEngine::LayoutType::JUSTIFIED);
+            }});
+        }
+
+        if (!items.empty() && (items.back().flags & FL_MENU_DIVIDER) == 0) {
+            items.back().flags |= FL_MENU_DIVIDER;
+        }
+
+        int info_flag = FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0);
+        items.push_back({"Information Panel", 0, info_flag, [this]() {
+            toggle_info_panel();
+        }});
+    }
+
+    if (items.empty()) return;
+
+    std::vector<Fl_Menu_Item> fl_items(items.size() + 1);
+    memset(fl_items.data(), 0, sizeof(Fl_Menu_Item) * (items.size() + 1));
+
+    for (size_t i = 0; i < items.size(); ++i) {
+        fl_items[i].text = items[i].text.c_str();
+        fl_items[i].shortcut_ = items[i].shortcut;
+        fl_items[i].flags = items[i].flags;
+        fl_items[i].callback_ = [](Fl_Widget*, void* v) {
+            auto* fn = static_cast<std::function<void()>*>(v);
+            if (fn && *fn) (*fn)();
+        };
+        fl_items[i].user_data_ = &items[i].callback;
+    }
+    fl_items[items.size()] = { nullptr };
+
+    const Fl_Menu_Item* picked = fl_items.data()->popup(screen_x, screen_y, nullptr, nullptr, nullptr);
+    if (picked && picked->user_data()) {
+        auto* fn = static_cast<std::function<void()>*>(picked->user_data());
+        if (fn && *fn) (*fn)();
+    }
 }
 
 std::vector<std::string> MainWindow::reconcile_and_get_duplicates(const std::string& hash, const std::string& current_filepath) {
@@ -1382,9 +1621,7 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 8: win->target_height_ = std::max(win->target_height_ / 1.2,  50.0); win->layout_dirty_ = true; break;
         case 9: win->target_height_ = 150.0; win->layout_dirty_ = true; break;
         case 10:
-            win->info_panel_visible_ = !win->info_panel_visible_;
-            win->rebuild_menu();
-            win->resize(win->x(), win->y(), win->w(), win->h());
+            win->toggle_info_panel();
             break;
         case 11: win->info_panel_->set_font_size(11); win->rebuild_menu(); break;
         case 12: win->info_panel_->set_font_size(14); win->rebuild_menu(); break;
@@ -1484,6 +1721,11 @@ int MainWindow::handle(int event) {
             fl_cursor(FL_CURSOR_WE);
             return 1;
         }
+    }
+
+    if (event == FL_KEYDOWN && Fl::event_key() == FL_Escape) {
+        handle_escape();
+        return 1;
     }
 
     if (event == FL_MOUSEWHEEL) {

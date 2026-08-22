@@ -62,11 +62,20 @@ public:
     }
     bool show_minimap() const { return show_minimap_; }
 
+    void reset_zoom();
+    void zoom_in_center();
+    void zoom_out_center();
+    void zoom_actual_size();
+    float get_zoom() const { return zoom_; }
+    std::string get_current_single_image_path() const;
+
     std::function<void(const std::string&)> on_image_clicked;
     std::function<void(const std::string&)> on_image_double_clicked;
     std::function<void(const std::string&)> on_directory_clicked;
     std::function<void()> on_exit_single_image;
     std::function<void(int)> on_navigate_single_image;
+    std::function<void()> on_escape_pressed;
+    std::function<void(int screen_x, int screen_y, const std::string& hit_image, const std::string& hit_dir)> on_context_menu;
 
 protected:
     void draw() override;

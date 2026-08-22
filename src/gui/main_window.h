@@ -87,6 +87,10 @@ private:
     std::string directory_filter_;
     void apply_directory_filter(const std::string& dir);
     void reset_directory_filter();
+    void navigate_to_parent_directory();
+    void show_context_menu(int screen_x, int screen_y, const std::string& hit_image, const std::string& hit_dir);
+    void handle_escape();
+    void toggle_info_panel();
     void update_statusbar();
     void rebuild_menu();
     void recompute_layout(bool reprioritize = true);

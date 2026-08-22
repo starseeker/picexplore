@@ -780,6 +780,12 @@ int VirtualViewport::handle(int event) {
                 return 1;
             }
             case FL_PUSH:
+                if (Fl::event_button() == FL_RIGHT_MOUSE) {
+                    if (on_context_menu) {
+                        on_context_menu(Fl::event_x(), Fl::event_y(), get_current_single_image_path(), "");
+                    }
+                    return 1;
+                }
                 if (Fl::event_button() == FL_LEFT_MOUSE) {
                     float target_orig_w = (tile_manager_ && tile_orig_w_ > 0) ? (float)tile_orig_w_ : ((full_res_ready_ && full_res_w_ > 0) ? (float)full_res_w_ : 0.0f);
                     if (target_orig_w == 0.0f) {
@@ -882,6 +888,48 @@ int VirtualViewport::handle(int event) {
                 return 1;
             case FL_PUSH:
                 take_focus();
+                if (Fl::event_button() == FL_RIGHT_MOUSE) {
+                    std::string hit_image_path;
+                    std::string hit_dir_path;
+                    if (layout_) {
+                        int mx = Fl::event_x() - x();
+                        int my = Fl::event_y() - y();
+                        if (layout_->layout_type == LayoutEngine::LayoutType::JUSTIFIED) {
+                            my += scroll_offset_;
+                        }
+
+                        // Check image hit
+                        for (const auto& box : layout_->boxes) {
+                            if (mx >= box.x && mx <= box.x + box.w &&
+                                my >= box.y && my <= box.y + box.h) {
+                                try {
+                                    hit_image_path = store_.get(box.image_index).filepath;
+                                } catch (...) {}
+                                break;
+                            }
+                        }
+
+                        // Check container hit in hierarchical treemap
+                        if (layout_->layout_type == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
+                            for (auto it = layout_->container_boxes.rbegin(); it != layout_->container_boxes.rend(); ++it) {
+                                const auto& cbox = *it;
+                                int cx = static_cast<int>(cbox.x);
+                                int cy = static_cast<int>(cbox.y);
+                                int cw = static_cast<int>(cbox.w);
+                                int ch = static_cast<int>(cbox.h);
+                                if (mx >= cx && mx <= cx + cw && my >= cy && my <= cy + ch) {
+                                    hit_dir_path = cbox.dir_path;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (on_context_menu) {
+                        on_context_menu(Fl::event_x(), Fl::event_y(), hit_image_path, hit_dir_path);
+                    }
+                    return 1;
+                }
+
                 if (layout_) {
                     int mx = Fl::event_x() - x();
                     int my = Fl::event_y() - y();
@@ -960,6 +1008,14 @@ int VirtualViewport::handle(int event) {
                     }
                 }
                 return 1;
+            case FL_KEYDOWN:
+                if (Fl::event_key() == FL_Escape) {
+                    if (on_escape_pressed) {
+                        on_escape_pressed();
+                        return 1;
+                    }
+                }
+                return Fl_Widget::handle(event);
             case FL_MOUSEWHEEL:
                 return 0; 
             default:
@@ -982,6 +1038,101 @@ void VirtualViewport::enter_single_image(size_t raw_idx) {
 void VirtualViewport::exit_single_image() {
     view_mode_ = ViewMode::GRID;
     full_res_rgb_.clear();
+    redraw();
+}
+
+std::string VirtualViewport::get_current_single_image_path() const {
+    if (view_mode_ == ViewMode::SINGLE_IMAGE && single_idx_ < store_.count()) {
+        try {
+            return store_.get(single_idx_).filepath;
+        } catch (...) {}
+    }
+    return "";
+}
+
+void VirtualViewport::reset_zoom() {
+    zoom_ = 0.0f;
+    pan_x_ = 0.0f;
+    pan_y_ = 0.0f;
+    redraw();
+}
+
+void VirtualViewport::zoom_in_center() {
+    float target_orig_w = (tile_manager_ && tile_orig_w_ > 0) ? (float)tile_orig_w_ : ((full_res_ready_ && full_res_w_ > 0) ? (float)full_res_w_ : 0.0f);
+    float target_orig_h = (tile_manager_ && tile_orig_h_ > 0) ? (float)tile_orig_h_ : ((full_res_ready_ && full_res_h_ > 0) ? (float)full_res_h_ : 0.0f);
+    if (target_orig_w <= 0.0f || target_orig_h <= 0.0f) {
+        try {
+            const auto& entry = store_.get(single_idx_);
+            target_orig_w = entry.original_width > 0 ? entry.original_width : entry.scaled.width;
+            target_orig_h = entry.original_height > 0 ? entry.original_height : entry.scaled.height;
+        } catch (...) {}
+    }
+    if (target_orig_w <= 0.0f || target_orig_h <= 0.0f) return;
+
+    float fit_scale = std::min((float)w() / target_orig_w, (float)h() / target_orig_h);
+    float old_zoom = (zoom_ == 0.0f) ? fit_scale : zoom_;
+    float new_zoom = std::min(old_zoom * 1.35f, 16.0f);
+
+    float center_x = w() / 2.0f;
+    float center_y = h() / 2.0f;
+    float fx = (zoom_ == 0.0f) ? (target_orig_w / 2.0f) : (center_x - pan_x_) / old_zoom;
+    float fy = (zoom_ == 0.0f) ? (target_orig_h / 2.0f) : (center_y - pan_y_) / old_zoom;
+
+    zoom_ = new_zoom;
+    pan_x_ = center_x - fx * zoom_;
+    pan_y_ = center_y - fy * zoom_;
+    redraw();
+}
+
+void VirtualViewport::zoom_out_center() {
+    float target_orig_w = (tile_manager_ && tile_orig_w_ > 0) ? (float)tile_orig_w_ : ((full_res_ready_ && full_res_w_ > 0) ? (float)full_res_w_ : 0.0f);
+    float target_orig_h = (tile_manager_ && tile_orig_h_ > 0) ? (float)tile_orig_h_ : ((full_res_ready_ && full_res_h_ > 0) ? (float)full_res_h_ : 0.0f);
+    if (target_orig_w <= 0.0f || target_orig_h <= 0.0f) {
+        try {
+            const auto& entry = store_.get(single_idx_);
+            target_orig_w = entry.original_width > 0 ? entry.original_width : entry.scaled.width;
+            target_orig_h = entry.original_height > 0 ? entry.original_height : entry.scaled.height;
+        } catch (...) {}
+    }
+    if (target_orig_w <= 0.0f || target_orig_h <= 0.0f) return;
+
+    float fit_scale = std::min((float)w() / target_orig_w, (float)h() / target_orig_h);
+    if (zoom_ == 0.0f || zoom_ <= fit_scale * 1.05f) {
+        reset_zoom();
+        return;
+    }
+
+    float old_zoom = zoom_;
+    float new_zoom = old_zoom / 1.35f;
+    if (new_zoom <= fit_scale) {
+        reset_zoom();
+        return;
+    }
+
+    float center_x = w() / 2.0f;
+    float center_y = h() / 2.0f;
+    float fx = (center_x - pan_x_) / old_zoom;
+    float fy = (center_y - pan_y_) / old_zoom;
+
+    zoom_ = new_zoom;
+    pan_x_ = center_x - fx * zoom_;
+    pan_y_ = center_y - fy * zoom_;
+    redraw();
+}
+
+void VirtualViewport::zoom_actual_size() {
+    float target_orig_w = (tile_manager_ && tile_orig_w_ > 0) ? (float)tile_orig_w_ : ((full_res_ready_ && full_res_w_ > 0) ? (float)full_res_w_ : 0.0f);
+    float target_orig_h = (tile_manager_ && tile_orig_h_ > 0) ? (float)tile_orig_h_ : ((full_res_ready_ && full_res_h_ > 0) ? (float)full_res_h_ : 0.0f);
+    if (target_orig_w <= 0.0f || target_orig_h <= 0.0f) {
+        try {
+            const auto& entry = store_.get(single_idx_);
+            target_orig_w = entry.original_width > 0 ? entry.original_width : entry.scaled.width;
+            target_orig_h = entry.original_height > 0 ? entry.original_height : entry.scaled.height;
+        } catch (...) {}
+    }
+    zoom_ = 1.0f;
+    pan_x_ = (w() - target_orig_w) / 2.0f;
+    pan_y_ = (h() - target_orig_h) / 2.0f;
     redraw();
 }
 
