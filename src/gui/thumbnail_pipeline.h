@@ -50,6 +50,7 @@ private:
     // Queues
     moodycamel::ConcurrentQueue<ThumbRequest> urgent_queue_;
     moodycamel::ConcurrentQueue<ThumbRequest> normal_queue_;
+    moodycamel::ConcurrentQueue<ThumbRequest> upgrade_queue_;
 
     std::mutex wake_mutex_;
     std::condition_variable wake_cv_;
@@ -58,5 +59,5 @@ private:
     std::atomic<int> pending_requests_{0};
 
     void worker_thread();
-    bool process_request(const ThumbRequest& req);
+    bool process_request(const ThumbRequest& req, bool is_upgrade = false);
 };

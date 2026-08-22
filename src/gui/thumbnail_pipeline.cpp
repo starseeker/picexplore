@@ -69,20 +69,26 @@ void ThumbnailPipeline::worker_thread() {
     while (!stop_requested_) {
         ThumbRequest req;
         bool got_req = false;
+        bool is_upgrade = false;
 
         if (urgent_queue_.try_dequeue(req)) {
             got_req = true;
+            is_upgrade = false;
         } else if (normal_queue_.try_dequeue(req)) {
             got_req = true;
+            is_upgrade = false;
+        } else if (upgrade_queue_.try_dequeue(req)) {
+            got_req = true;
+            is_upgrade = true;
         }
 
         if (got_req) {
-            if (req.generation > 0 && current_generation_ > req.generation + 2) {
+            if (req.generation > 0 && current_generation_ > req.generation + 1) {
                 pending_requests_--;
                 continue;
             }
             pending_requests_--;
-            process_request(req);
+            process_request(req, is_upgrade);
         } else {
             std::unique_lock<std::mutex> lock(wake_mutex_);
             wake_cv_.wait_for(lock, std::chrono::milliseconds(50), [this]() {
@@ -92,7 +98,7 @@ void ThumbnailPipeline::worker_thread() {
     }
 }
 
-bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
+bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade) {
     try {
         std::string hash = req.hash;
         if (hash.empty() && db_.is_open()) {
@@ -156,7 +162,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
             target_h = static_cast<int>(req.target_quality);
         }
 
-        if (target_found) {
+        if (target_found && !is_upgrade) {
             std::vector<uint8_t> rgb_decoded;
             int dec_w = 0, dec_h = 0;
             if (decode_jpeg(jpeg_data.data(), jpeg_data.size(), rgb_decoded, dec_w, dec_h)) {
@@ -173,13 +179,11 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
                     return true;
                 }
 
-                // If user scrolled past to a newer generation, skip heavy disk decode
-                if (req.generation > 0 && current_generation_ > req.generation + 1) {
-                    return true;
-                }
-                // Otherwise (found_quality < req.target_quality and user is viewing/zoomed in):
-                // We emitted the fast coarse placeholder to the screen,
-                // now continue below to generate the sharp full target_quality from the original file!
+                // Enqueue upgrade to background upgrade queue so other urgent fast-cache requests are never blocked
+                upgrade_queue_.enqueue(req);
+                pending_requests_++;
+                wake_cv_.notify_one();
+                return true;
             }
         }
         int w = 0, h = 0, channels = 0;
