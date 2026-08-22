@@ -84,6 +84,7 @@ add_executable(picexplore
     src/gui/inotify_watcher.cpp
     src/gui/file_type_colors.cpp
     src/gui/app_settings.cpp
+    src/gui/pdf_export_dialog.cpp
     src/database.cpp
     src/sift_feature.cpp
     src/utils.cpp

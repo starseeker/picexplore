@@ -92,6 +92,7 @@ private:
     void reset_directory_filter();
     void navigate_to_parent_directory();
     void open_directory_dialog();
+    void open_pdf_export_dialog();
     void switch_directory(const std::string& new_dir);
     void start_garbage_collection();
     void set_hierarchy_thumbnail_threshold(double threshold);

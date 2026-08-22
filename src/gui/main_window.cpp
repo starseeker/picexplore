@@ -1,5 +1,6 @@
 #include "main_window.h"
 #include "inotify_watcher.h"
+#include "pdf_export_dialog.h"
 #include "../database.h"
 #include <FL/Fl.H>
 #include <FL/Fl_Output.H>
@@ -999,6 +1000,7 @@ void MainWindow::rebuild_menu() {
 
     // File menu (placed to the left of Sort)
     menubar_->add("File/Open Directory...", FL_CTRL | 'o', menu_cb, (void*)50, 0);
+    menubar_->add("File/Export as PDF...",  FL_CTRL | 'e', menu_cb, (void*)60, 0);
     menubar_->add("File/Save Window Size",  0,             menu_cb, (void*)51, FL_MENU_TOGGLE | (settings_.save_window_size ? FL_MENU_VALUE : 0));
     menubar_->add("File/Garbage Collect Database", 0,      menu_cb, (void*)53, 0);
     menubar_->add("File/Exit",              FL_CTRL | 'q', menu_cb, (void*)52, 0);
@@ -1923,6 +1925,9 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 50:
             win->open_directory_dialog();
             return;
+        case 60:
+            win->open_pdf_export_dialog();
+            return;
         case 51:
             win->settings_.save_window_size = !win->settings_.save_window_size;
             win->settings_.save();
@@ -2208,4 +2213,14 @@ void MainWindow::start_garbage_collection() {
         update_queue_.enqueue(UpdateEvent::make_gc_complete(checked, total, pruned));
     });
 }
+
+void MainWindow::open_pdf_export_dialog() {
+    DatabaseManager db;
+    DatabaseManager* db_ptr = nullptr;
+    if (!db_path_.empty() && db.open(db_path_)) {
+        db_ptr = &db;
+    }
+    PDFExportDialog::show_dialog(store_, db_ptr, active_layout_, treemap_metric_, directory_, directory_filter_);
+}
+
 

@@ -103,6 +103,54 @@ target_include_directories(settings_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(settings_test PRIVATE -g)
 add_test(NAME settings_test COMMAND settings_test)
 
+# PDF Generation and Export test
+add_executable(pdf_test
+    pdf_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/cli/pdf.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/image_store.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/layout_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/file_type_colors.cpp
+    ${CMAKE_SOURCE_DIR}/src/database.cpp
+    ${CMAKE_SOURCE_DIR}/src/sift_feature.cpp
+    ${CMAKE_SOURCE_DIR}/src/utils.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/TinyEXIF.cpp
+    ${VLSIFT_DIR}/vl_sift.cpp
+)
+target_include_directories(pdf_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/cli
+    ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/third_party
+    ${VLSIFT_DIR}
+    ${XXHASH_DIR}
+    ${STB_DIR}
+    ${LMDB_DIR}
+    ${CXXOPTS_DIR}/include
+    ${CONCURRENTQUEUE_DIR}
+    ${JPEG_INCLUDE_DIRS}
+    ${PNG_INCLUDE_DIRS}
+    ${ZLIB_INCLUDE_DIRS}
+    ${WEBP_INCLUDE_DIRS}
+    ${TIFF_INCLUDE_DIRS}
+)
+target_link_libraries(pdf_test
+    xxhash
+    lmdb
+    ${JPEG_LIBRARIES}
+    ${PNG_LIBRARIES}
+    ${ZLIB_LIBRARIES}
+    ${WEBP_LIBRARIES}
+    ${TIFF_LIBRARIES}
+)
+target_compile_definitions(pdf_test PRIVATE
+    _LARGEFILE64_SOURCE
+    _FILE_OFFSET_BITS=64
+    TINYEXIF_NO_XMP_SUPPORT
+)
+target_compile_options(pdf_test PRIVATE -g -O2)
+add_test(NAME pdf_test COMMAND pdf_test)
+
+
 # Local Variables:
 # tab-width: 8
 # mode: cmake
