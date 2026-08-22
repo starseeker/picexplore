@@ -163,17 +163,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
                 update_queue_.enqueue(UpdateEvent::make_thumb_rgb_ready(
                     req.image_index, req.filepath, hash, found_quality, std::vector<uint8_t>(rgb_decoded), dec_w, dec_h, req.generation
                 ));
-                
-                if (req.target_quality == ThumbQuality::SQUARE_128 || req.target_quality == ThumbQuality::SQUARE_64) {
-                    return true;
-                }
-
-                // If the cached thumbnail in LMDB is already of equal or higher quality, we're done!
-                if (static_cast<int>(found_quality) >= static_cast<int>(req.target_quality)) {
-                    return true;
-                }
-                // Otherwise (found_quality < req.target_quality): we emitted the fast placeholder,
-                // now continue below to generate the sharp full target_quality from the original file!
+                return true;
             }
         }
         int w = 0, h = 0, channels = 0;

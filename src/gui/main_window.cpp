@@ -1343,8 +1343,7 @@ void MainWindow::scroll_cb(Fl_Widget* w, void* data) {
     MainWindow* win = static_cast<MainWindow*>(data);
     win->viewport_->set_scroll_offset(win->scrollbar_->value());
     if (win->viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
-        win->reprioritize_pending_ = true;
-        win->last_resize_time_ = std::chrono::steady_clock::now();
+        win->reprioritize_thumbnails();
     }
 }
 
