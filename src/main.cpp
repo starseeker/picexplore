@@ -52,7 +52,16 @@ int main(int argc, char* argv[]) {
             ("s,scan", "Run batch scanner on directory without launching GUI")
             ("pdf", "Generate PDF gallery from database without launching GUI", cxxopts::value<std::string>())
             ("db,database", "Path to LMDB database file", cxxopts::value<std::string>())
-            ("row-height", "Target row height in pixels for PDF layout", cxxopts::value<int>()->default_value("150"))
+            ("l,layout", "PDF Layout: justified, treemap, hierarchical-treemap", cxxopts::value<std::string>()->default_value("justified"))
+            ("m,metric", "Treemap Metric: file-size, pixel-area, duplicate-count, equal-size", cxxopts::value<std::string>()->default_value("file-size"))
+            ("style", "Treemap Render Style: thumbnails, cushion, file-type-colors", cxxopts::value<std::string>()->default_value("thumbnails"))
+            ("paper-size", "Paper Size: letter, legal, tabloid, a4, a3, a2, a1", cxxopts::value<std::string>()->default_value("letter"))
+            ("orientation", "Page Orientation: portrait, landscape", cxxopts::value<std::string>()->default_value("portrait"))
+            ("page-margin", "Page margin in inches", cxxopts::value<double>()->default_value("0.5"))
+            ("dpi", "Print resolution DPI", cxxopts::value<double>()->default_value("300"))
+            ("no-container-labels", "Disable directory container banners and borders in hierarchical treemap")
+            ("root-dir", "Root directory for hierarchical treemap", cxxopts::value<std::string>())
+            ("row-height", "Target row height in pixels for justified PDF layout", cxxopts::value<int>()->default_value("150"))
             ("margin", "Spacing between images in pixels for PDF", cxxopts::value<int>()->default_value("10"))
             ("layout-pad", "Layout padding for all sides in pixels", cxxopts::value<int>()->default_value("0"))
             ("layout-pad-top", "Layout padding top in pixels", cxxopts::value<int>())
@@ -74,10 +83,12 @@ int main(int argc, char* argv[]) {
             std::cout << "  picexplore /path/to/photos\n\n";
             std::cout << "  # Batch scan directory headlessly into database:\n";
             std::cout << "  picexplore --scan /path/to/photos\n\n";
-            std::cout << "  # Generate PDF gallery from database:\n";
+            std::cout << "  # Generate PDF gallery (Justified Grid) from database:\n";
             std::cout << "  picexplore --pdf gallery.pdf\n\n";
-            std::cout << "  # Scan directory and generate PDF in one step:\n";
-            std::cout << "  picexplore -d /path/to/photos --pdf gallery.pdf\n\n";
+            std::cout << "  # Generate Flat Treemap PDF (with cushion shading):\n";
+            std::cout << "  picexplore -d /path/to/photos --pdf treemap.pdf --layout treemap --style cushion\n\n";
+            std::cout << "  # Generate Hierarchical Treemap PDF (Letter, Landscape, 300 DPI):\n";
+            std::cout << "  picexplore -d /path/to/photos --pdf hier.pdf --layout hierarchical-treemap --orientation landscape\n\n";
             return 0;
         }
 
@@ -99,6 +110,14 @@ int main(int argc, char* argv[]) {
         if (result.count("pdf")) {
             std::string pdf_path = result["pdf"].as<std::string>();
 
+            std::string layout_str = result["layout"].as<std::string>();
+            std::string metric_str = result["metric"].as<std::string>();
+            std::string style_str = result["style"].as<std::string>();
+            std::string paper_str = result["paper-size"].as<std::string>();
+            std::string orient_str = result["orientation"].as<std::string>();
+            double page_margin = result["page-margin"].as<double>();
+            double dpi = result["dpi"].as<double>();
+
             int row_height = result["row-height"].as<int>();
             int margin = result["margin"].as<int>();
             int layout_pad_default = result["layout-pad"].as<int>();
@@ -114,6 +133,67 @@ int main(int argc, char* argv[]) {
             pdf_options.pad_bottom = pad_bottom;
             pdf_options.pad_left = pad_left;
             pdf_options.pad_right = pad_right;
+            pdf_options.page_margin_inches = page_margin;
+            pdf_options.page_dpi = dpi;
+
+            // Paper Size
+            std::string p_lower = paper_str;
+            std::transform(p_lower.begin(), p_lower.end(), p_lower.begin(), ::tolower);
+            if (p_lower == "legal") pdf_options.set_paper_preset(PaperSize::LEGAL);
+            else if (p_lower == "tabloid") pdf_options.set_paper_preset(PaperSize::TABLOID);
+            else if (p_lower == "a4") pdf_options.set_paper_preset(PaperSize::A4);
+            else if (p_lower == "a3") pdf_options.set_paper_preset(PaperSize::A3);
+            else if (p_lower == "a2") pdf_options.set_paper_preset(PaperSize::A2);
+            else if (p_lower == "a1") pdf_options.set_paper_preset(PaperSize::A1);
+            else pdf_options.set_paper_preset(PaperSize::LETTER);
+
+            // Orientation
+            std::string o_lower = orient_str;
+            std::transform(o_lower.begin(), o_lower.end(), o_lower.begin(), ::tolower);
+            if (o_lower == "landscape") pdf_options.orientation = PageOrientation::LANDSCAPE;
+            else pdf_options.orientation = PageOrientation::PORTRAIT;
+
+            // Layout
+            std::string l_lower = layout_str;
+            std::transform(l_lower.begin(), l_lower.end(), l_lower.begin(), ::tolower);
+            if (l_lower == "treemap" || l_lower == "flat-treemap" || l_lower == "flat_treemap") {
+                pdf_options.layout_type = LayoutEngine::LayoutType::TREEMAP;
+            } else if (l_lower == "hierarchical-treemap" || l_lower == "hierarchical_treemap" || l_lower == "hierarchical" || l_lower == "hier" || l_lower == "hier-treemap") {
+                pdf_options.layout_type = LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP;
+            } else {
+                pdf_options.layout_type = LayoutEngine::LayoutType::JUSTIFIED;
+            }
+
+            // Treemap Metric
+            std::string m_lower = metric_str;
+            std::transform(m_lower.begin(), m_lower.end(), m_lower.begin(), ::tolower);
+            if (m_lower == "pixel-area" || m_lower == "pixel_area" || m_lower == "area" || m_lower == "pixels") {
+                pdf_options.treemap_metric = LayoutEngine::TreemapMetric::PIXEL_AREA;
+            } else if (m_lower == "duplicate-count" || m_lower == "duplicate_count" || m_lower == "duplicates" || m_lower == "dupes") {
+                pdf_options.treemap_metric = LayoutEngine::TreemapMetric::DUPLICATE_COUNT;
+            } else if (m_lower == "equal-size" || m_lower == "equal_size" || m_lower == "equal") {
+                pdf_options.treemap_metric = LayoutEngine::TreemapMetric::EQUAL_SIZE;
+            } else {
+                pdf_options.treemap_metric = LayoutEngine::TreemapMetric::FILE_SIZE;
+            }
+
+            // Treemap Render Style
+            std::string s_lower = style_str;
+            std::transform(s_lower.begin(), s_lower.end(), s_lower.begin(), ::tolower);
+            if (s_lower == "cushion" || s_lower == "cushion-treemap" || s_lower == "cushion_treemap") {
+                pdf_options.treemap_render_style = PDFTreemapRenderStyle::CUSHION_TREEMAP;
+            } else if (s_lower == "file-type-colors" || s_lower == "file_type_colors" || s_lower == "colors" || s_lower == "color") {
+                pdf_options.treemap_render_style = PDFTreemapRenderStyle::FILE_TYPE_COLORS;
+            } else {
+                pdf_options.treemap_render_style = PDFTreemapRenderStyle::ALL_THUMBNAILS;
+            }
+
+            pdf_options.show_container_labels = (result.count("no-container-labels") == 0);
+            if (result.count("root-dir")) {
+                pdf_options.root_directory = result["root-dir"].as<std::string>();
+            } else {
+                pdf_options.root_directory = directory;
+            }
 
             return run_headless_pdf(pdf_path, directory, db_path, pdf_options, verbose);
         }

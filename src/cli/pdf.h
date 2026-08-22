@@ -131,7 +131,8 @@ public:
     ~PDFGenerator();
 
     bool generate_pdf(const std::vector<ImageInfo>& images, const std::string& output_path,
-                      Timer& timer, StatusReporter& reporter, const PDFOptions& options);
+                      Timer& timer, StatusReporter& reporter, const PDFOptions& options,
+                      DatabaseManager* db = nullptr);
 
     bool generate_from_store(const ImageStore& store, const std::string& output_path,
                              const PDFOptions& options, DatabaseManager* db = nullptr,

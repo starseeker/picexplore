@@ -140,7 +140,25 @@ void test_pdf_document_generation() {
         std::cout << "  Hierarchical Treemap PDF exported successfully (" << fs::file_size(pdf_path) << " bytes)." << std::endl;
     }
 
-    // 4. Test In-Dialog Preview Buffer Generation
+    // 4. Test Treemap with File Type Colors
+    {
+        std::string pdf_path = tmp_dir + "/test_treemap_colors.pdf";
+        PDFOptions options;
+        options.set_paper_preset(PaperSize::TABLOID);
+        options.orientation = PageOrientation::LANDSCAPE;
+        options.page_dpi = 150.0;
+        options.layout_type = LayoutEngine::LayoutType::TREEMAP;
+        options.treemap_metric = LayoutEngine::TreemapMetric::PIXEL_AREA;
+        options.treemap_render_style = PDFTreemapRenderStyle::FILE_TYPE_COLORS;
+
+        bool ok = generator.generate_from_store(store, pdf_path, options);
+        assert(ok);
+        assert(fs::exists(pdf_path));
+        assert(fs::file_size(pdf_path) > 1000);
+        std::cout << "  Flat Treemap (File Type Colors) PDF exported successfully (" << fs::file_size(pdf_path) << " bytes)." << std::endl;
+    }
+
+    // 5. Test In-Dialog Preview Buffer Generation
     {
         PDFOptions options;
         options.set_paper_preset(PaperSize::LETTER);

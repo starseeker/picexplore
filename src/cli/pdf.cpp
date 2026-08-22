@@ -805,7 +805,8 @@ bool PDFGenerator::generate_from_store(
 }
 
 bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std::string& output_path,
-                                Timer& timer, StatusReporter& reporter, const PDFOptions& options) {
+                                Timer& timer, StatusReporter& reporter, const PDFOptions& options,
+                                DatabaseManager* db) {
     if (images.empty()) return false;
 
     // Convert ImageInfo vector into lightweight ImageStore
@@ -819,7 +820,7 @@ bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std:
     timer.start("PDF Export");
     reporter.update_status("Rendering PDF pages...");
 
-    bool ok = generate_from_store(store, output_path, options, nullptr,
+    bool ok = generate_from_store(store, output_path, options, db,
         [&reporter](int curr, int total, const std::string& msg) {
             reporter.set_current_count(curr);
             reporter.set_total_count(total);
@@ -893,7 +894,7 @@ int run_headless_pdf(const std::string& pdf_path, const std::string& directory,
     std::cout << "Generating PDF with " << images.size() << " images: " << pdf_path << std::endl;
 
     PDFGenerator pdf_gen;
-    if (!pdf_gen.generate_pdf(images, pdf_path, timer, reporter, options)) {
+    if (!pdf_gen.generate_pdf(images, pdf_path, timer, reporter, options, &db)) {
         std::cerr << "Error: Failed to generate PDF" << std::endl;
         reporter.stop();
         return 1;
