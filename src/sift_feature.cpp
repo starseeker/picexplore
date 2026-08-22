@@ -23,7 +23,7 @@
  */
 
 #include "sift_feature.h"
-#include "../third_party/ezsift/ezsift.h"
+#include "../third_party/vlsift/vl_sift.h"
 #include "../third_party/stb/stb_image.h"
 
 #include <cmath>
@@ -143,29 +143,46 @@ bool SiftFeatureEngine::extract_from_gray(const uint8_t* gray_data, int width, i
 
     if (!gray_data || width <= 0 || height <= 0) return false;
 
-    ezsift::Image<unsigned char> ez_img(width, height);
-    std::memcpy(ez_img.data, gray_data, width * height);
+    std::vector<float> im(width * height);
+    for (int i = 0; i < width * height; ++i) {
+        im[i] = static_cast<float>(gray_data[i]);
+    }
 
-    std::list<ezsift::SiftKeypoint> kpt_list;
-    ezsift::sift_cpu(ez_img, kpt_list, true);
+    vl::SiftFilter filter(width, height, -1, 3, 0);
+    filter.set_peak_thresh(0.04 / 3.0);
+    filter.set_edge_thresh(10.0);
 
-    // Convert to vector of SiftPoint
     std::vector<SiftPoint> all_kpts;
-    all_kpts.reserve(kpt_list.size());
 
-    for (const auto& k : kpt_list) {
-        SiftPoint pt;
-        pt.x = (width > 0) ? (k.c / static_cast<float>(width)) : 0.0f;
-        pt.y = (height > 0) ? (k.r / static_cast<float>(height)) : 0.0f;
-        pt.scale = k.scale;
-        pt.orientation = k.ori * (PI_F / 180.0f);
-        pt.mag = k.mag;
+    int status = filter.process_first_octave(im.data());
+    while (status == 0) {
+        filter.detect();
 
-        for (int d = 0; d < 128; ++d) {
-            float val = std::round(k.descriptors[d]);
-            pt.descriptor[d] = static_cast<uint8_t>(std::clamp(val, 0.0f, 255.0f));
+        const auto& keys = filter.keypoints();
+        for (const auto& k : keys) {
+            double angles[4];
+            int nangles = filter.calc_keypoint_orientations(angles, &k);
+
+            for (int a = 0; a < nangles; ++a) {
+                float descr[128];
+                filter.calc_keypoint_descriptor(descr, &k, angles[a]);
+
+                SiftPoint pt;
+                pt.x = (width > 0) ? (k.x / static_cast<float>(width)) : 0.0f;
+                pt.y = (height > 0) ? (k.y / static_cast<float>(height)) : 0.0f;
+                pt.scale = k.sigma;
+                pt.orientation = static_cast<float>(angles[a]);
+                pt.mag = std::abs(k.s) + 0.01f;
+
+                for (int d = 0; d < 128; ++d) {
+                    float val = std::round(descr[d] * 512.0f);
+                    pt.descriptor[d] = static_cast<uint8_t>(std::clamp(val, 0.0f, 255.0f));
+                }
+                all_kpts.push_back(pt);
+            }
         }
-        all_kpts.push_back(pt);
+
+        status = filter.process_next_octave();
     }
 
     // Sort keypoints by response magnitude descending and keep top MAX_KEYPOINTS
@@ -317,17 +334,17 @@ float SiftFeatureEngine::compute_keypoint_similarity(const SiftFeatureData& a, c
             }
         }
 
-        if (second_best_sq > 0 && (static_cast<float>(best_sq) / static_cast<float>(second_best_sq)) < nndr_sq) {
+        if (best_sq == 0 || (second_best_sq > 0 && (static_cast<float>(best_sq) / static_cast<float>(second_best_sq)) < nndr_sq)) {
             matches++;
         }
     }
 
     size_t min_kpts = std::min(a.keypoints.size(), b.keypoints.size());
-    float match_score = static_cast<float>(matches) / (static_cast<float>(min_kpts) + 3.0f);
+    float match_ratio = (min_kpts > 0) ? (static_cast<float>(matches) / static_cast<float>(min_kpts)) : 0.0f;
 
     // Blend keypoint match ratio with fast global similarity
     float fast_sim = compute_fast_similarity(a.global_vector, b.global_vector);
-    float final_score = std::clamp(match_score * 0.7f + fast_sim * 0.3f, 0.0f, 1.0f);
+    float final_score = std::clamp(match_ratio * 0.7f + fast_sim * 0.3f, 0.0f, 1.0f);
     return final_score;
 }
 

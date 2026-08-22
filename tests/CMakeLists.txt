@@ -19,13 +19,12 @@ add_executable(database_test
     ${CMAKE_SOURCE_DIR}/src/sift_feature.cpp
     ${CMAKE_SOURCE_DIR}/src/utils.cpp
     ${CMAKE_SOURCE_DIR}/third_party/TinyEXIF.cpp
-    ${EZSIFT_DIR}/ezsift.cpp
-    ${EZSIFT_DIR}/image_utility.cpp
+    ${VLSIFT_DIR}/vl_sift.cpp
 )
 target_include_directories(database_test PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/third_party
-    ${EZSIFT_DIR}
+    ${VLSIFT_DIR}
     ${XXHASH_DIR}
     ${STB_DIR}
     ${LMDB_DIR}
@@ -61,13 +60,12 @@ add_executable(sift_test
     ${CMAKE_SOURCE_DIR}/src/database.cpp
     ${CMAKE_SOURCE_DIR}/src/utils.cpp
     ${CMAKE_SOURCE_DIR}/third_party/TinyEXIF.cpp
-    ${EZSIFT_DIR}/ezsift.cpp
-    ${EZSIFT_DIR}/image_utility.cpp
+    ${VLSIFT_DIR}/vl_sift.cpp
 )
 target_include_directories(sift_test PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/third_party
-    ${EZSIFT_DIR}
+    ${VLSIFT_DIR}
     ${XXHASH_DIR}
     ${STB_DIR}
     ${LMDB_DIR}

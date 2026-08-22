@@ -52,7 +52,7 @@ set(STB_DIR ${CMAKE_SOURCE_DIR}/third_party/stb)
 set(LMDB_DIR ${CMAKE_SOURCE_DIR}/third_party/lmdb/libraries/liblmdb)
 set(CXXOPTS_DIR ${CMAKE_SOURCE_DIR}/third_party/cxxopts)
 set(CONCURRENTQUEUE_DIR ${CMAKE_SOURCE_DIR}/third_party/concurrentqueue)
-set(EZSIFT_DIR ${CMAKE_SOURCE_DIR}/third_party/ezsift)
+set(VLSIFT_DIR ${CMAKE_SOURCE_DIR}/third_party/vlsift)
 
 # xxHash - compile the source
 add_library(xxhash STATIC ${XXHASH_DIR}/xxhash.c)
@@ -88,8 +88,7 @@ add_executable(picexplore
     src/sift_feature.cpp
     src/utils.cpp
     third_party/TinyEXIF.cpp
-    third_party/ezsift/ezsift.cpp
-    third_party/ezsift/image_utility.cpp
+    third_party/vlsift/vl_sift.cpp
 )
 
 target_include_directories(picexplore PRIVATE
@@ -103,7 +102,7 @@ target_include_directories(picexplore PRIVATE
     ${LMDB_DIR}
     ${CXXOPTS_DIR}/include
     ${CONCURRENTQUEUE_DIR}
-    ${EZSIFT_DIR}
+    ${VLSIFT_DIR}
     ${CMAKE_SOURCE_DIR}/third_party
     ${JPEG_INCLUDE_DIRS}
     ${PNG_INCLUDE_DIRS}
