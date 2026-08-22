@@ -23,6 +23,7 @@
  */
 
 #include "database.h"
+#include "sift_feature.h"
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
@@ -865,6 +866,29 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
         std::vector<uint8_t> sq64_jpeg = encode_jpeg(sq64_rgb.data(), 64, 64, 85);
         if (!sq64_jpeg.empty()) {
             write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, std::string(hash_str) + ":sq64", std::move(sq64_jpeg));
+        }
+
+        // Generate and store SIFT features for visual similarity search (512px max dimension)
+        int target_sift_dim = std::min(512, std::max(width, height));
+        int sift_w, sift_h;
+        double aspect_ratio = (double)width / height;
+        if (width > height) {
+            sift_w = target_sift_dim;
+            sift_h = std::max(1, (int)(target_sift_dim / aspect_ratio));
+        } else {
+            sift_h = target_sift_dim;
+            sift_w = std::max(1, (int)(target_sift_dim * aspect_ratio));
+        }
+        std::vector<uint8_t> sift_rgb(sift_w * sift_h * 3);
+        if (stbir_resize_uint8_linear(image_data, width, height, 0,
+                                     sift_rgb.data(), sift_w, sift_h, 0, STBIR_RGB)) {
+            SiftFeatureData sift_data;
+            if (SiftFeatureEngine::extract_from_rgb(sift_rgb.data(), sift_w, sift_h, sift_data)) {
+                std::vector<uint8_t> sift_bytes = sift_data.serialize();
+                if (!sift_bytes.empty()) {
+                    write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, std::string(hash_str) + ":sift", std::move(sift_bytes));
+                }
+            }
         }
     }
 
@@ -1713,6 +1737,7 @@ int DatabaseManager::garbage_collect(const std::string& tile_cache_dir,
                 delete_key(h + ":2048");
                 delete_key(h + ":sq64");
                 delete_key(h + ":sq128");
+                delete_key(h + ":sift");
             }
             commit_transaction();
         }
@@ -1736,6 +1761,74 @@ int DatabaseManager::garbage_collect(const std::string& tile_cache_dir,
 
     return pruned_hashes;
 }
+
+bool DatabaseManager::store_sift_features(const std::string& hash, const SiftFeatureData& data) {
+    if (!is_open_) return false;
+    std::string key = hash + ":sift";
+    std::vector<uint8_t> bytes = data.serialize();
+    if (bytes.empty()) return false;
+
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (txn_) {
+        return store_key_data(key, bytes);
+    }
+
+    MDB_txn* write_txn = nullptr;
+    if (mdb_txn_begin(env_, nullptr, 0, &write_txn) != 0) return false;
+    MDB_dbi write_dbi;
+    if (mdb_dbi_open(write_txn, nullptr, 0, &write_dbi) != 0) {
+        mdb_txn_abort(write_txn);
+        return false;
+    }
+    MDB_val k, v;
+    k.mv_data = (void*)key.c_str();
+    k.mv_size = key.length();
+    v.mv_data = (void*)bytes.data();
+    v.mv_size = bytes.size();
+    if (mdb_put(write_txn, write_dbi, &k, &v, 0) == 0) {
+        return mdb_txn_commit(write_txn) == 0;
+    }
+    mdb_txn_abort(write_txn);
+    return false;
+}
+
+bool DatabaseManager::get_sift_features(const std::string& hash, SiftFeatureData& out_data) const {
+    std::string key = hash + ":sift";
+    std::vector<uint8_t> data;
+    if (get_key_data_concurrent(key, data) && !data.empty()) {
+        return SiftFeatureData::deserialize(data.data(), data.size(), out_data);
+    }
+    return false;
+}
+
+bool DatabaseManager::extract_sift_from_cached_thumbnail(const std::string& hash, SiftFeatureData& out_data, int preferred_size) {
+    if (hash.empty()) return false;
+
+    // Check if already in DB
+    if (get_sift_features(hash, out_data)) {
+        return true;
+    }
+
+    // Check candidate thumbnails in priority order based on user setting
+    std::vector<std::string> thumb_keys;
+    if (preferred_size >= 512) {
+        thumb_keys = {hash + ":512", hash + ":256", hash + ":sq128", hash + ":128", hash + ":1024", hash + ":64"};
+    } else {
+        thumb_keys = {hash + ":256", hash + ":512", hash + ":sq128", hash + ":128", hash + ":64"};
+    }
+
+    std::vector<uint8_t> jpeg_bytes;
+    for (const auto& k : thumb_keys) {
+        if (get_key_data_concurrent(k, jpeg_bytes) && !jpeg_bytes.empty()) {
+            if (SiftFeatureEngine::extract_from_jpeg_bytes(jpeg_bytes.data(), jpeg_bytes.size(), out_data)) {
+                store_sift_features(hash, out_data);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 
 // Local Variables:
 // tab-width: 8

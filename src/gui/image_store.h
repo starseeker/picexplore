@@ -2,6 +2,9 @@
 
 #include <string>
 #include <vector>
+#include <array>
+#include <atomic>
+#include <functional>
 #include <cstdint>
 #include <list>
 #include <unordered_map>
@@ -23,6 +26,11 @@ struct ImageEntry {
     uintmax_t file_size = 0;
     uintmax_t file_timestamp = 0;
     int duplicate_count = 1;
+
+    // SIFT Visual Similarity
+    std::array<float, 64> sift_global_vector{};
+    bool sift_vector_loaded = false;
+    double similarity_score = 0.0;
 
     // Highest quality we have available
     ThumbQuality best_quality = ThumbQuality::NONE;
@@ -52,6 +60,8 @@ struct ImageEntry {
     };
     ScaledImage scaled;
 };
+
+class DatabaseManager;
 
 class ImageStore {
 public:
@@ -99,9 +109,15 @@ public:
         FILE_SIZE,
         TIMESTAMP,
         PIXEL_AREA,
-        DUPLICATE_COUNT
+        DUPLICATE_COUNT,
+        SIMILARITY_FAST,
+        SIMILARITY_ACCURATE
     };
     void sort_entries(SortCriteria criteria, bool ascending);
+    void sort_by_similarity(size_t query_index, bool high_accuracy, DatabaseManager* db = nullptr,
+                            std::atomic<size_t>* progress_counter = nullptr,
+                            int preferred_size = 512,
+                            std::atomic<bool>* stop_requested = nullptr);
     void ensure_file_sizes();
     void ensure_pixel_dimensions();
     void ensure_duplicate_counts();

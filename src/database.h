@@ -149,6 +149,9 @@ class DatabaseManager {
 	bool load_image_info(const std::string& hash, ImageInfo& info);
 	bool store_image_metadata(const std::string& hash, const ImageMetadata& meta);
 	bool get_image_metadata(const std::string& hash, ImageMetadata& meta);
+	bool store_sift_features(const std::string& hash, const struct SiftFeatureData& data);
+	bool get_sift_features(const std::string& hash, struct SiftFeatureData& out_data) const;
+	bool extract_sift_from_cached_thumbnail(const std::string& hash, struct SiftFeatureData& out_data, int preferred_size = 512);
 	bool is_open() const { return is_open_; }
 	MDB_env* get_env() const { return env_; }
 	std::mutex& get_mutex() { return db_mutex_; }

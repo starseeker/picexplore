@@ -272,6 +272,10 @@ MainWindow::~MainWindow() {
         gc_stop_requested_ = true;
         if (gc_thread_.joinable()) gc_thread_.join();
     }
+    if (sift_running_) {
+        sift_stop_requested_ = true;
+        if (sift_thread_.joinable()) sift_thread_.join();
+    }
     if (scanner_) { scanner_->stop(); delete scanner_; }
     if (pipeline_) { pipeline_->stop(); delete pipeline_; }
     if (full_res_loader_) { delete full_res_loader_; }
@@ -626,6 +630,10 @@ void MainWindow::set_hierarchy_thumbnail_threshold(double threshold) {
 }
 
 void MainWindow::handle_escape() {
+    if (sift_running_) {
+        sift_stop_requested_ = true;
+        return;
+    }
     if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
         exit_single_image_mode();
     } else if (!directory_filter_.empty()) {
@@ -722,6 +730,12 @@ void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string
                         toggle_info_panel();
                     }});
                 }
+                items.push_back({"Sort by SIFT Similarity (Fast)", 0, 0, [this, hit_image]() {
+                    sort_by_sift_similarity(hit_image, false);
+                }});
+                items.push_back({"Sort by SIFT Similarity (High Accuracy)", 0, 0, [this, hit_image]() {
+                    sort_by_sift_similarity(hit_image, true);
+                }});
                 if (!items.empty()) items.back().flags |= FL_MENU_DIVIDER;
             }
         }
@@ -969,6 +983,13 @@ void MainWindow::update_statusbar() {
         label += "   |   Scanning...";
     }
     
+    if (current_sort_criteria_ == ImageStore::SortCriteria::SIMILARITY_FAST ||
+        current_sort_criteria_ == ImageStore::SortCriteria::SIMILARITY_ACCURATE) {
+        std::string mode_str = (current_sort_criteria_ == ImageStore::SortCriteria::SIMILARITY_ACCURATE) ? "High Accuracy" : "Fast";
+        std::string q_name = std::filesystem::path(similarity_query_filepath_).filename().string();
+        label += "   |   SIFT (" + mode_str + "): " + q_name;
+    }
+
     statusbar_->copy_label(label.c_str());
     statusbar_->redraw();
 }
@@ -1063,6 +1084,11 @@ void MainWindow::rebuild_menu() {
         int val_pal = (current_sort_criteria_ == ImageStore::SortCriteria::PIXEL_AREA     && !sort_ascending_) ? FL_MENU_VALUE : 0;
         int val_do  = (current_sort_criteria_ == ImageStore::SortCriteria::TIMESTAMP      && sort_ascending_)  ? FL_MENU_VALUE : 0;
         int val_dn  = (current_sort_criteria_ == ImageStore::SortCriteria::TIMESTAMP      && !sort_ascending_) ? FL_MENU_VALUE : 0;
+        int val_simf = (current_sort_criteria_ == ImageStore::SortCriteria::SIMILARITY_FAST)                    ? FL_MENU_VALUE : 0;
+        int val_sima = (current_sort_criteria_ == ImageStore::SortCriteria::SIMILARITY_ACCURATE)                ? FL_MENU_VALUE : 0;
+
+        int val_s256 = (settings_.sift_thumbnail_size == 256) ? FL_MENU_VALUE : 0;
+        int val_s512 = (settings_.sift_thumbnail_size == 512) ? FL_MENU_VALUE : 0;
 
         menubar_->add("Sort/Alphabetical (A-Z)",            0, menu_cb, (void*)1,  FL_MENU_RADIO | val_az);
         menubar_->add("Sort/Alphabetical (Z-A)",            0, menu_cb, (void*)2,  FL_MENU_RADIO | val_za);
@@ -1074,6 +1100,10 @@ void MainWindow::rebuild_menu() {
         menubar_->add("Sort/Pixel Area (Largest)",          0, menu_cb, (void*)18, FL_MENU_RADIO | val_pal);
         menubar_->add("Sort/Date (Oldest)",                 0, menu_cb, (void*)5,  FL_MENU_RADIO | val_do);
         menubar_->add("Sort/Date (Newest)",                 0, menu_cb, (void*)6,  FL_MENU_RADIO | val_dn);
+        menubar_->add("Sort/SIFT Similarity (Fast)",          0, menu_cb, (void*)54, FL_MENU_RADIO | val_simf);
+        menubar_->add("Sort/SIFT Similarity (High Accuracy)", 0, menu_cb, (void*)55, FL_MENU_RADIO | val_sima);
+        menubar_->add("Sort/SIFT Resolution/Standard (256px)",   0, menu_cb, (void*)56, FL_MENU_RADIO | val_s256);
+        menubar_->add("Sort/SIFT Resolution/Fine Detail (512px)", 0, menu_cb, (void*)57, FL_MENU_RADIO | val_s512);
 
         menubar_->add("View/Layout/Justified Grid",       FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO | FL_MENU_VALUE);
         menubar_->add("View/Layout/Flat Treemap",         FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO);
@@ -1693,7 +1723,17 @@ void MainWindow::reprioritize_thumbnails() {
     }
 }
 
-// ── draw & resize ──────────────────────────────────────────────────────────
+// ── draw & resize & hide ───────────────────────────────────────────────────
+
+void MainWindow::hide() {
+    if (sift_running_) {
+        sift_stop_requested_ = true;
+    }
+    if (gc_running_) {
+        gc_stop_requested_ = true;
+    }
+    Fl_Double_Window::hide();
+}
 
 void MainWindow::draw() {
     fl_color(color());
@@ -1914,6 +1954,30 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
             }
             break;
         }
+        case 54: {
+            std::string q = win->current_selected_filepath_;
+            if (q.empty() && win->store_.size() > 0) q = win->store_.get(0).filepath;
+            if (!q.empty()) win->sort_by_sift_similarity(q, false);
+            return;
+        }
+        case 55: {
+            std::string q = win->current_selected_filepath_;
+            if (q.empty() && win->store_.size() > 0) q = win->store_.get(0).filepath;
+            if (!q.empty()) win->sort_by_sift_similarity(q, true);
+            return;
+        }
+        case 56: {
+            win->settings_.sift_thumbnail_size = 256;
+            win->settings_.save();
+            win->rebuild_menu();
+            return;
+        }
+        case 57: {
+            win->settings_.sift_thumbnail_size = 512;
+            win->settings_.save();
+            win->rebuild_menu();
+            return;
+        }
         default: return;
     }
     
@@ -1925,7 +1989,90 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         win->viewport_->set_scroll_offset(0);
         win->recompute_layout(true);
         win->rebuild_menu();
+        win->update_statusbar();
     }
+}
+
+void MainWindow::sort_by_sift_similarity(const std::string& query_filepath, bool high_accuracy) {
+    if (query_filepath.empty() || store_.size() == 0) return;
+
+    size_t idx = store_.find_by_filepath(query_filepath);
+    if (idx == static_cast<size_t>(-1)) {
+        idx = 0;
+    }
+
+    similarity_query_filepath_ = query_filepath;
+    current_sort_criteria_ = high_accuracy ? ImageStore::SortCriteria::SIMILARITY_ACCURATE : ImageStore::SortCriteria::SIMILARITY_FAST;
+    sort_ascending_ = false;
+
+    // Status update while calculating
+    std::string mode_str = high_accuracy ? "High Accuracy" : "Fast";
+    std::string q_name = std::filesystem::path(query_filepath).filename().string();
+    const size_t total = store_.size();
+    std::atomic<size_t> done_count{0};
+    std::atomic<bool> complete{false};
+    sift_stop_requested_.store(false);
+    sift_running_.store(true);
+
+    // Run sort computation on a background worker thread
+    sift_thread_ = std::thread([this, idx, high_accuracy, &done_count, &complete]() {
+        store_.sort_by_similarity(idx, high_accuracy, db_, &done_count, settings_.sift_thumbnail_size, &sift_stop_requested_);
+        complete.store(true);
+    });
+
+    // Pumping GUI event loop on the MAIN thread to display progress and remain responsive
+    size_t last_reported = 0;
+    while (!complete.load()) {
+        if (!visible() || sift_stop_requested_.load()) {
+            sift_stop_requested_.store(true);
+            break;
+        }
+        size_t current = done_count.load();
+        if (current != last_reported || current == total) {
+            last_reported = current;
+            int pct = (total > 0) ? static_cast<int>((current * 100) / total) : 0;
+            std::string msg = "  Sorting by SIFT (" + mode_str + "): " + std::to_string(current) + " / " + std::to_string(total) + " (" + std::to_string(pct) + "%) [Esc to Cancel]";
+            statusbar_->copy_label(msg.c_str());
+            statusbar_->redraw();
+        }
+        Fl::wait(0.02);
+    }
+
+    if (sift_thread_.joinable()) {
+        sift_thread_.join();
+    }
+    sift_running_.store(false);
+
+    if (sift_stop_requested_.load()) {
+        if (visible()) {
+            current_sort_criteria_ = ImageStore::SortCriteria::ALPHABETICAL;
+            std::string msg = "  SIFT similarity analysis cancelled.";
+            statusbar_->copy_label(msg.c_str());
+            statusbar_->redraw();
+            update_statusbar();
+        }
+        return;
+    }
+
+    current_selected_filepath_ = query_filepath;
+    viewport_->set_selected_image(0); // Query image is at top index 0
+
+    if (info_panel_visible_) {
+        const auto& entry = store_.get(0);
+        auto dups = reconcile_and_get_duplicates(entry.content_hash, entry.filepath);
+        info_panel_->display_info(entry, dups);
+    }
+
+    current_generation_++;
+    if (pipeline_) {
+        pipeline_->set_generation(current_generation_);
+    }
+    last_visible_.clear();
+    layout_dirty_ = true;
+    viewport_->set_scroll_offset(0);
+    recompute_layout(true);
+    rebuild_menu();
+    update_statusbar();
 }
 
 int MainWindow::handle(int event) {

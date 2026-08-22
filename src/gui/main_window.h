@@ -46,6 +46,7 @@ public:
     VirtualViewport::TreemapRenderStyle treemap_style() const { return treemap_style_; }
 
     void resize(int X, int Y, int W, int H) override;
+    void hide() override;
 
 protected:
     void draw() override;
@@ -105,6 +106,10 @@ private:
     std::atomic<bool> gc_running_{false};
     std::atomic<bool> gc_stop_requested_{false};
 
+    std::thread sift_thread_;
+    std::atomic<bool> sift_running_{false};
+    std::atomic<bool> sift_stop_requested_{false};
+
     AppSettings settings_;
     double hierarchy_thumbnail_threshold_ = 8.0;
 
@@ -116,9 +121,11 @@ private:
     FullResLoader* full_res_loader_ = nullptr;
     class FileWatcher* watcher_ = nullptr;
     class DatabaseManager* db_ = nullptr;
-
     std::string pre_viewer_filter_;
     std::string current_selected_filepath_;
+    std::string similarity_query_filepath_;
+
+    void sort_by_sift_similarity(const std::string& query_filepath, bool high_accuracy);
 
     bool layout_dirty_ = true;
     

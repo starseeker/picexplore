@@ -12,6 +12,7 @@ struct AppSettings {
     int window_y = -1;
     double hierarchy_thumbnail_threshold = 8.0;
     bool deduplicate_flat_views = true;
+    int sift_thumbnail_size = 512;
     std::string last_directory;
 
     static std::string get_cache_dir();

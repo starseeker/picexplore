@@ -56,6 +56,8 @@ void AppSettings::load() {
             try { double t = std::stod(val); if (t >= 1.0 && t <= 256.0) hierarchy_thumbnail_threshold = t; } catch (...) {}
         } else if (key == "deduplicate_flat_views") {
             deduplicate_flat_views = (val == "true" || val == "1");
+        } else if (key == "sift_thumbnail_size") {
+            try { int s = std::stoi(val); if (s == 128 || s == 256 || s == 512 || s == 1024) sift_thumbnail_size = s; } catch (...) {}
         } else if (key == "last_directory") {
             last_directory = val;
         }
@@ -75,6 +77,7 @@ void AppSettings::save() const {
     out << "  \"window_y\": " << window_y << ",\n";
     out << "  \"hierarchy_thumbnail_threshold\": " << hierarchy_thumbnail_threshold << ",\n";
     out << "  \"deduplicate_flat_views\": " << (deduplicate_flat_views ? "true" : "false") << ",\n";
+    out << "  \"sift_thumbnail_size\": " << sift_thumbnail_size << ",\n";
     out << "  \"last_directory\": \"" << last_directory << "\"\n";
     out << "}\n";
 }

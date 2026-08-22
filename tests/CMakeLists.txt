@@ -16,12 +16,16 @@ add_test(NAME treemap_layout_test COMMAND treemap_layout_test)
 add_executable(database_test
     database_test.cpp
     ${CMAKE_SOURCE_DIR}/src/database.cpp
+    ${CMAKE_SOURCE_DIR}/src/sift_feature.cpp
     ${CMAKE_SOURCE_DIR}/src/utils.cpp
     ${CMAKE_SOURCE_DIR}/third_party/TinyEXIF.cpp
+    ${EZSIFT_DIR}/ezsift.cpp
+    ${EZSIFT_DIR}/image_utility.cpp
 )
 target_include_directories(database_test PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/third_party
+    ${EZSIFT_DIR}
     ${XXHASH_DIR}
     ${STB_DIR}
     ${LMDB_DIR}
@@ -49,6 +53,48 @@ target_compile_definitions(database_test PRIVATE
 )
 target_compile_options(database_test PRIVATE -g -O2)
 add_test(NAME database_test COMMAND database_test)
+
+# SIFT similarity test and benchmark
+add_executable(sift_test
+    sift_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/sift_feature.cpp
+    ${CMAKE_SOURCE_DIR}/src/database.cpp
+    ${CMAKE_SOURCE_DIR}/src/utils.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/TinyEXIF.cpp
+    ${EZSIFT_DIR}/ezsift.cpp
+    ${EZSIFT_DIR}/image_utility.cpp
+)
+target_include_directories(sift_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party
+    ${EZSIFT_DIR}
+    ${XXHASH_DIR}
+    ${STB_DIR}
+    ${LMDB_DIR}
+    ${CXXOPTS_DIR}/include
+    ${CONCURRENTQUEUE_DIR}
+    ${JPEG_INCLUDE_DIRS}
+    ${PNG_INCLUDE_DIRS}
+    ${ZLIB_INCLUDE_DIRS}
+    ${WEBP_INCLUDE_DIRS}
+    ${TIFF_INCLUDE_DIRS}
+)
+target_link_libraries(sift_test
+    xxhash
+    lmdb
+    ${JPEG_LIBRARIES}
+    ${PNG_LIBRARIES}
+    ${ZLIB_LIBRARIES}
+    ${WEBP_LIBRARIES}
+    ${TIFF_LIBRARIES}
+)
+target_compile_definitions(sift_test PRIVATE
+    _LARGEFILE64_SOURCE
+    _FILE_OFFSET_BITS=64
+    TINYEXIF_NO_XMP_SUPPORT
+)
+target_compile_options(sift_test PRIVATE -g -O2)
+add_test(NAME sift_test COMMAND sift_test)
 
 # Settings test
 add_executable(settings_test

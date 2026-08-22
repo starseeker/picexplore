@@ -606,6 +606,12 @@ void InfoPanel::display_info(const ImageEntry& entry, const std::vector<std::str
         ss << "Metadata: Not yet loaded\n";
     }
 
+    if (entry.similarity_score > 0.0) {
+        std::ostringstream sim_ss;
+        sim_ss << std::fixed << std::setprecision(1) << (entry.similarity_score * 100.0) << "%";
+        ss << "Similarity: " << sim_ss.str() << "\n";
+    }
+
     if (duplicates.empty()) {
         ss << "Duplicates: None\n";
     } else {

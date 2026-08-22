@@ -1,10 +1,14 @@
 #include "image_store.h"
+#include "database.h"
+#include "sift_feature.h"
 #include "utils.h"
 #include <jpeglib.h>
 #include <setjmp.h>
 #include <algorithm>
 #include <filesystem>
 #include <chrono>
+#include <thread>
+#include <atomic>
 #include "../third_party/stb/stb_image_resize2.h"
 #include "../third_party/stb/stb_image.h"
 #include <iostream>
@@ -491,6 +495,169 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
     // We cannot just clear lru_list_ because the entries still hold memory.
     // If we clear lru_list_, the eviction engine cannot free the memory of sorted images,
     // leading to an infinite eviction loop for new images.
+    lru_list_.clear();
+    lru_map_.clear();
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        if (!entries_[i].decoded.rgb_data.empty() || !entries_[i].scaled.rgb_data.empty()) {
+            lru_list_.push_back(i);
+            lru_map_[i] = std::prev(lru_list_.end());
+        }
+    }
+}
+
+struct SimilarityResult {
+    double score = 0.0;
+    std::array<float, 64> global_vec{};
+    bool loaded = false;
+};
+
+void ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, DatabaseManager* db,
+                                    std::atomic<size_t>* progress_counter,
+                                    int preferred_size,
+                                    std::atomic<bool>* stop_requested) {
+    if (query_index >= entries_.size()) return;
+
+    std::string query_path = entries_[query_index].filepath;
+    std::string query_hash = entries_[query_index].content_hash;
+
+    // Ensure query has SIFT features
+    SiftFeatureData query_sift;
+    if (db && !query_hash.empty()) {
+        if (!db->get_sift_features(query_hash, query_sift)) {
+            db->extract_sift_from_cached_thumbnail(query_hash, query_sift, preferred_size);
+        }
+    }
+    if (!query_sift.valid) {
+        if (!entries_[query_index].decoded.rgb_data.empty()) {
+            SiftFeatureEngine::extract_from_rgb(entries_[query_index].decoded.rgb_data.data(),
+                                                entries_[query_index].decoded.width,
+                                                entries_[query_index].decoded.height,
+                                                query_sift);
+        } else {
+            // Load and extract directly from file
+            int w = 0, h = 0, c = 0;
+            unsigned char* raw = stbi_load(query_path.c_str(), &w, &h, &c, 3);
+            if (raw) {
+                SiftFeatureEngine::extract_from_rgb(raw, w, h, query_sift);
+                stbi_image_free(raw);
+            }
+        }
+    }
+
+    if (!query_sift.valid) {
+        std::cerr << "Warning: Failed to extract SIFT features for query image: " << query_path << std::endl;
+        return;
+    }
+
+    const size_t total = entries_.size();
+    std::vector<SimilarityResult> results(total);
+
+    // Query item always has similarity 1.0
+    results[query_index].score = 1.0;
+    results[query_index].global_vec = query_sift.global_vector;
+    results[query_index].loaded = true;
+
+    unsigned int num_threads = std::max(1u, std::thread::hardware_concurrency());
+    std::vector<std::thread> workers;
+    size_t chunk_size = (total + num_threads - 1) / num_threads;
+
+    for (unsigned int t = 0; t < num_threads; ++t) {
+        size_t start = t * chunk_size;
+        size_t end = std::min(total, start + chunk_size);
+        if (start >= end) continue;
+
+        workers.emplace_back([this, start, end, &query_sift, db, progress_counter, query_index, preferred_size, &results, high_accuracy, stop_requested]() {
+            for (size_t i = start; i < end; ++i) {
+                if (stop_requested && stop_requested->load(std::memory_order_relaxed)) {
+                    break;
+                }
+
+                if (i == query_index) {
+                    if (progress_counter) progress_counter->fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+
+                const auto& entry = entries_[i];
+                SiftFeatureData entry_sift;
+                bool has_sift = false;
+
+                if (db && !entry.content_hash.empty()) {
+                    if (db->get_sift_features(entry.content_hash, entry_sift)) {
+                        has_sift = true;
+                    } else if (db->extract_sift_from_cached_thumbnail(entry.content_hash, entry_sift, preferred_size)) {
+                        has_sift = true;
+                    }
+                }
+
+                if (!has_sift && !entry.decoded.rgb_data.empty()) {
+                    if (SiftFeatureEngine::extract_from_rgb(entry.decoded.rgb_data.data(),
+                                                           entry.decoded.width,
+                                                           entry.decoded.height,
+                                                           entry_sift)) {
+                        has_sift = true;
+                    }
+                }
+
+                if (has_sift && entry_sift.valid) {
+                    results[i].global_vec = entry_sift.global_vector;
+                    results[i].loaded = true;
+                    if (high_accuracy) {
+                        results[i].score = SiftFeatureEngine::compute_keypoint_similarity(query_sift, entry_sift);
+                    } else {
+                        results[i].score = SiftFeatureEngine::compute_fast_similarity(query_sift.global_vector, entry_sift.global_vector);
+                    }
+                } else if (entry.sift_vector_loaded && !high_accuracy) {
+                    results[i].score = SiftFeatureEngine::compute_fast_similarity(query_sift.global_vector, entry_sift.global_vector);
+                    results[i].global_vec = entry_sift.global_vector;
+                    results[i].loaded = true;
+                } else {
+                    results[i].score = 0.0;
+                }
+
+                if (progress_counter) {
+                    progress_counter->fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+
+    if (stop_requested && stop_requested->load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    // Apply computed scores to ImageStore entries
+    for (size_t i = 0; i < total; ++i) {
+        entries_[i].similarity_score = results[i].score;
+        if (results[i].loaded) {
+            entries_[i].sift_global_vector = results[i].global_vec;
+            entries_[i].sift_vector_loaded = true;
+        }
+    }
+
+    // Sort descending by similarity score (satisfying strict weak ordering)
+    std::sort(entries_.begin(), entries_.end(), [query_path](const ImageEntry& a, const ImageEntry& b) {
+        if (a.filepath == b.filepath) return false;
+        if (a.filepath == query_path) return true;
+        if (b.filepath == query_path) return false;
+        if (std::abs(a.similarity_score - b.similarity_score) > 1e-6) {
+            return a.similarity_score > b.similarity_score;
+        }
+        return a.filepath < b.filepath;
+    });
+
+    // Reassign indices and rebuild path_to_index_ map
+    path_to_index_.clear();
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        entries_[i].index = i;
+        path_to_index_[entries_[i].filepath] = i;
+    }
+    aspects_dirty_ = true;
+    currently_visible_set_.clear();
+
     lru_list_.clear();
     lru_map_.clear();
     for (size_t i = 0; i < entries_.size(); ++i) {
