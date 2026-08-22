@@ -329,30 +329,31 @@ void PDFExportDialog::setup_ui() {
     btn_next_page_ = new Fl_Button(rx + rw - 80, ry, 80, 26, "Next @>");
     btn_next_page_->callback(on_next_page, this);
 
-    preview_widget_ = new PDFPreviewWidget(rx, ry + 35, rw, h() - 110);
+    preview_widget_ = new PDFPreviewWidget(rx, ry + 35, rw, h() - 125);
 
     // --- Bottom Bar: Progress, Status & Buttons ---
-    int by = h() - 55;
+    int by = h() - 75;
+    int status_w = w() - 275;
 
-    progress_bar_ = new Fl_Progress(lx, by + 4, 300, 20);
+    label_status_ = new Fl_Box(lx, by, status_w, 22, "Ready to export.");
+    label_status_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    label_status_->labelcolor(fl_rgb_color(220, 220, 220));
+    label_status_->labelsize(13);
+
+    progress_bar_ = new Fl_Progress(lx, by + 26, status_w, 24);
     progress_bar_->minimum(0.0f);
     progress_bar_->maximum(100.0f);
     progress_bar_->value(0.0f);
-    progress_bar_->color(fl_rgb_color(30, 30, 30));
-    progress_bar_->selection_color(fl_rgb_color(50, 140, 220));
-    progress_bar_->hide();
+    progress_bar_->color(fl_rgb_color(36, 36, 36));
+    progress_bar_->selection_color(fl_rgb_color(40, 140, 230));
 
-    label_status_ = new Fl_Box(lx, by + 4, 450, 22, "");
-    label_status_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-    label_status_->labelcolor(FL_WHITE);
-
-    btn_export_ = new Fl_Button(w() - 250, by, 130, 32, "Export PDF...");
+    btn_export_ = new Fl_Button(w() - 250, by + 10, 130, 40, "Export PDF...");
     btn_export_->color(fl_rgb_color(40, 120, 210));
     btn_export_->labelcolor(FL_WHITE);
     btn_export_->labelfont(FL_HELVETICA_BOLD);
     btn_export_->callback(on_export_clicked, this);
 
-    btn_close_ = new Fl_Button(w() - 105, by, 90, 32, "Close");
+    btn_close_ = new Fl_Button(w() - 105, by + 10, 90, 40, "Close");
     btn_close_->callback(on_cancel_clicked, this);
 
     end();
@@ -511,10 +512,12 @@ void PDFExportDialog::start_export(const std::string& output_path) {
     export_stop_requested_ = false;
 
     progress_bar_->value(0.0f);
-    progress_bar_->show();
+    progress_bar_->redraw();
     label_status_->copy_label("Starting PDF export...");
+    label_status_->redraw();
     btn_export_->deactivate();
     btn_close_->label("Cancel");
+    Fl::flush();
 
     std::string db_p = db_path_;
 
@@ -539,6 +542,9 @@ void PDFExportDialog::start_export(const std::string& output_path) {
                     float pct = (t > 0) ? (static_cast<float>(c) / t * 100.0f) : 0.0f;
                     self->progress_bar_->value(pct);
                     self->label_status_->copy_label(m.c_str());
+                    self->progress_bar_->redraw();
+                    self->label_status_->redraw();
+                    Fl::flush();
                     delete p;
                 }, new std::pair<PDFExportDialog*, std::pair<int, std::pair<int, std::string>>>(
                     this, {curr, {total, msg}}));
@@ -551,17 +557,20 @@ void PDFExportDialog::start_export(const std::string& output_path) {
             bool success = p->second;
 
             self->export_running_ = false;
-            self->progress_bar_->hide();
             self->btn_export_->activate();
             self->btn_close_->label("Close");
 
             if (success) {
+                self->progress_bar_->value(100.0f);
                 self->label_status_->copy_label("PDF Export complete!");
             } else if (self->export_stop_requested_) {
                 self->label_status_->copy_label("PDF Export cancelled.");
             } else {
                 self->label_status_->copy_label("PDF Export failed.");
             }
+            self->progress_bar_->redraw();
+            self->label_status_->redraw();
+            Fl::flush();
             delete p;
         }, new std::pair<PDFExportDialog*, bool>(this, ok));
     });
@@ -570,6 +579,9 @@ void PDFExportDialog::start_export(const std::string& output_path) {
 void PDFExportDialog::cancel_export() {
     if (export_running_) {
         export_stop_requested_ = true;
+        label_status_->copy_label("Cancelling PDF export...");
+        label_status_->redraw();
+        Fl::flush();
         if (export_thread_.joinable()) {
             export_thread_.join();
         }
@@ -590,7 +602,7 @@ void PDFExportDialog::show_dialog(const ImageStore& store,
     dlg->set_modal();
     dlg->show();
     while (dlg->shown()) {
-        Fl::wait();
+        Fl::wait(0.05);
     }
     delete dlg;
 }
