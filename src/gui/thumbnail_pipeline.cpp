@@ -163,7 +163,23 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
                 update_queue_.enqueue(UpdateEvent::make_thumb_rgb_ready(
                     req.image_index, req.filepath, hash, found_quality, std::vector<uint8_t>(rgb_decoded), dec_w, dec_h, req.generation
                 ));
-                return true;
+
+                if (req.target_quality == ThumbQuality::SQUARE_128 || req.target_quality == ThumbQuality::SQUARE_64) {
+                    return true;
+                }
+
+                // If cached thumbnail in LMDB already meets or exceeds target quality, we're done!
+                if (static_cast<int>(found_quality) >= static_cast<int>(req.target_quality)) {
+                    return true;
+                }
+
+                // If user scrolled past to a newer generation, skip heavy disk decode
+                if (req.generation > 0 && current_generation_ > req.generation + 1) {
+                    return true;
+                }
+                // Otherwise (found_quality < req.target_quality and user is viewing/zoomed in):
+                // We emitted the fast coarse placeholder to the screen,
+                // now continue below to generate the sharp full target_quality from the original file!
             }
         }
         int w = 0, h = 0, channels = 0;

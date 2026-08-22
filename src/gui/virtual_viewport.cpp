@@ -284,6 +284,13 @@ void VirtualViewport::draw_grid() {
                                  x_coords_buf_);
                 img_data = draw_tmp_buf_.data();
             }
+        } else if (!entry.square_thumb.rgb_data.empty() && entry.square_thumb.width > 0 && entry.square_thumb.height > 0 && draw_w > 0 && draw_h > 0) {
+            draw_tmp_buf_.resize(draw_w * draw_h * 3);
+            fast_scale_image(entry.square_thumb.rgb_data.data(),
+                             entry.square_thumb.width, entry.square_thumb.height,
+                             draw_tmp_buf_.data(), draw_w, draw_h,
+                             x_coords_buf_);
+            img_data = draw_tmp_buf_.data();
         }
 
         if (!img_data) {
