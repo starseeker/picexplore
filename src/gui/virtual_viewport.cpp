@@ -44,7 +44,7 @@ std::vector<LayoutEngine::LayoutResult::Box> VirtualViewport::get_visible_boxes(
         for (const auto& box : layout_->boxes) {
             // Only consider boxes large enough to warrant an active in-memory decoded thumbnail.
             // This prevents sub-pixel / 1px / 2px tiles from disabling LRU memory eviction.
-            if (box.w >= 24.0 && box.h >= 24.0) {
+            if (box.w >= 8.0 && box.h >= 8.0) {
                 visible.push_back(box);
             }
         }
@@ -630,8 +630,8 @@ void VirtualViewport::draw_treemap() {
             fl_color(fl_rgb_color(20, 20, 20));
             fl_rect(draw_x, draw_y, draw_w, draw_h);
 
-            if (draw_w >= 36 && draw_h >= 36) {
-                int pad = (draw_w >= 80 && draw_h >= 80) ? 4 : 2;
+            if (draw_w >= 16 && draw_h >= 16) {
+                int pad = (draw_w >= 80 && draw_h >= 80) ? 4 : (draw_w >= 36 && draw_h >= 36) ? 2 : 1;
                 int inner_w = draw_w - 2 * pad;
                 int inner_h = draw_h - 2 * pad;
 
