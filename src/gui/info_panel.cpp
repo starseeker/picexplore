@@ -295,7 +295,27 @@ void InfoPanel::resize(int X, int Y, int W, int H) {
     Fl_Group::resize(X, Y, W, H);
     // rebuild_breadcrumb() reflows the breadcrumb for the new width / height
     // and resizes both breadcrumb_bar_ and text_display_ itself.
+    if (visible()) {
+        rebuild_breadcrumb();
+    }
+}
+
+void InfoPanel::show() {
+    Fl_Group::show();
+    if (breadcrumb_bar_) breadcrumb_bar_->show();
+    if (tile_group_) tile_group_->show();
+    if (text_display_) text_display_->show();
     rebuild_breadcrumb();
+    update_action_button();
+}
+
+void InfoPanel::hide() {
+    Fl_Group::hide();
+    if (breadcrumb_bar_) breadcrumb_bar_->hide();
+    if (tile_group_) tile_group_->hide();
+    if (text_display_) text_display_->hide();
+    if (dup_group_) dup_group_->hide();
+    if (action_btn_) action_btn_->hide();
 }
 
 // ── public API ─────────────────────────────────────────────────────────────
@@ -307,7 +327,9 @@ void InfoPanel::set_font_size(int size) {
     if (dup_browser_) dup_browser_->textsize(size);
     if (dup_group_) dup_group_->set_header_height(size + 10);
     // Reflow the breadcrumb — row height and label widths both depend on font size.
-    rebuild_breadcrumb();
+    if (visible()) {
+        rebuild_breadcrumb();
+    }
 }
 
 void InfoPanel::set_root_dir(const std::string& root) {
@@ -319,10 +341,17 @@ void InfoPanel::set_root_dir(const std::string& root) {
 
 void InfoPanel::set_single_image_mode(bool single_image) {
     is_single_image_mode_ = single_image;
-    update_action_button();
+    if (visible()) {
+        update_action_button();
+    }
 }
 
 void InfoPanel::update_action_button() {
+    if (!visible()) {
+        if (action_btn_) action_btn_->hide();
+        return;
+    }
+
     int panel_x = x(), panel_y = y(), panel_w = w(), panel_h = h();
     if (is_single_image_mode_) {
         action_btn_->copy_label("Exit Image View");
@@ -374,7 +403,9 @@ void InfoPanel::clear_info() {
     if (dup_browser_) dup_browser_->clear();
     clear_breadcrumb();
     text_buffer_->text("No image selected.\nClick an image to view details.");
-    update_action_button();
+    if (visible()) {
+        update_action_button();
+    }
 }
 
 // ── breadcrumb ─────────────────────────────────────────────────────────────

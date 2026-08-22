@@ -190,7 +190,9 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
         if (path.empty()) {
             current_selected_filepath_.clear();
             viewport_->set_selected_image((size_t)-1);
-            info_panel_->clear_info();
+            if (info_panel_visible_) {
+                info_panel_->clear_info();
+            }
             return;
         }
         size_t idx = store_.find_by_filepath(path);
@@ -199,7 +201,9 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
                 // Clicking already selected image unselects it
                 current_selected_filepath_.clear();
                 viewport_->set_selected_image((size_t)-1);
-                info_panel_->clear_info();
+                if (info_panel_visible_) {
+                    info_panel_->clear_info();
+                }
             } else {
                 current_selected_filepath_ = path;
                 auto& entry = store_.get(idx);
@@ -209,8 +213,10 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
                         entry.content_hash = h;
                     }
                 }
-                auto dups = reconcile_and_get_duplicates(entry.content_hash, path);
-                info_panel_->display_info(entry, dups);
+                if (info_panel_visible_) {
+                    auto dups = reconcile_and_get_duplicates(entry.content_hash, path);
+                    info_panel_->display_info(entry, dups);
+                }
                 viewport_->set_selected_image(idx);
             }
         }
@@ -1177,20 +1183,14 @@ void MainWindow::reprioritize_thumbnails() {
     last_target_height_ = target_height_;
     last_viewport_width_ = viewport_->w();
     
-    for (size_t idx : visible) {
-        // idx is a raw store index (box.image_index carries the raw index now)
+    auto visible_boxes = viewport_->get_visible_boxes(0);
+    
+    for (const auto& box : visible_boxes) {
+        size_t idx = box.image_index;
         const auto& entry = store_.get(idx);
         
-        double layout_w = entry.aspect_ratio * target_height_;
-        double layout_h = target_height_;
-        // Find this raw index in the layout boxes
-        for (const auto& box : layout_result_.boxes) {
-            if (box.image_index == idx) {
-                layout_w = box.w;
-                layout_h = box.h;
-                break;
-            }
-        }
+        double layout_w = box.w;
+        double layout_h = box.h;
         
         ThumbQuality needed = ThumbQuality::SMALL;
         if (layout_w <= 64)       needed = ThumbQuality::SMALL;
@@ -1216,23 +1216,16 @@ void MainWindow::reprioritize_thumbnails() {
     }
     
     // Prefetch thumbnails just outside the viewport (e.g. +/- 2 screens)
-    auto prefetch = viewport_->get_visible_indices(viewport_->h() * 2);
+    auto prefetch_boxes = viewport_->get_visible_boxes(viewport_->h() * 2);
     std::unordered_set<size_t> visible_set(visible.begin(), visible.end());
     
-    for (size_t idx : prefetch) {
+    for (const auto& box : prefetch_boxes) {
+        size_t idx = box.image_index;
         if (visible_set.count(idx)) continue;
         
         const auto& entry = store_.get(idx);
-        
-        double layout_w = entry.aspect_ratio * target_height_;
-        double layout_h = target_height_;
-        for (const auto& box : layout_result_.boxes) {
-            if (box.image_index == idx) {
-                layout_w = box.w;
-                layout_h = box.h;
-                break;
-            }
-        }
+        double layout_w = box.w;
+        double layout_h = box.h;
         
         // Prefetch base thumbnails
         ThumbQuality needed = ThumbQuality::LARGE;

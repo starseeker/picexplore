@@ -48,6 +48,8 @@ public:
     void set_single_image_mode(bool single_image);
 
     virtual void resize(int X, int Y, int W, int H) override;
+    virtual void show() override;
+    virtual void hide() override;
 
 private:
     // crumb_h_ is computed dynamically by rebuild_breadcrumb() based on how

@@ -135,6 +135,16 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req) {
                             break;
                         }
                     }
+                    if (!target_found) {
+                        // Check fast square thumbnail cache as preliminary placeholder
+                        if (db_.get_key_data_concurrent(hash + ":sq128", jpeg_data)) {
+                            target_found = true;
+                            found_quality = ThumbQuality::SQUARE_128;
+                        } else if (db_.get_key_data_concurrent(hash + ":sq64", jpeg_data)) {
+                            target_found = true;
+                            found_quality = ThumbQuality::SQUARE_64;
+                        }
+                    }
                 }
             }
         }

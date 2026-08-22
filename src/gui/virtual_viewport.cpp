@@ -35,8 +35,8 @@ void VirtualViewport::set_selected_image(size_t raw_idx) {
     }
 }
 
-std::vector<size_t> VirtualViewport::get_visible_indices(int margin_y) const {
-    std::vector<size_t> visible;
+std::vector<LayoutEngine::LayoutResult::Box> VirtualViewport::get_visible_boxes(int margin_y) const {
+    std::vector<LayoutEngine::LayoutResult::Box> visible;
     if (!layout_) return visible;
 
     if (layout_->layout_type == LayoutEngine::LayoutType::TREEMAP ||
@@ -45,7 +45,7 @@ std::vector<size_t> VirtualViewport::get_visible_indices(int margin_y) const {
             // Only consider boxes large enough to warrant an active in-memory decoded thumbnail.
             // This prevents sub-pixel / 1px / 2px tiles from disabling LRU memory eviction.
             if (box.w >= 24.0 && box.h >= 24.0) {
-                visible.push_back(box.image_index);
+                visible.push_back(box);
             }
         }
         return visible;
@@ -63,8 +63,18 @@ std::vector<size_t> VirtualViewport::get_visible_indices(int margin_y) const {
     for (; it != layout_->boxes.end(); ++it) {
         if (it->y > view_bottom) break;
         if (it->y + it->h >= view_top) {
-            visible.push_back(it->image_index);
+            visible.push_back(*it);
         }
+    }
+    return visible;
+}
+
+std::vector<size_t> VirtualViewport::get_visible_indices(int margin_y) const {
+    auto boxes = get_visible_boxes(margin_y);
+    std::vector<size_t> visible;
+    visible.reserve(boxes.size());
+    for (const auto& box : boxes) {
+        visible.push_back(box.image_index);
     }
     return visible;
 }
