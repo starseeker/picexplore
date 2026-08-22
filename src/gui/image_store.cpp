@@ -15,6 +15,19 @@ ImageStore::ImageStore() {
 ImageStore::~ImageStore() {
 }
 
+void ImageStore::clear() {
+    entries_.clear();
+    path_to_index_.clear();
+    all_aspects_cache_.clear();
+    filtered_aspects_cache_.clear();
+    aspects_dirty_ = true;
+    currently_visible_set_.clear();
+    lru_list_.clear();
+    lru_map_.clear();
+    decoded_rgb_memory_used_ = 0;
+    scaled_rgb_memory_used_ = 0;
+}
+
 size_t ImageStore::add_image(const std::string& filepath, double aspect_ratio,
                              int width, int height,
                              uintmax_t file_size, uintmax_t file_timestamp) {

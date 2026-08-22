@@ -12,6 +12,7 @@
 #include "full_res_loader.h"
 #include "tile_manager.h"
 #include "file_type_colors.h"
+#include "app_settings.h"
 #include <string>
 #include <unordered_set>
 #include <chrono>
@@ -88,12 +89,18 @@ private:
     void apply_directory_filter(const std::string& dir);
     void reset_directory_filter();
     void navigate_to_parent_directory();
+    void open_directory_dialog();
+    void switch_directory(const std::string& new_dir);
+    void set_hierarchy_thumbnail_threshold(double threshold);
     void show_context_menu(int screen_x, int screen_y, const std::string& hit_image, const std::string& hit_dir);
     void handle_escape();
     void toggle_info_panel();
     void update_statusbar();
     void rebuild_menu();
     void recompute_layout(bool reprioritize = true);
+
+    AppSettings settings_;
+    double hierarchy_thumbnail_threshold_ = 8.0;
 
     std::vector<std::string> reconcile_and_get_duplicates(const std::string& hash, const std::string& current_filepath);
 

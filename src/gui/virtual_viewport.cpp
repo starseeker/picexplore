@@ -44,7 +44,7 @@ std::vector<LayoutEngine::LayoutResult::Box> VirtualViewport::get_visible_boxes(
         for (const auto& box : layout_->boxes) {
             // Only consider boxes large enough to warrant an active in-memory decoded thumbnail.
             // This prevents sub-pixel / 1px / 2px tiles from disabling LRU memory eviction.
-            if (box.w >= 8.0 && box.h >= 8.0) {
+            if (box.w >= hierarchy_thumbnail_threshold_ && box.h >= hierarchy_thumbnail_threshold_) {
                 visible.push_back(box);
             }
         }

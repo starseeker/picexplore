@@ -62,6 +62,12 @@ public:
     }
     bool show_minimap() const { return show_minimap_; }
 
+    void set_hierarchy_thumbnail_threshold(double threshold) {
+        hierarchy_thumbnail_threshold_ = threshold;
+        redraw();
+    }
+    double get_hierarchy_thumbnail_threshold() const { return hierarchy_thumbnail_threshold_; }
+
     void reset_zoom();
     void zoom_in_center();
     void zoom_out_center();
@@ -90,6 +96,7 @@ private:
 
     ViewMode view_mode_ = ViewMode::GRID;
     TreemapRenderStyle treemap_render_style_ = TreemapRenderStyle::ALL_THUMBNAILS;
+    double hierarchy_thumbnail_threshold_ = 8.0;
 
     size_t   single_idx_ = 0;
     float    zoom_ = 0.0f;   // 0 = fit-to-window

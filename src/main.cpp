@@ -6,6 +6,7 @@
 
 #include "cxxopts.hpp"
 #include "gui/main_window.h"
+#include "gui/app_settings.h"
 #include "cli/cli_scan.h"
 #include "cli/pdf.h"
 
@@ -118,10 +119,15 @@ int main(int argc, char* argv[]) {
         }
 
         // Mode 3: Interactive GUI Viewer (Default)
+        AppSettings settings;
+        settings.load();
+
         if (directory.empty()) {
-            std::cout << options.help() << std::endl;
-            std::cout << "\nError: Please provide a directory to explore, or specify --scan / --pdf for headless batch jobs.\n";
-            return 1;
+            if (!settings.last_directory.empty() && fs::exists(settings.last_directory) && fs::is_directory(settings.last_directory)) {
+                directory = settings.last_directory;
+            } else {
+                directory = ".";
+            }
         }
 
         if (!fs::exists(directory) || !fs::is_directory(directory)) {
@@ -134,7 +140,13 @@ int main(int argc, char* argv[]) {
         Fl::foreground(220, 220, 220);
         Fl::background2(28, 28, 28);
 
-        MainWindow win(1024, 768, "PicExplore", directory, db_path);
+        int win_w = (settings.save_window_size && settings.window_width >= 300) ? settings.window_width : 1024;
+        int win_h = (settings.save_window_size && settings.window_height >= 200) ? settings.window_height : 768;
+
+        MainWindow win(win_w, win_h, "PicExplore", directory, db_path);
+        if (settings.save_window_size && settings.window_x >= 0 && settings.window_y >= 0) {
+            win.position(settings.window_x, settings.window_y);
+        }
         win.show();
         win.start();
 

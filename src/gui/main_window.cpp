@@ -5,6 +5,7 @@
 #include <FL/Fl_Output.H>
 #include <FL/Fl_Menu_Bar.H>
 #include <FL/Fl_Menu_Item.H>
+#include <FL/Fl_File_Chooser.H>
 #include <FL/fl_ask.H>
 #include <filesystem>
 #include <thread>
@@ -70,9 +71,12 @@ void FileTypeLegendWidget::draw() {
 MainWindow::MainWindow(int w, int h, const char* title, const std::string& directory, const std::string& db_path)
     : Fl_Double_Window(w, h, title), directory_(directory), db_path_(db_path) {
 
+    settings_.load();
+    hierarchy_thumbnail_threshold_ = settings_.hierarchy_thumbnail_threshold;
+    if (hierarchy_thumbnail_threshold_ <= 0.0) hierarchy_thumbnail_threshold_ = 8.0;
+
     // Create ~/.cache/picexplore for tiles
-    const char* home = getenv("HOME");
-    std::string cache_dir = home ? std::string(home) + "/.cache/picexplore" : "/tmp/picexplore";
+    std::string cache_dir = AppSettings::get_cache_dir();
     tile_manager_ = new TileManager(update_queue_);
     tile_manager_->init(cache_dir);
 
@@ -88,6 +92,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     menubar_->selection_color(fl_rgb_color(60, 160, 255));
 
     viewport_  = new VirtualViewport(0, MENU_H, w, vp_h, store_);
+    viewport_->set_hierarchy_thumbnail_threshold(hierarchy_thumbnail_threshold_);
     scrollbar_ = new Fl_Scrollbar(w - SCROLL_W, MENU_H, SCROLL_W, vp_h);
     scrollbar_->type(FL_VERTICAL);
     scrollbar_->box(FL_FLAT_BOX);
@@ -256,6 +261,13 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
 }
 
 MainWindow::~MainWindow() {
+    if (settings_.save_window_size) {
+        settings_.window_width = w();
+        settings_.window_height = h();
+        settings_.window_x = x();
+        settings_.window_y = y();
+        settings_.save();
+    }
     if (scanner_) { scanner_->stop(); delete scanner_; }
     if (pipeline_) { pipeline_->stop(); delete pipeline_; }
     if (full_res_loader_) { delete full_res_loader_; }
@@ -533,6 +545,75 @@ void MainWindow::navigate_to_parent_directory() {
     }
 }
 
+void MainWindow::open_directory_dialog() {
+    const char* chosen = fl_dir_chooser("Select Directory to Explore", directory_.c_str(), 0);
+    if (chosen && strlen(chosen) > 0) {
+        namespace fs = std::filesystem;
+        if (fs::exists(chosen) && fs::is_directory(chosen)) {
+            switch_directory(chosen);
+        }
+    }
+}
+
+void MainWindow::switch_directory(const std::string& new_dir) {
+    namespace fs = std::filesystem;
+    if (new_dir.empty() || !fs::exists(new_dir) || !fs::is_directory(new_dir)) return;
+
+    if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
+        exit_single_image_mode();
+    }
+
+    if (scanner_) { scanner_->stop(); delete scanner_; scanner_ = nullptr; }
+    if (watcher_) { watcher_->stop(); delete watcher_; watcher_ = nullptr; }
+    if (pipeline_) { pipeline_->stop(); delete pipeline_; pipeline_ = nullptr; }
+    if (full_res_loader_) { delete full_res_loader_; full_res_loader_ = nullptr; }
+    if (db_) { delete db_; db_ = nullptr; }
+
+    directory_ = new_dir;
+    db_path_.clear();
+    directory_filter_.clear();
+    pre_viewer_filter_.clear();
+    current_selected_filepath_.clear();
+
+    store_.clear();
+    pending_db_build_.clear();
+    db_build_total_ = 0;
+    scan_complete_ = false;
+    current_generation_++;
+    last_visible_.clear();
+    layout_dirty_ = true;
+
+    viewport_->set_selected_image((size_t)-1);
+    viewport_->set_scroll_offset(0);
+    scrollbar_->value(0);
+
+    info_panel_->set_root_dir(directory_);
+    if (info_panel_visible_) {
+        info_panel_->clear_info();
+    }
+
+    settings_.last_directory = directory_;
+    settings_.save();
+
+    start();
+}
+
+void MainWindow::set_hierarchy_thumbnail_threshold(double threshold) {
+    if (threshold < 1.0) threshold = 1.0;
+    if (threshold > 256.0) threshold = 256.0;
+    hierarchy_thumbnail_threshold_ = threshold;
+    viewport_->set_hierarchy_thumbnail_threshold(threshold);
+    settings_.hierarchy_thumbnail_threshold = threshold;
+    settings_.save();
+
+    current_generation_++;
+    pipeline_->set_generation(current_generation_);
+    last_visible_.clear();
+    layout_dirty_ = true;
+    rebuild_menu();
+    recompute_layout(true);
+}
+
 void MainWindow::handle_escape() {
     if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
         exit_single_image_mode();
@@ -713,6 +794,9 @@ void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string
         items.push_back({"Information Panel", 0, info_flag, [this]() {
             toggle_info_panel();
         }});
+        items.push_back({"Open Directory... (Ctrl+O)", FL_CTRL | 'o', 0, [this]() {
+            open_directory_dialog();
+        }});
     }
 
     if (items.empty()) return;
@@ -856,6 +940,11 @@ void MainWindow::update_statusbar() {
 void MainWindow::rebuild_menu() {
     menubar_->clear();
 
+    // File menu (placed to the left of Sort)
+    menubar_->add("File/Open Directory...", FL_CTRL | 'o', menu_cb, (void*)50, 0);
+    menubar_->add("File/Save Window Size",  0,             menu_cb, (void*)51, FL_MENU_TOGGLE | (settings_.save_window_size ? FL_MENU_VALUE : 0));
+    menubar_->add("File/Exit",              FL_CTRL | 'q', menu_cb, (void*)52, 0);
+
     bool is_single = (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE);
     bool is_flat_treemap = (active_layout_ == LayoutEngine::LayoutType::TREEMAP);
     bool is_hier_treemap = (active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP);
@@ -896,6 +985,22 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Treemap Style/All Thumbnails",   0, menu_cb, (void*)26, FL_MENU_RADIO | val_at);
         menubar_->add("View/Treemap Style/Cushion Treemap",  0, menu_cb, (void*)28, FL_MENU_RADIO | val_ct);
         menubar_->add("View/Treemap Style/File Type Colors", 0, menu_cb, (void*)25, FL_MENU_RADIO | val_fc);
+
+        int th = static_cast<int>(std::round(hierarchy_thumbnail_threshold_));
+        int val_th6  = (th == 6)  ? FL_MENU_VALUE : 0;
+        int val_th8  = (th == 8)  ? FL_MENU_VALUE : 0;
+        int val_th12 = (th == 12) ? FL_MENU_VALUE : 0;
+        int val_th16 = (th == 16) ? FL_MENU_VALUE : 0;
+        int val_th24 = (th == 24) ? FL_MENU_VALUE : 0;
+        int val_th32 = (th == 32) ? FL_MENU_VALUE : 0;
+
+        menubar_->add("View/Hierarchy Thumbnail Threshold/Dense (6px)",       0, menu_cb, (void*)41, FL_MENU_RADIO | val_th6);
+        menubar_->add("View/Hierarchy Thumbnail Threshold/Default (8px)",     0, menu_cb, (void*)42, FL_MENU_RADIO | val_th8);
+        menubar_->add("View/Hierarchy Thumbnail Threshold/Balanced (12px)",   0, menu_cb, (void*)43, FL_MENU_RADIO | val_th12);
+        menubar_->add("View/Hierarchy Thumbnail Threshold/Coarse (16px)",     0, menu_cb, (void*)44, FL_MENU_RADIO | val_th16);
+        menubar_->add("View/Hierarchy Thumbnail Threshold/Large (24px)",      0, menu_cb, (void*)45, FL_MENU_RADIO | val_th24);
+        menubar_->add("View/Hierarchy Thumbnail Threshold/Very Large (32px)", 0, menu_cb, (void*)46, FL_MENU_RADIO | val_th32);
+        menubar_->add("View/Hierarchy Thumbnail Threshold/Custom...",         0, menu_cb, (void*)47, 0);
 
         menubar_->add("View/Information Panel", 0, menu_cb, (void*)10, FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0));
         menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO | (font_sz == 11 ? FL_MENU_VALUE : 0));
@@ -1261,7 +1366,7 @@ void MainWindow::reprioritize_thumbnails() {
     
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
         bool all_thumbs = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS);
-        double min_size = all_thumbs ? 8.0 : 16.0;
+        double min_size = all_thumbs ? hierarchy_thumbnail_threshold_ : (hierarchy_thumbnail_threshold_ * 2.0);
 
         bool view_changed = (viewport_->w() != last_viewport_width_ ||
                              viewport_->h() != last_viewport_height_ ||
@@ -1506,6 +1611,14 @@ void MainWindow::draw() {
 void MainWindow::resize(int X, int Y, int W, int H) {
     bool is_a_resize = (W != w() || H != h());
 
+    if (is_a_resize && settings_.save_window_size) {
+        settings_.window_width = W;
+        settings_.window_height = H;
+        settings_.window_x = X;
+        settings_.window_y = Y;
+        settings_.save();
+    }
+
     Fl_Double_Window::resize(X, Y, W, H);
     int vp_h = H - MENU_H - STATUS_H;
 
@@ -1650,6 +1763,36 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 30:
             win->exit_single_image_mode();
             return;
+        case 50:
+            win->open_directory_dialog();
+            return;
+        case 51:
+            win->settings_.save_window_size = !win->settings_.save_window_size;
+            win->settings_.save();
+            win->rebuild_menu();
+            return;
+        case 52:
+            win->hide();
+            return;
+        case 41: win->set_hierarchy_thumbnail_threshold(6.0); break;
+        case 42: win->set_hierarchy_thumbnail_threshold(8.0); break;
+        case 43: win->set_hierarchy_thumbnail_threshold(12.0); break;
+        case 44: win->set_hierarchy_thumbnail_threshold(16.0); break;
+        case 45: win->set_hierarchy_thumbnail_threshold(24.0); break;
+        case 46: win->set_hierarchy_thumbnail_threshold(32.0); break;
+        case 47: {
+            std::string def_val = std::to_string((int)std::round(win->hierarchy_thumbnail_threshold_));
+            const char* val = fl_input("Enter minimum thumbnail threshold in pixels (2\u2013128):", def_val.c_str());
+            if (val) {
+                double th = std::atof(val);
+                if (th >= 2.0 && th <= 128.0) {
+                    win->set_hierarchy_thumbnail_threshold(th);
+                } else {
+                    fl_alert("Please enter a threshold value between 2 and 128 pixels.");
+                }
+            }
+            break;
+        }
         default: return;
     }
     

@@ -57,6 +57,9 @@ public:
     ImageStore();
     ~ImageStore();
 
+    // Clear all entries and caches
+    void clear();
+
     // Add a new image (from scan discovery or LMDB load)
     size_t add_image(const std::string& filepath, double aspect_ratio,
                      int width = 0, int height = 0,

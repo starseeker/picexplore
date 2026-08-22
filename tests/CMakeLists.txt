@@ -50,6 +50,15 @@ target_compile_definitions(database_test PRIVATE
 target_compile_options(database_test PRIVATE -g -O2)
 add_test(NAME database_test COMMAND database_test)
 
+# Settings test
+add_executable(settings_test
+    settings_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/app_settings.cpp
+)
+target_include_directories(settings_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_options(settings_test PRIVATE -g)
+add_test(NAME settings_test COMMAND settings_test)
+
 # Local Variables:
 # tab-width: 8
 # mode: cmake
