@@ -985,14 +985,16 @@ void MainWindow::rebuild_menu() {
     }
 
     if (is_treemap) {
-        // Sort menu for Treemap mode: only relevant sizing metrics (File Size, Pixel Area, Equal Size)
+        // Sort menu for Treemap mode: sizing metrics (File Size, Pixel Area, Duplicate Count, Equal Size)
         int val_fs = (treemap_metric_ == LayoutEngine::TreemapMetric::FILE_SIZE) ? FL_MENU_VALUE : 0;
         int val_pa = (treemap_metric_ == LayoutEngine::TreemapMetric::PIXEL_AREA) ? FL_MENU_VALUE : 0;
+        int val_dc = (treemap_metric_ == LayoutEngine::TreemapMetric::DUPLICATE_COUNT) ? FL_MENU_VALUE : 0;
         int val_eq = (treemap_metric_ == LayoutEngine::TreemapMetric::EQUAL_SIZE) ? FL_MENU_VALUE : 0;
 
-        menubar_->add("Sort/File Size",  0, menu_cb, (void*)22, FL_MENU_RADIO | val_fs);
-        menubar_->add("Sort/Pixel Area", 0, menu_cb, (void*)23, FL_MENU_RADIO | val_pa);
-        menubar_->add("Sort/Equal Size", 0, menu_cb, (void*)24, FL_MENU_RADIO | val_eq);
+        menubar_->add("Sort/File Size",       0, menu_cb, (void*)22, FL_MENU_RADIO | val_fs);
+        menubar_->add("Sort/Pixel Area",      0, menu_cb, (void*)23, FL_MENU_RADIO | val_pa);
+        menubar_->add("Sort/Duplicate Count", 0, menu_cb, (void*)29, FL_MENU_RADIO | val_dc);
+        menubar_->add("Sort/Equal Size",      0, menu_cb, (void*)24, FL_MENU_RADIO | val_eq);
 
         // View menu for Treemap mode
         menubar_->add("View/Layout/Justified Grid",       FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO);
@@ -1034,23 +1036,27 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Reset Directory Filter", FL_CTRL | 'r', menu_cb, (void*)16, 0);
     } else {
         // Justified Grid mode
-        int val_az  = (current_sort_criteria_ == ImageStore::SortCriteria::ALPHABETICAL && sort_ascending_)  ? FL_MENU_VALUE : 0;
-        int val_za  = (current_sort_criteria_ == ImageStore::SortCriteria::ALPHABETICAL && !sort_ascending_) ? FL_MENU_VALUE : 0;
-        int val_fss = (current_sort_criteria_ == ImageStore::SortCriteria::FILE_SIZE    && sort_ascending_)  ? FL_MENU_VALUE : 0;
-        int val_fsl = (current_sort_criteria_ == ImageStore::SortCriteria::FILE_SIZE    && !sort_ascending_) ? FL_MENU_VALUE : 0;
-        int val_pas = (current_sort_criteria_ == ImageStore::SortCriteria::PIXEL_AREA  && sort_ascending_)  ? FL_MENU_VALUE : 0;
-        int val_pal = (current_sort_criteria_ == ImageStore::SortCriteria::PIXEL_AREA  && !sort_ascending_) ? FL_MENU_VALUE : 0;
-        int val_do  = (current_sort_criteria_ == ImageStore::SortCriteria::TIMESTAMP   && sort_ascending_)  ? FL_MENU_VALUE : 0;
-        int val_dn  = (current_sort_criteria_ == ImageStore::SortCriteria::TIMESTAMP   && !sort_ascending_) ? FL_MENU_VALUE : 0;
+        int val_az  = (current_sort_criteria_ == ImageStore::SortCriteria::ALPHABETICAL    && sort_ascending_)  ? FL_MENU_VALUE : 0;
+        int val_za  = (current_sort_criteria_ == ImageStore::SortCriteria::ALPHABETICAL    && !sort_ascending_) ? FL_MENU_VALUE : 0;
+        int val_dcm = (current_sort_criteria_ == ImageStore::SortCriteria::DUPLICATE_COUNT && !sort_ascending_) ? FL_MENU_VALUE : 0;
+        int val_dcf = (current_sort_criteria_ == ImageStore::SortCriteria::DUPLICATE_COUNT && sort_ascending_)  ? FL_MENU_VALUE : 0;
+        int val_fss = (current_sort_criteria_ == ImageStore::SortCriteria::FILE_SIZE       && sort_ascending_)  ? FL_MENU_VALUE : 0;
+        int val_fsl = (current_sort_criteria_ == ImageStore::SortCriteria::FILE_SIZE       && !sort_ascending_) ? FL_MENU_VALUE : 0;
+        int val_pas = (current_sort_criteria_ == ImageStore::SortCriteria::PIXEL_AREA     && sort_ascending_)  ? FL_MENU_VALUE : 0;
+        int val_pal = (current_sort_criteria_ == ImageStore::SortCriteria::PIXEL_AREA     && !sort_ascending_) ? FL_MENU_VALUE : 0;
+        int val_do  = (current_sort_criteria_ == ImageStore::SortCriteria::TIMESTAMP      && sort_ascending_)  ? FL_MENU_VALUE : 0;
+        int val_dn  = (current_sort_criteria_ == ImageStore::SortCriteria::TIMESTAMP      && !sort_ascending_) ? FL_MENU_VALUE : 0;
 
-        menubar_->add("Sort/Alphabetical (A-Z)",    0, menu_cb, (void*)1,  FL_MENU_RADIO | val_az);
-        menubar_->add("Sort/Alphabetical (Z-A)",    0, menu_cb, (void*)2,  FL_MENU_RADIO | val_za);
-        menubar_->add("Sort/File Size (Smallest)",  0, menu_cb, (void*)3,  FL_MENU_RADIO | val_fss);
-        menubar_->add("Sort/File Size (Largest)",   0, menu_cb, (void*)4,  FL_MENU_RADIO | val_fsl);
-        menubar_->add("Sort/Pixel Area (Smallest)", 0, menu_cb, (void*)17, FL_MENU_RADIO | val_pas);
-        menubar_->add("Sort/Pixel Area (Largest)",  0, menu_cb, (void*)18, FL_MENU_RADIO | val_pal);
-        menubar_->add("Sort/Date (Oldest)",         0, menu_cb, (void*)5,  FL_MENU_RADIO | val_do);
-        menubar_->add("Sort/Date (Newest)",         0, menu_cb, (void*)6,  FL_MENU_RADIO | val_dn);
+        menubar_->add("Sort/Alphabetical (A-Z)",            0, menu_cb, (void*)1,  FL_MENU_RADIO | val_az);
+        menubar_->add("Sort/Alphabetical (Z-A)",            0, menu_cb, (void*)2,  FL_MENU_RADIO | val_za);
+        menubar_->add("Sort/Duplicate Count (Most First)",   0, menu_cb, (void*)36, FL_MENU_RADIO | val_dcm);
+        menubar_->add("Sort/Duplicate Count (Fewest First)", 0, menu_cb, (void*)37, FL_MENU_RADIO | val_dcf);
+        menubar_->add("Sort/File Size (Smallest)",          0, menu_cb, (void*)3,  FL_MENU_RADIO | val_fss);
+        menubar_->add("Sort/File Size (Largest)",           0, menu_cb, (void*)4,  FL_MENU_RADIO | val_fsl);
+        menubar_->add("Sort/Pixel Area (Smallest)",         0, menu_cb, (void*)17, FL_MENU_RADIO | val_pas);
+        menubar_->add("Sort/Pixel Area (Largest)",          0, menu_cb, (void*)18, FL_MENU_RADIO | val_pal);
+        menubar_->add("Sort/Date (Oldest)",                 0, menu_cb, (void*)5,  FL_MENU_RADIO | val_do);
+        menubar_->add("Sort/Date (Newest)",                 0, menu_cb, (void*)6,  FL_MENU_RADIO | val_dn);
 
         menubar_->add("View/Layout/Justified Grid",       FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO | FL_MENU_VALUE);
         menubar_->add("View/Layout/Flat Treemap",         FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO);
@@ -1342,6 +1348,8 @@ void MainWindow::recompute_layout(bool reprioritize) {
             store_.ensure_file_sizes();
         } else if (treemap_metric_ == LayoutEngine::TreemapMetric::PIXEL_AREA) {
             store_.ensure_pixel_dimensions();
+        } else if (treemap_metric_ == LayoutEngine::TreemapMetric::DUPLICATE_COUNT) {
+            store_.ensure_duplicate_counts();
         }
 
         std::vector<TreemapItem> items;
@@ -1355,6 +1363,8 @@ void MainWindow::recompute_layout(bool reprioritize) {
                 weight = (entry.original_width > 0 && entry.original_height > 0)
                             ? static_cast<double>(entry.original_width) * entry.original_height
                             : 10000.0;
+            } else if (treemap_metric_ == LayoutEngine::TreemapMetric::DUPLICATE_COUNT) {
+                weight = entry.duplicate_count > 0 ? static_cast<double>(entry.duplicate_count) : 1.0;
             } else {
                 weight = 1.0;
             }
@@ -1370,6 +1380,8 @@ void MainWindow::recompute_layout(bool reprioritize) {
             store_.ensure_file_sizes();
         } else if (treemap_metric_ == LayoutEngine::TreemapMetric::PIXEL_AREA) {
             store_.ensure_pixel_dimensions();
+        } else if (treemap_metric_ == LayoutEngine::TreemapMetric::DUPLICATE_COUNT) {
+            store_.ensure_duplicate_counts();
         }
 
         std::vector<HierarchicalTreemapItem> items;
@@ -1383,6 +1395,8 @@ void MainWindow::recompute_layout(bool reprioritize) {
                 weight = (entry.original_width > 0 && entry.original_height > 0)
                             ? static_cast<double>(entry.original_width) * entry.original_height
                             : 10000.0;
+            } else if (treemap_metric_ == LayoutEngine::TreemapMetric::DUPLICATE_COUNT) {
+                weight = entry.duplicate_count > 0 ? static_cast<double>(entry.duplicate_count) : 1.0;
             } else {
                 weight = 1.0;
             }
@@ -1778,11 +1792,14 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 6: criteria = ImageStore::SortCriteria::TIMESTAMP;    ascending = false; break;
         case 17: criteria = ImageStore::SortCriteria::PIXEL_AREA;  ascending = true;  break;
         case 18: criteria = ImageStore::SortCriteria::PIXEL_AREA;  ascending = false; break;
+        case 36: criteria = ImageStore::SortCriteria::DUPLICATE_COUNT; ascending = false; break;
+        case 37: criteria = ImageStore::SortCriteria::DUPLICATE_COUNT; ascending = true;  break;
         case 20: win->set_layout_mode(LayoutEngine::LayoutType::JUSTIFIED); break;
         case 21: win->set_layout_mode(LayoutEngine::LayoutType::TREEMAP); break;
         case 27: win->set_layout_mode(LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP); break;
         case 22: win->set_treemap_metric(LayoutEngine::TreemapMetric::FILE_SIZE); break;
         case 23: win->set_treemap_metric(LayoutEngine::TreemapMetric::PIXEL_AREA); break;
+        case 29: win->set_treemap_metric(LayoutEngine::TreemapMetric::DUPLICATE_COUNT); break;
         case 24: win->set_treemap_metric(LayoutEngine::TreemapMetric::EQUAL_SIZE); break;
         case 25: win->set_treemap_style(VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS); break;
         case 26: win->set_treemap_style(VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS); break;

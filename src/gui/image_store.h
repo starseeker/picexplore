@@ -22,6 +22,7 @@ struct ImageEntry {
     bool metadata_known = false;
     uintmax_t file_size = 0;
     uintmax_t file_timestamp = 0;
+    int duplicate_count = 1;
 
     // Highest quality we have available
     ThumbQuality best_quality = ThumbQuality::NONE;
@@ -97,11 +98,13 @@ public:
         ALPHABETICAL,
         FILE_SIZE,
         TIMESTAMP,
-        PIXEL_AREA
+        PIXEL_AREA,
+        DUPLICATE_COUNT
     };
     void sort_entries(SortCriteria criteria, bool ascending);
     void ensure_file_sizes();
     void ensure_pixel_dimensions();
+    void ensure_duplicate_counts();
     size_t find_by_filepath(const std::string& filepath) const;
 
     // Memory management: Evict unused RGB and scaled data

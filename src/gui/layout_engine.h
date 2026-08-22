@@ -16,6 +16,7 @@ public:
     enum class TreemapMetric {
         FILE_SIZE,
         PIXEL_AREA,
+        DUPLICATE_COUNT,
         EQUAL_SIZE
     };
 

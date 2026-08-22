@@ -409,6 +409,27 @@ void ImageStore::ensure_pixel_dimensions() {
     }
 }
 
+void ImageStore::ensure_duplicate_counts() {
+    std::unordered_map<std::string, int> hash_counts;
+    for (const auto& entry : entries_) {
+        if (!entry.content_hash.empty()) {
+            hash_counts[entry.content_hash]++;
+        }
+    }
+    for (auto& entry : entries_) {
+        if (!entry.content_hash.empty()) {
+            auto it = hash_counts.find(entry.content_hash);
+            if (it != hash_counts.end()) {
+                entry.duplicate_count = it->second;
+            } else {
+                entry.duplicate_count = 1;
+            }
+        } else {
+            entry.duplicate_count = 1;
+        }
+    }
+}
+
 void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
     if (criteria == SortCriteria::FILE_SIZE) {
         ensure_file_sizes();
@@ -423,6 +444,8 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
         }
     } else if (criteria == SortCriteria::PIXEL_AREA) {
         ensure_pixel_dimensions();
+    } else if (criteria == SortCriteria::DUPLICATE_COUNT) {
+        ensure_duplicate_counts();
     }
 
     std::sort(entries_.begin(), entries_.end(), [criteria, ascending](const ImageEntry& a, const ImageEntry& b) {
@@ -443,6 +466,11 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
             long long area_b = (long long)b.original_width * b.original_height;
             if (area_a != area_b) {
                 return ascending ? (area_a < area_b) : (area_a > area_b);
+            }
+            return a.filepath < b.filepath;
+        } else if (criteria == SortCriteria::DUPLICATE_COUNT) {
+            if (a.duplicate_count != b.duplicate_count) {
+                return ascending ? (a.duplicate_count < b.duplicate_count) : (a.duplicate_count > b.duplicate_count);
             }
             return a.filepath < b.filepath;
         }
