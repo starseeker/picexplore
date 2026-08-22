@@ -13,6 +13,7 @@ int main() {
     s.window_x = 100;
     s.window_y = 150;
     s.hierarchy_thumbnail_threshold = 12.0;
+    s.deduplicate_flat_views = false;
     s.last_directory = "/tmp/test_photos";
 
     s.save();
@@ -26,6 +27,7 @@ int main() {
     assert(loaded.window_x == 100);
     assert(loaded.window_y == 150);
     assert(loaded.hierarchy_thumbnail_threshold == 12.0);
+    assert(loaded.deduplicate_flat_views == false);
     assert(loaded.last_directory == "/tmp/test_photos");
 
     std::cout << "[PASS] AppSettings save and load test passed!" << std::endl;

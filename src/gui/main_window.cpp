@@ -899,6 +899,9 @@ void MainWindow::update_statusbar() {
     }
 
     size_t total_images = store_.size();
+    size_t shown_count = layout_result_.boxes.size();
+    bool is_flat = (active_layout_ == LayoutEngine::LayoutType::JUSTIFIED || active_layout_ == LayoutEngine::LayoutType::TREEMAP);
+    bool is_deduped = (is_flat && settings_.deduplicate_flat_views && shown_count > 0 && shown_count < total_images);
 
     if (!directory_filter_.empty()) {
         // Show the filter as a path relative to the launch root for brevity
@@ -910,10 +913,16 @@ void MainWindow::update_statusbar() {
             rel = directory_filter_;
         }
         auto filtered = store_.get_filtered_aspects(directory_filter_);
-        label = "  Filter: " + rel + "/ (" + std::to_string(filtered.size()) + " of " + std::to_string(total_images) + (total_images == 1 ? " image)" : " images)");
+        if (is_deduped) {
+            label = "  Filter: " + rel + "/ (" + std::to_string(shown_count) + " unique of " + std::to_string(filtered.size()) + " images)";
+        } else {
+            label = "  Filter: " + rel + "/ (" + std::to_string(filtered.size()) + " of " + std::to_string(total_images) + (total_images == 1 ? " image)" : " images)");
+        }
     } else {
         if (total_images == 0 && !scan_complete_) {
             label = "  Scanning...";
+        } else if (is_deduped) {
+            label = "  " + std::to_string(shown_count) + " unique (" + std::to_string(total_images) + (total_images == 1 ? " image)" : " images)");
         } else {
             label = "  " + std::to_string(total_images) + (total_images == 1 ? " image" : " images");
         }
@@ -1004,6 +1013,7 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Hierarchy Thumbnail Threshold/Very Large (32px)", 0, menu_cb, (void*)46, FL_MENU_RADIO | val_th32);
         menubar_->add("View/Hierarchy Thumbnail Threshold/Custom...",         0, menu_cb, (void*)47, 0);
 
+        menubar_->add("View/Deduplicate Copies in Flat Views", 0, menu_cb, (void*)35, FL_MENU_TOGGLE | (settings_.deduplicate_flat_views ? FL_MENU_VALUE : 0));
         menubar_->add("View/Information Panel", 0, menu_cb, (void*)10, FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0));
         menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO | (font_sz == 11 ? FL_MENU_VALUE : 0));
         menubar_->add("View/Info Panel Font Size/Medium (14pt)",  0, menu_cb, (void*)12, FL_MENU_RADIO | (font_sz == 14 ? FL_MENU_VALUE : 0));
@@ -1039,6 +1049,7 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Zoom Out (Ctrl+Wheel Down)", FL_CTRL | '-', menu_cb, (void*)8);
         menubar_->add("View/Reset Zoom",                 FL_CTRL | '0', menu_cb, (void*)9);
         menubar_->add("View/Navigator (Minimap)",        0,             menu_cb, (void*)19, FL_MENU_TOGGLE | (viewport_->show_minimap() ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Deduplicate Copies in Flat Views", 0,       menu_cb, (void*)35, FL_MENU_TOGGLE | (settings_.deduplicate_flat_views ? FL_MENU_VALUE : 0));
         menubar_->add("View/Information Panel",          0,             menu_cb, (void*)10, FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0));
 
         menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO | (font_sz == 11 ? FL_MENU_VALUE : 0));
@@ -1283,6 +1294,38 @@ void MainWindow::set_treemap_style(VirtualViewport::TreemapRenderStyle style) {
 void MainWindow::recompute_layout(bool reprioritize) {
     auto indexed = store_.get_filtered_aspects(directory_filter_);
 
+    // In flat layouts (Flat Treemap and Justified Grid), deduplicate by unique content_hash if enabled.
+    // Because indexed is already in the order of the active sort criteria, keeping the first match
+    // for each hash automatically ranks the best representative matching the sort criteria.
+    std::vector<std::pair<size_t, double>> flat_items;
+    bool is_flat = (active_layout_ == LayoutEngine::LayoutType::JUSTIFIED || active_layout_ == LayoutEngine::LayoutType::TREEMAP);
+
+    if (is_flat && settings_.deduplicate_flat_views) {
+        std::unordered_set<std::string> seen_hashes;
+        flat_items.reserve(indexed.size());
+
+        for (const auto& [raw_idx, ar] : indexed) {
+            auto& entry = store_.get(raw_idx);
+            if (entry.content_hash.empty() && db_ && db_->is_open()) {
+                std::string h;
+                if (db_->get_hash_for_path(entry.filepath, h) && !h.empty()) {
+                    entry.content_hash = h;
+                }
+            }
+
+            if (!entry.content_hash.empty()) {
+                if (seen_hashes.insert(entry.content_hash).second) {
+                    flat_items.emplace_back(raw_idx, ar);
+                }
+            } else {
+                // If content_hash is not yet computed, treat as unique
+                flat_items.emplace_back(raw_idx, ar);
+            }
+        }
+    } else {
+        flat_items = indexed;
+    }
+
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
         if (treemap_metric_ == LayoutEngine::TreemapMetric::FILE_SIZE) {
             store_.ensure_file_sizes();
@@ -1291,8 +1334,8 @@ void MainWindow::recompute_layout(bool reprioritize) {
         }
 
         std::vector<TreemapItem> items;
-        items.reserve(indexed.size());
-        for (const auto& [raw_idx, ar] : indexed) {
+        items.reserve(flat_items.size());
+        for (const auto& [raw_idx, ar] : flat_items) {
             const auto& entry = store_.get(raw_idx);
             double weight = 1.0;
             if (treemap_metric_ == LayoutEngine::TreemapMetric::FILE_SIZE) {
@@ -1342,7 +1385,7 @@ void MainWindow::recompute_layout(bool reprioritize) {
         viewport_->set_scroll_offset(0);
         scrollbar_->value(0, viewport_->h(), 0, viewport_->h());
     } else {
-        layout_result_ = layout_engine_.compute_justified(indexed, viewport_->content_width(), target_height_);
+        layout_result_ = layout_engine_.compute_justified(flat_items, viewport_->content_width(), target_height_);
         viewport_->set_layout(&layout_result_);
         
         int max_scroll = std::max(0, static_cast<int>(layout_result_.total_height) - viewport_->h());
@@ -1354,6 +1397,7 @@ void MainWindow::recompute_layout(bool reprioritize) {
     
     layout_dirty_ = false;
     viewport_->redraw();
+    update_statusbar();
     
     if (reprioritize && viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
         reprioritize_thumbnails();
@@ -1765,6 +1809,17 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 30:
             win->exit_single_image_mode();
             return;
+        case 35: {
+            win->settings_.deduplicate_flat_views = !win->settings_.deduplicate_flat_views;
+            win->settings_.save();
+            win->current_generation_++;
+            win->pipeline_->set_generation(win->current_generation_);
+            win->last_visible_.clear();
+            win->layout_dirty_ = true;
+            win->rebuild_menu();
+            win->recompute_layout(true);
+            break;
+        }
         case 50:
             win->open_directory_dialog();
             return;
