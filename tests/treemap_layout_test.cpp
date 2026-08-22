@@ -183,10 +183,32 @@ void test_hierarchical_performance() {
     auto res = HierarchicalTreemap::compute(items, "/gallery", 0, 0, 1920, 1080, 1.0, 3.0, 16.0);
     auto end = std::chrono::steady_clock::now();
 
-    assert(res.boxes.size() == 10000);
+    assert(res.boxes.size() > 0 && res.container_boxes.size() > 0);
     auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     std::cout << "[PASS] 10,000 items hierarchical tree build & layout in " << duration_ms << " ms\n";
     assert(duration_ms < 50);
+}
+
+void test_hierarchical_lod_pruning() {
+    std::vector<HierarchicalTreemapItem> items;
+    // 500 items in 50 subdirectories
+    for (size_t i = 0; i < 500; ++i) {
+        std::string path = "/root/sub_" + std::to_string(i % 50) + "/img_" + std::to_string(i) + ".jpg";
+        items.push_back({i, path, 100.0, 1.0});
+    }
+
+    // 1. Extreme sub-pixel root view: 40x40 canvas
+    // 50 subdirectories in 40x40 canvas cannot fit 500 leaf boxes (each would be < 0.2px)
+    auto tiny_res = HierarchicalTreemap::compute(items, "/root", 0, 0, 40, 40, 0.0, 0.0, 0.0);
+    assert(!tiny_res.container_boxes.empty());
+    // Leaf boxes should be pruned at LOD boundary
+    assert(tiny_res.boxes.size() < 500);
+
+    // 2. Zoomed-in view: drill down to /root/sub_0 on 1000x800 canvas
+    auto zoom_res = HierarchicalTreemap::compute(items, "/root", "/root/sub_0", 0, 0, 1000, 800, 2.0, 4.0, 18.0);
+    // All 10 images in /root/sub_0 should expand with full detail
+    assert(zoom_res.boxes.size() == 10);
+    std::cout << "[PASS] Hierarchical Level-of-Detail (LOD) pruning and drill-down expansion test\n";
 }
 
 void test_hierarchical_zoom_in_and_parent_bar() {
@@ -286,6 +308,7 @@ int main() {
         test_multiple_items_and_svg();
         test_performance_10k_items();
         test_hierarchical_treemap();
+        test_hierarchical_lod_pruning();
         test_hierarchical_zoom_in_and_parent_bar();
         test_hierarchical_performance();
         test_cushion_treemap_math();

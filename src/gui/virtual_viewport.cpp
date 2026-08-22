@@ -42,7 +42,9 @@ std::vector<size_t> VirtualViewport::get_visible_indices(int margin_y) const {
     if (layout_->layout_type == LayoutEngine::LayoutType::TREEMAP ||
         layout_->layout_type == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
         for (const auto& box : layout_->boxes) {
-            if (box.w > 0 && box.h > 0) {
+            // Only consider boxes large enough to warrant an active in-memory decoded thumbnail.
+            // This prevents sub-pixel / 1px / 2px tiles from disabling LRU memory eviction.
+            if (box.w >= 24.0 && box.h >= 24.0) {
                 visible.push_back(box.image_index);
             }
         }
@@ -52,11 +54,16 @@ std::vector<size_t> VirtualViewport::get_visible_indices(int margin_y) const {
     int view_top = scroll_offset_ - margin_y;
     int view_bottom = scroll_offset_ + h() + margin_y;
 
-    for (const auto& box : layout_->boxes) {
-        if (box.y + box.h >= view_top && box.y <= view_bottom) {
-            visible.push_back(box.image_index);
-        } else if (box.y > view_bottom) {
-            break; 
+    // Fast O(log N) binary search for the first box that could overlap view_top
+    auto it = std::lower_bound(layout_->boxes.begin(), layout_->boxes.end(), static_cast<double>(view_top),
+        [](const auto& b, double top) {
+            return (b.y + b.h) < top;
+        });
+
+    for (; it != layout_->boxes.end(); ++it) {
+        if (it->y > view_bottom) break;
+        if (it->y + it->h >= view_top) {
+            visible.push_back(it->image_index);
         }
     }
     return visible;
@@ -231,9 +238,16 @@ void VirtualViewport::draw_grid() {
 
     fl_push_clip(x(), y(), w(), h());
 
-    for (const auto& box : layout_->boxes) {
-        if (box.y + box.h < view_top) continue;
+    // Fast O(log N) binary search for the first visible box
+    auto it = std::lower_bound(layout_->boxes.begin(), layout_->boxes.end(), static_cast<double>(view_top),
+        [](const auto& b, double top) {
+            return (b.y + b.h) < top;
+        });
+
+    for (; it != layout_->boxes.end(); ++it) {
+        const auto& box = *it;
         if (box.y > view_bottom) break;
+        if (box.y + box.h < view_top) continue;
 
         int draw_x = static_cast<int>(x() + box.x);
         int draw_y = static_cast<int>(y() + box.y - scroll_offset_);
@@ -417,6 +431,19 @@ void VirtualViewport::draw_treemap() {
 
         FileTypeColors::ColorRGB rgb_col = FileTypeColors::get_color_rgb(entry.filepath);
         Fl_Color bg_col = FileTypeColors::get_fl_color(entry.filepath);
+
+        // Sub-pixel / tiny tile fast path:
+        // Skip fl_draw_image and cushion calculations for tiny boxes < 4x4 px
+        if (draw_w < 4 || draw_h < 4) {
+            if (is_selected) {
+                fl_color(fl_rgb_color(60, 160, 255));
+                fl_rectf(draw_x, draw_y, std::max(1, draw_w), std::max(1, draw_h));
+            } else {
+                fl_color(bg_col);
+                fl_rectf(draw_x, draw_y, std::max(1, draw_w), std::max(1, draw_h));
+            }
+            continue;
+        }
 
         const uint8_t* src_thumb = nullptr;
         int src_w = 0, src_h = 0;

@@ -1001,7 +1001,7 @@ void MainWindow::reprioritize_thumbnails() {
     
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
         bool all_thumbs = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS);
-        double min_size = all_thumbs ? 1.0 : 36.0;
+        double min_size = all_thumbs ? 24.0 : 36.0;
 
         bool view_changed = (viewport_->w() != last_viewport_width_ ||
                              viewport_->h() != last_viewport_height_ ||

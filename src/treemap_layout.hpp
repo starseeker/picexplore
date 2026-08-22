@@ -302,7 +302,10 @@ public:
 
         for (const auto& item : input_items) {
             std::string_view rel_path = item.filepath;
-            if (!effective_root.empty() && rel_path.rfind(effective_root, 0) == 0) {
+            if (!effective_root.empty()) {
+                if (rel_path.rfind(effective_root, 0) != 0) {
+                    continue;
+                }
                 rel_path.remove_prefix(effective_root.size());
                 while (!rel_path.empty() && (rel_path.front() == '/' || rel_path.front() == '\\')) {
                     rel_path.remove_prefix(1);
@@ -387,6 +390,14 @@ public:
                     node->depth,
                     bx, by, bw, bh
                 });
+            }
+
+            // Level-of-Detail (LOD) Pruning:
+            // If this directory node is sub-pixel or smaller than 8x8 pixels (area < 64px^2),
+            // do not subdivide into thousands of tiny leaf files/subdirs at root view.
+            // It will expand with full detail when drilled into/zoomed in!
+            if (node->depth > 0 && (bw < 8.0 || bh < 8.0 || (bw * bh) < 64.0)) {
+                return;
             }
 
             // Calculate inner available region for children
@@ -479,11 +490,13 @@ public:
                         leaf_by += 4.0 * leaf_h * (2.0 * fy + fh) / (fh * fh);
                     }
 
-                    result.boxes.push_back(TreemapBox{
-                        ref.file_id,
-                        fx, fy, fw, fh,
-                        leaf_ax, leaf_bx, leaf_ay, leaf_by
-                    });
+                    if (fw >= 1.0 && fh >= 1.0) {
+                        result.boxes.push_back(TreemapBox{
+                            ref.file_id,
+                            fx, fy, fw, fh,
+                            leaf_ax, leaf_bx, leaf_ay, leaf_by
+                        });
+                    }
                 }
             }
         };
