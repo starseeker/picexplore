@@ -117,6 +117,7 @@ private:
     uint64_t current_generation_ = 0;
     bool reprioritize_pending_ = false;
     std::chrono::steady_clock::time_point last_resize_time_;
+    std::chrono::steady_clock::time_point last_layout_recompute_time_;
 
     static void timer_cb(void* data);
     void poll_events();

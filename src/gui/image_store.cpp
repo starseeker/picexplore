@@ -317,7 +317,6 @@ void ImageStore::set_thumbnail_rgb(size_t index, const std::string& filepath, Th
 }
 
 ImageEntry& ImageStore::get(size_t index) {
-    update_lru(index);
     return entries_[index];
 }
 
@@ -326,10 +325,12 @@ const ImageEntry& ImageStore::get(size_t index) const {
 }
 
 const uint8_t* ImageStore::get_scaled_image(size_t index, int draw_w, int draw_h) {
-    auto& entry = get(index);
+    if (index >= entries_.size()) return nullptr;
+    auto& entry = entries_[index];
     if (entry.scaled.rgb_data.empty()) {
         return nullptr;
     }
+    update_lru(index);
     return entry.scaled.rgb_data.data();
 }
 

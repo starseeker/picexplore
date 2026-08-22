@@ -854,7 +854,12 @@ void MainWindow::poll_events() {
     }
 
     if (layout_dirty_) {
-        recompute_layout(true);
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_layout_recompute_time_).count();
+        if (scan_complete_ || elapsed >= 200) {
+            last_layout_recompute_time_ = now;
+            recompute_layout(true);
+        }
     } else if (need_redraw) {
         viewport_->apply_updates(changed);
     }
