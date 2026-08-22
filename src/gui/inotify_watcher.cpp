@@ -45,28 +45,56 @@ void InotifyWatcher::stop() {
     pending_renames_.clear();
 }
 
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+
 void InotifyWatcher::add_watch_recursive(const std::string& path) {
     if (stop_requested_ || is_cache_or_db_path(path)) return;
+
+    // Safety cap: don't exhaust kernel inotify watch table on massive directories
+    if (wd_to_path_.size() >= 16384) return;
 
     int wd = inotify_add_watch(inotify_fd_, path.c_str(), 
         IN_CLOSE_WRITE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE);
     if (wd == -1) {
-        // Silently skip unreadable directories
+        // Silently skip unreadable directories or if inotify table full
         return;
     }
     wd_to_path_[wd] = path;
     
-    try {
-        for (const auto& entry : fs::directory_iterator(path)) {
-            if (stop_requested_) break;
-            if (entry.is_directory() && !fs::is_symlink(entry)) {
-                std::string subpath = entry.path().string();
-                if (!is_cache_or_db_path(subpath)) {
-                    add_watch_recursive(subpath);
-                }
+    DIR* dir = opendir(path.c_str());
+    if (!dir) return;
+
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        if (stop_requested_) break;
+        if (wd_to_path_.size() >= 16384) break;
+
+        // Skip . and ..
+        if (entry->d_name[0] == '.' && (entry->d_name[1] == '\0' || (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
+            continue;
+        }
+
+        bool is_dir = (entry->d_type == DT_DIR);
+        if (entry->d_type == DT_UNKNOWN || entry->d_type == DT_LNK) {
+            struct stat st;
+            std::string sub = path + "/" + entry->d_name;
+            if (lstat(sub.c_str(), &st) == 0 && S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode)) {
+                is_dir = true;
+            } else {
+                is_dir = false;
             }
         }
-    } catch (...) {}
+
+        if (is_dir) {
+            std::string subpath = path + "/" + entry->d_name;
+            if (!is_cache_or_db_path(subpath)) {
+                add_watch_recursive(subpath);
+            }
+        }
+    }
+    closedir(dir);
 }
 
 void InotifyWatcher::watch_thread_func() {

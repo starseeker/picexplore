@@ -94,7 +94,7 @@ void ScanCoordinator::run() {
         fs::recursive_directory_iterator it(directory_), end;
         while (it != end && !stop_requested_) {
             const auto& entry = *it;
-            std::string path = fs::path(entry.path()).lexically_normal().string();
+            std::string path = entry.path().string();
 
             if (entry.is_directory()) {
                 if (is_cache_or_db_path(path, db_path_)) {
