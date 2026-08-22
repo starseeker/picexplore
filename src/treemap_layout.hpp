@@ -238,7 +238,7 @@ public:
         double total_weight = 0.0;
         
         // Children subdirectories (mapped by folder name)
-        std::unordered_map<std::string, std::unique_ptr<TreeNode>> subdirs;
+        std::vector<std::unique_ptr<TreeNode>> subdirs;
         // Immediate child files
         std::vector<TreemapItem> files;
     };
@@ -325,21 +325,29 @@ public:
 
                 std::string_view segment = rel_path.substr(start, slash - start);
                 if (!segment.empty()) {
-                    if (!cur_accum_path.empty() && cur_accum_path.back() != '/' && cur_accum_path.back() != '\\') {
-                        cur_accum_path += "/";
+                    TreeNode* next_node = nullptr;
+                    for (const auto& child : cur->subdirs) {
+                        if (child->name == segment) {
+                            next_node = child.get();
+                            break;
+                        }
                     }
-                    cur_accum_path.append(segment.data(), segment.size());
+                    if (!next_node) {
+                        if (!cur_accum_path.empty() && cur_accum_path.back() != '/' && cur_accum_path.back() != '\\') {
+                            cur_accum_path += "/";
+                        }
+                        cur_accum_path.append(segment.data(), segment.size());
 
-                    std::string seg_str(segment);
-                    auto it = cur->subdirs.find(seg_str);
-                    if (it == cur->subdirs.end()) {
                         auto newNode = std::make_unique<TreeNode>();
-                        newNode->name = seg_str;
+                        newNode->name = std::string(segment);
                         newNode->full_path = cur_accum_path;
                         newNode->depth = cur->depth + 1;
-                        it = cur->subdirs.emplace(std::move(seg_str), std::move(newNode)).first;
+                        next_node = newNode.get();
+                        cur->subdirs.push_back(std::move(newNode));
+                    } else {
+                        cur_accum_path = next_node->full_path;
                     }
-                    cur = it->second.get();
+                    cur = next_node;
                 }
                 start = slash + 1;
             }
@@ -353,8 +361,8 @@ public:
             for (const auto& f : node->files) {
                 sum += f.weight;
             }
-            for (auto& pair : node->subdirs) {
-                sum += self(self, pair.second.get());
+            for (auto& child : node->subdirs) {
+                sum += self(self, child.get());
             }
             node->total_weight = sum;
             return sum;
@@ -432,9 +440,9 @@ public:
 
             std::vector<TreeNode*> sorted_subdirs;
             sorted_subdirs.reserve(node->subdirs.size());
-            for (auto& pair : node->subdirs) {
-                if (pair.second->total_weight > 0.0) {
-                    sorted_subdirs.push_back(pair.second.get());
+            for (auto& child : node->subdirs) {
+                if (child->total_weight > 0.0) {
+                    sorted_subdirs.push_back(child.get());
                 }
             }
             std::sort(sorted_subdirs.begin(), sorted_subdirs.end(),
