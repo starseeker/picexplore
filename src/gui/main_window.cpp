@@ -2215,12 +2215,8 @@ void MainWindow::start_garbage_collection() {
 }
 
 void MainWindow::open_pdf_export_dialog() {
-    DatabaseManager db;
-    DatabaseManager* db_ptr = nullptr;
-    if (!db_path_.empty() && db.open(db_path_)) {
-        db_ptr = &db;
-    }
-    PDFExportDialog::show_dialog(store_, db_ptr, active_layout_, treemap_metric_, directory_, directory_filter_);
+    PDFExportDialog::show_dialog(store_, db_path_, active_layout_, treemap_metric_, directory_, directory_filter_);
 }
+
 
 

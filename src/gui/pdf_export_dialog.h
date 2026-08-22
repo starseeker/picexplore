@@ -72,7 +72,7 @@ class PDFExportDialog : public Fl_Double_Window {
 public:
     PDFExportDialog(int w, int h, const char* title,
                     const ImageStore& store,
-                    DatabaseManager* db,
+                    const std::string& db_path,
                     LayoutEngine::LayoutType initial_layout,
                     LayoutEngine::TreemapMetric initial_metric,
                     const std::string& root_dir,
@@ -80,7 +80,7 @@ public:
     ~PDFExportDialog() override;
 
     static void show_dialog(const ImageStore& store,
-                            DatabaseManager* db,
+                            const std::string& db_path,
                             LayoutEngine::LayoutType initial_layout,
                             LayoutEngine::TreemapMetric initial_metric,
                             const std::string& root_dir,
@@ -100,7 +100,8 @@ private:
     static void on_cancel_clicked(Fl_Widget* w, void* data);
 
     const ImageStore& store_;
-    DatabaseManager* db_;
+    std::string db_path_;
+    DatabaseManager preview_db_;
     PDFOptions options_;
     size_t current_page_index_ = 0;
     size_t total_pages_ = 1;

@@ -133,15 +133,19 @@ void PDFPreviewWidget::draw() {
 
 PDFExportDialog::PDFExportDialog(int w, int h, const char* title,
                                  const ImageStore& store,
-                                 DatabaseManager* db,
+                                 const std::string& db_path,
                                  LayoutEngine::LayoutType initial_layout,
                                  LayoutEngine::TreemapMetric initial_metric,
                                  const std::string& root_dir,
                                  const std::string& dir_filter)
     : Fl_Double_Window(w, h, title),
       store_(store),
-      db_(db)
+      db_path_(db_path)
 {
+    if (!db_path_.empty()) {
+        preview_db_.open(db_path_);
+    }
+
     options_.layout_type = initial_layout;
     options_.treemap_metric = initial_metric;
     options_.root_directory = root_dir;
@@ -437,7 +441,8 @@ void PDFExportDialog::sync_options_from_ui() {
 }
 
 void PDFExportDialog::refresh_preview() {
-    preview_widget_->update_preview(store_, options_, current_page_index_, db_);
+    DatabaseManager* db_ptr = preview_db_.is_open() ? &preview_db_ : nullptr;
+    preview_widget_->update_preview(store_, options_, current_page_index_, db_ptr);
     total_pages_ = preview_widget_->total_pages();
     current_page_index_ = preview_widget_->current_page();
 
@@ -511,10 +516,18 @@ void PDFExportDialog::start_export(const std::string& output_path) {
     btn_export_->deactivate();
     btn_close_->label("Cancel");
 
-    export_thread_ = std::thread([this, output_path]() {
+    std::string db_p = db_path_;
+
+    export_thread_ = std::thread([this, output_path, db_p]() {
+        DatabaseManager export_db;
+        DatabaseManager* db_ptr = nullptr;
+        if (!db_p.empty() && export_db.open(db_p)) {
+            db_ptr = &export_db;
+        }
+
         PDFGenerator generator;
         bool ok = generator.generate_from_store(
-            store_, output_path, options_, db_,
+            store_, output_path, options_, db_ptr,
             [this](int curr, int total, const std::string& msg) {
                 Fl::awake([](void* data) {
                     auto* p = static_cast<std::pair<PDFExportDialog*, std::pair<int, std::pair<int, std::string>>>*>(data);
@@ -565,15 +578,19 @@ void PDFExportDialog::cancel_export() {
 }
 
 void PDFExportDialog::show_dialog(const ImageStore& store,
-                                  DatabaseManager* db,
+                                  const std::string& db_path,
                                   LayoutEngine::LayoutType initial_layout,
                                   LayoutEngine::TreemapMetric initial_metric,
                                   const std::string& root_dir,
                                   const std::string& dir_filter) {
     PDFExportDialog* dlg = new PDFExportDialog(920, 640, "Export as PDF",
-                                               store, db,
+                                               store, db_path,
                                                initial_layout, initial_metric,
                                                root_dir, dir_filter);
     dlg->set_modal();
     dlg->show();
+    while (dlg->shown()) {
+        Fl::wait();
+    }
+    delete dlg;
 }
