@@ -80,7 +80,7 @@ void ScanCoordinator::run() {
                 update_queue_.enqueue(std::move(ev));
                 
                 found++;
-                if (found % 100 == 0) {
+                if (found % 1000 == 0) {
                     update_queue_.enqueue(UpdateEvent::make_scan_progress(found));
                 }
             }

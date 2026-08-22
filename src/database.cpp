@@ -1353,7 +1353,25 @@ std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::stri
                 ImageInfo info;
                 info.path = std::move(norm_p);
                 info.hash = hash;
-                if (load_image_info(hash, info)) {
+
+                // Direct zero-copy metadata fetch from memory-mapped LMDB page
+                std::string meta_key_str = hash + ":meta";
+                MDB_val m_key, m_val;
+                m_key.mv_data = (void*)meta_key_str.c_str();
+                m_key.mv_size = meta_key_str.size();
+                if (mdb_get(read_txn, read_dbi, &m_key, &m_val) == 0 && m_val.mv_size >= sizeof(ImageMetadata)) {
+                    ImageMetadata meta;
+                    std::memcpy(&meta, m_val.mv_data, sizeof(ImageMetadata));
+                    info.orig_width = meta.orig_width;
+                    info.orig_height = meta.orig_height;
+                    info.aspect_ratio = (meta.orig_height > 0) ? (static_cast<double>(meta.orig_width) / meta.orig_height) : 1.0;
+                    info.file_size = meta.file_size;
+                    info.file_timestamp = meta.file_timestamp;
+                    info.thumb_width = meta.orig_width;
+                    info.thumb_height = meta.orig_height;
+                    info.best_thumb_size = 128;
+                    images.push_back(std::move(info));
+                } else if (load_image_info(hash, info)) {
                     images.push_back(std::move(info));
                 }
             }

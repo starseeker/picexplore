@@ -715,7 +715,7 @@ void MainWindow::poll_events() {
     
     UpdateEvent ev;
     int process_count = 0;
-    while (update_queue_.try_dequeue(ev) && process_count < 200) {
+    while (update_queue_.try_dequeue(ev) && process_count < 25000) {
         process_count++;
         if (ev.type == UpdateEvent::Type::IMAGE_DISCOVERED) {
             size_t idx = store_.add_image(ev.image.filepath, ev.image.aspect_ratio,
