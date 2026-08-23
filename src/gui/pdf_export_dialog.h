@@ -137,6 +137,18 @@ private:
     Fl_Button* btn_close_ = nullptr;
 
     // Threading
+    struct ProgressState {
+        std::atomic<int> current{0};
+        std::atomic<int> total{0};
+        std::mutex msg_mutex;
+        std::string message;
+        std::atomic<bool> done{false};
+        std::atomic<bool> success{false};
+    } progress_;
+
+    void poll_export_progress();
+    static void timer_cb(void* data);
+
     std::thread export_thread_;
     std::atomic<bool> export_running_{false};
     std::atomic<bool> export_stop_requested_{false};

@@ -160,9 +160,12 @@ PDFExportDialog::PDFExportDialog(int w, int h, const char* title,
     setup_ui();
     sync_options_from_ui();
     refresh_preview();
+
+    Fl::add_timeout(0.03, timer_cb, this);
 }
 
 PDFExportDialog::~PDFExportDialog() {
+    Fl::remove_timeout(timer_cb, this);
     cancel_export();
 }
 
@@ -505,11 +508,65 @@ void PDFExportDialog::on_cancel_clicked(Fl_Widget*, void* data) {
     self->hide();
 }
 
+void PDFExportDialog::timer_cb(void* data) {
+    auto* self = static_cast<PDFExportDialog*>(data);
+    self->poll_export_progress();
+    Fl::repeat_timeout(0.03, timer_cb, data);
+}
+
+void PDFExportDialog::poll_export_progress() {
+    if (!export_running_) return;
+
+    int curr = progress_.current.load();
+    int tot = progress_.total.load();
+    std::string msg;
+    {
+        std::lock_guard<std::mutex> lock(progress_.msg_mutex);
+        msg = progress_.message;
+    }
+
+    float pct = (tot > 0) ? (static_cast<float>(curr) / tot * 100.0f) : 0.0f;
+    progress_bar_->value(pct);
+    if (!msg.empty()) {
+        label_status_->copy_label(msg.c_str());
+    }
+    progress_bar_->redraw();
+    label_status_->redraw();
+
+    if (progress_.done.load()) {
+        if (export_thread_.joinable()) {
+            export_thread_.join();
+        }
+        export_running_ = false;
+        btn_export_->activate();
+        btn_close_->label("Close");
+
+        if (progress_.success.load()) {
+            progress_bar_->value(100.0f);
+            label_status_->copy_label("PDF Export complete!");
+        } else if (export_stop_requested_.load()) {
+            label_status_->copy_label("PDF Export cancelled.");
+        } else {
+            label_status_->copy_label("PDF Export failed.");
+        }
+        progress_bar_->redraw();
+        label_status_->redraw();
+    }
+}
+
 void PDFExportDialog::start_export(const std::string& output_path) {
     if (export_running_) return;
 
     export_running_ = true;
     export_stop_requested_ = false;
+    progress_.current.store(0);
+    progress_.total.store(0);
+    {
+        std::lock_guard<std::mutex> lock(progress_.msg_mutex);
+        progress_.message = "Starting PDF export...";
+    }
+    progress_.done.store(false);
+    progress_.success.store(false);
 
     progress_bar_->value(0.0f);
     progress_bar_->redraw();
@@ -532,47 +589,17 @@ void PDFExportDialog::start_export(const std::string& output_path) {
         bool ok = generator.generate_from_store(
             store_, output_path, options_, db_ptr,
             [this](int curr, int total, const std::string& msg) {
-                Fl::awake([](void* data) {
-                    auto* p = static_cast<std::pair<PDFExportDialog*, std::pair<int, std::pair<int, std::string>>>*>(data);
-                    auto* self = p->first;
-                    int c = p->second.first;
-                    int t = p->second.second.first;
-                    const auto& m = p->second.second.second;
-
-                    float pct = (t > 0) ? (static_cast<float>(c) / t * 100.0f) : 0.0f;
-                    self->progress_bar_->value(pct);
-                    self->label_status_->copy_label(m.c_str());
-                    self->progress_bar_->redraw();
-                    self->label_status_->redraw();
-                    Fl::flush();
-                    delete p;
-                }, new std::pair<PDFExportDialog*, std::pair<int, std::pair<int, std::string>>>(
-                    this, {curr, {total, msg}}));
+                progress_.current.store(curr);
+                progress_.total.store(total);
+                {
+                    std::lock_guard<std::mutex> lock(progress_.msg_mutex);
+                    progress_.message = msg;
+                }
             },
             &export_stop_requested_);
 
-        Fl::awake([](void* data) {
-            auto* p = static_cast<std::pair<PDFExportDialog*, bool>*>(data);
-            auto* self = p->first;
-            bool success = p->second;
-
-            self->export_running_ = false;
-            self->btn_export_->activate();
-            self->btn_close_->label("Close");
-
-            if (success) {
-                self->progress_bar_->value(100.0f);
-                self->label_status_->copy_label("PDF Export complete!");
-            } else if (self->export_stop_requested_) {
-                self->label_status_->copy_label("PDF Export cancelled.");
-            } else {
-                self->label_status_->copy_label("PDF Export failed.");
-            }
-            self->progress_bar_->redraw();
-            self->label_status_->redraw();
-            Fl::flush();
-            delete p;
-        }, new std::pair<PDFExportDialog*, bool>(this, ok));
+        progress_.success.store(ok);
+        progress_.done.store(true);
     });
 }
 
@@ -602,7 +629,8 @@ void PDFExportDialog::show_dialog(const ImageStore& store,
     dlg->set_modal();
     dlg->show();
     while (dlg->shown()) {
-        Fl::wait(0.05);
+        dlg->poll_export_progress();
+        Fl::wait(0.03);
     }
     delete dlg;
 }

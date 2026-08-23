@@ -43,6 +43,7 @@ static std::string resolve_db_path(const std::string& explicit_db, const std::st
 }
 
 int main(int argc, char* argv[]) {
+    Fl::lock();
     try {
         cxxopts::Options options("picexplore", "PicExplore - Image Explorer, Batch Scanner & PDF Generator");
 
