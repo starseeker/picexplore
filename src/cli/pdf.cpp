@@ -812,9 +812,10 @@ bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std:
     // Convert ImageInfo vector into lightweight ImageStore
     ImageStore store;
     for (size_t i = 0; i < images.size(); ++i) {
-        store.add_image(images[i].path, images[i].aspect_ratio,
-                        images[i].orig_width, images[i].orig_height,
-                        images[i].file_size, images[i].file_timestamp);
+        size_t idx = store.add_image(images[i].path, images[i].aspect_ratio,
+                                     images[i].orig_width, images[i].orig_height,
+                                     images[i].file_size, images[i].file_timestamp);
+        store.get(idx).content_hash = images[i].hash;
     }
 
     timer.start("PDF Export");
@@ -867,23 +868,13 @@ int run_headless_pdf(const std::string& pdf_path, const std::string& directory,
 
     timer.start("Database Query");
     reporter.update_status("Loading images from database...");
-    std::vector<ImageInfo> images = db.get_all_images();
-    timer.stop("Database Query");
-
+    std::vector<ImageInfo> images;
     if (!directory.empty()) {
-        std::vector<ImageInfo> filtered_images;
-        std::string prefix = fs::path(directory).lexically_normal().string();
-        if (!prefix.empty() && prefix.back() != '/' && prefix.back() != '\\') {
-            prefix += '/';
-        }
-        for (const auto& img : images) {
-            std::string norm_path = fs::path(img.path).lexically_normal().string();
-            if (norm_path.find(prefix) == 0 || norm_path == fs::path(directory).lexically_normal().string()) {
-                filtered_images.push_back(img);
-            }
-        }
-        images = std::move(filtered_images);
+        images = db.get_images_for_directory(directory);
+    } else {
+        images = db.get_all_images();
     }
+    timer.stop("Database Query");
 
     if (images.empty()) {
         std::cerr << "Error: No images found in database" << std::endl;
