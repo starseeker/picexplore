@@ -288,7 +288,7 @@ bool get_image_info(const std::string& filepath, int* width, int* height) {
     return (stbi_info(filepath.c_str(), width, height, &comp) && *width > 0 && *height > 0);
 }
 
-bool load_webp_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h) {
+bool load_webp_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h, int* orig_w, int* orig_h) {
     std::ifstream file(filepath, std::ios::binary | std::ios::ate);
     if (!file) return false;
     size_t fsize = file.tellg();
@@ -305,18 +305,20 @@ bool load_webp_file(const std::string& filepath, int target_w, int target_h, std
         return false;
     }
 
-    int orig_w = config.input.width;
-    int orig_h = config.input.height;
-    if (orig_w <= 0 || orig_h <= 0) return false;
+    int orig_w_val = config.input.width;
+    int orig_h_val = config.input.height;
+    if (orig_w) *orig_w = orig_w_val;
+    if (orig_h) *orig_h = orig_h_val;
+    if (orig_w_val <= 0 || orig_h_val <= 0) return false;
 
     int tw = target_w;
     int th = target_h;
     if (tw <= 0 || th <= 0) {
-        tw = orig_w;
-        th = orig_h;
+        tw = orig_w_val;
+        th = orig_h_val;
     } else {
-        double ar = static_cast<double>(orig_w) / orig_h;
-        if (orig_w > orig_h) {
+        double ar = static_cast<double>(orig_w_val) / orig_h_val;
+        if (orig_w_val > orig_h_val) {
             th = std::max(1, static_cast<int>(tw / ar));
         } else {
             tw = std::max(1, static_cast<int>(th * ar));
@@ -343,7 +345,7 @@ bool load_webp_file(const std::string& filepath, int target_w, int target_h, std
     return false;
 }
 
-bool load_tiff_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h) {
+bool load_tiff_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h, int* orig_w, int* orig_h) {
     TIFFSetErrorHandler(nullptr);
     TIFFSetWarningHandler(nullptr);
 
@@ -353,6 +355,9 @@ bool load_tiff_file(const std::string& filepath, int target_w, int target_h, std
     uint32_t w = 0, h = 0;
     TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &w);
     TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
+
+    if (orig_w) *orig_w = static_cast<int>(w);
+    if (orig_h) *orig_h = static_cast<int>(h);
 
     if (w == 0 || h == 0) {
         TIFFClose(tif);
@@ -516,7 +521,7 @@ bool load_tiff_file(const std::string& filepath, int target_w, int target_h, std
     return true;
 }
 
-bool load_png_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h) {
+bool load_png_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h, int* orig_w, int* orig_h) {
     FILE *fp = fopen(filepath.c_str(), "rb");
     if (!fp) return false;
     
@@ -544,6 +549,8 @@ bool load_png_file(const std::string& filepath, int target_w, int target_h, std:
 
     int width = png_get_image_width(png, info);
     int height = png_get_image_height(png, info);
+    if (orig_w) *orig_w = width;
+    if (orig_h) *orig_h = height;
     png_byte color_type = png_get_color_type(png, info);
     png_byte bit_depth  = png_get_bit_depth(png, info);
 
