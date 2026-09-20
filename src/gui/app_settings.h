@@ -14,6 +14,10 @@ struct AppSettings {
     bool deduplicate_flat_views = true;
     int sift_thumbnail_size = 512;
     std::string last_directory;
+    std::string default_layout = "hierarchical-treemap";
+    std::string default_treemap_metric = "file-size";
+    std::string default_treemap_style = "thumbnails";
+    double default_row_height = 150.0;
 
     static std::string get_cache_dir();
     static std::string get_settings_path();

@@ -76,6 +76,42 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     hierarchy_thumbnail_threshold_ = settings_.hierarchy_thumbnail_threshold;
     if (hierarchy_thumbnail_threshold_ <= 0.0) hierarchy_thumbnail_threshold_ = 8.0;
 
+    std::string l_lower = settings_.default_layout;
+    for (char& c : l_lower) c = std::tolower(c);
+    if (l_lower == "justified" || l_lower == "grid") {
+        active_layout_ = LayoutEngine::LayoutType::JUSTIFIED;
+    } else if (l_lower == "treemap" || l_lower == "flat-treemap" || l_lower == "flat_treemap" || l_lower == "flat") {
+        active_layout_ = LayoutEngine::LayoutType::TREEMAP;
+    } else {
+        active_layout_ = LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP;
+    }
+
+    std::string m_lower = settings_.default_treemap_metric;
+    for (char& c : m_lower) c = std::tolower(c);
+    if (m_lower == "pixel-area" || m_lower == "pixel_area" || m_lower == "area" || m_lower == "pixels") {
+        treemap_metric_ = LayoutEngine::TreemapMetric::PIXEL_AREA;
+    } else if (m_lower == "duplicate-count" || m_lower == "duplicate_count" || m_lower == "duplicates") {
+        treemap_metric_ = LayoutEngine::TreemapMetric::DUPLICATE_COUNT;
+    } else if (m_lower == "equal-size" || m_lower == "equal_size" || m_lower == "equal") {
+        treemap_metric_ = LayoutEngine::TreemapMetric::EQUAL_SIZE;
+    } else {
+        treemap_metric_ = LayoutEngine::TreemapMetric::FILE_SIZE;
+    }
+
+    std::string s_lower = settings_.default_treemap_style;
+    for (char& c : s_lower) c = std::tolower(c);
+    if (s_lower == "cushion" || s_lower == "cushion-treemap" || s_lower == "cushion_treemap") {
+        treemap_style_ = VirtualViewport::TreemapRenderStyle::CUSHION_TREEMAP;
+    } else if (s_lower == "file-type-colors" || s_lower == "file_type_colors" || s_lower == "colors") {
+        treemap_style_ = VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS;
+    } else {
+        treemap_style_ = VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS;
+    }
+
+    if (settings_.default_row_height >= 50.0 && settings_.default_row_height <= 800.0) {
+        target_height_ = settings_.default_row_height;
+    }
+
     // Create ~/.cache/picexplore for tiles
     cache_dir_ = AppSettings::get_cache_dir();
     tile_manager_ = new TileManager(update_queue_);
@@ -94,6 +130,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
 
     viewport_  = new VirtualViewport(0, MENU_H, w, vp_h, store_);
     viewport_->set_hierarchy_thumbnail_threshold(hierarchy_thumbnail_threshold_);
+    viewport_->set_treemap_render_style(treemap_style_);
     scrollbar_ = new Fl_Scrollbar(w - SCROLL_W, MENU_H, SCROLL_W, vp_h);
     scrollbar_->type(FL_VERTICAL);
     scrollbar_->box(FL_FLAT_BOX);
@@ -330,6 +367,7 @@ void MainWindow::start() {
     watcher_ = new InotifyWatcher();
     watcher_->start(directory_, update_queue_);
 
+    resize(x(), y(), w(), h());
     update_statusbar();
     rebuild_menu();
 
@@ -1013,6 +1051,7 @@ void MainWindow::rebuild_menu() {
 
     if (is_single) {
         menubar_->add("View/Exit Viewer (Esc)", FL_Escape, menu_cb, (void*)30);
+        menubar_->add("View/Save View Config",  0,         menu_cb, (void*)70, 0);
         menubar_->add("View/Information Panel", 0, menu_cb, (void*)10, FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0));
         menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO | (font_sz == 11 ? FL_MENU_VALUE : 0));
         menubar_->add("View/Info Panel Font Size/Medium (14pt)",  0, menu_cb, (void*)12, FL_MENU_RADIO | (font_sz == 14 ? FL_MENU_VALUE : 0));
@@ -1040,6 +1079,7 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Layout/Justified Grid",       FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO);
         menubar_->add("View/Layout/Flat Treemap",         FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO | (is_flat_treemap ? FL_MENU_VALUE : 0));
         menubar_->add("View/Layout/Hierarchical Treemap", FL_CTRL | '3', menu_cb, (void*)27, FL_MENU_RADIO | (is_hier_treemap ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Save View Config",            0,             menu_cb, (void*)70, 0);
 
         int val_at = (treemap_style_ == VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS) ? FL_MENU_VALUE : 0;
         int val_ct = (treemap_style_ == VirtualViewport::TreemapRenderStyle::CUSHION_TREEMAP) ? FL_MENU_VALUE : 0;
@@ -1110,6 +1150,7 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Layout/Justified Grid",       FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO | FL_MENU_VALUE);
         menubar_->add("View/Layout/Flat Treemap",         FL_CTRL | '2', menu_cb, (void*)21, FL_MENU_RADIO);
         menubar_->add("View/Layout/Hierarchical Treemap", FL_CTRL | '3', menu_cb, (void*)27, FL_MENU_RADIO);
+        menubar_->add("View/Save View Config",            0,             menu_cb, (void*)70, 0);
 
         menubar_->add("View/Zoom In (Ctrl+Wheel Up)",    FL_CTRL | '=', menu_cb, (void*)7);
         menubar_->add("View/Zoom Out (Ctrl+Wheel Down)", FL_CTRL | '-', menu_cb, (void*)8);
@@ -1928,6 +1969,9 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 60:
             win->open_pdf_export_dialog();
             return;
+        case 70:
+            win->save_view_config();
+            return;
         case 51:
             win->settings_.save_window_size = !win->settings_.save_window_size;
             win->settings_.save();
@@ -2216,6 +2260,57 @@ void MainWindow::start_garbage_collection() {
 
 void MainWindow::open_pdf_export_dialog() {
     PDFExportDialog::show_dialog(store_, db_path_, active_layout_, treemap_metric_, directory_, directory_filter_);
+}
+
+void MainWindow::save_view_config() {
+    if (active_layout_ == LayoutEngine::LayoutType::JUSTIFIED) {
+        settings_.default_layout = "justified";
+    } else if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
+        settings_.default_layout = "treemap";
+    } else {
+        settings_.default_layout = "hierarchical-treemap";
+    }
+
+    if (treemap_metric_ == LayoutEngine::TreemapMetric::PIXEL_AREA) {
+        settings_.default_treemap_metric = "pixel-area";
+    } else if (treemap_metric_ == LayoutEngine::TreemapMetric::DUPLICATE_COUNT) {
+        settings_.default_treemap_metric = "duplicate-count";
+    } else if (treemap_metric_ == LayoutEngine::TreemapMetric::EQUAL_SIZE) {
+        settings_.default_treemap_metric = "equal-size";
+    } else {
+        settings_.default_treemap_metric = "file-size";
+    }
+
+    if (treemap_style_ == VirtualViewport::TreemapRenderStyle::CUSHION_TREEMAP) {
+        settings_.default_treemap_style = "cushion";
+    } else if (treemap_style_ == VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS) {
+        settings_.default_treemap_style = "file-type-colors";
+    } else {
+        settings_.default_treemap_style = "thumbnails";
+    }
+
+    settings_.default_row_height = target_height_;
+
+    // Save default view size as well, even if save_window_size is false
+    settings_.window_width = w();
+    settings_.window_height = h();
+    if (x() >= 0 && y() >= 0) {
+        settings_.window_x = x();
+        settings_.window_y = y();
+    }
+
+    settings_.save();
+
+    std::string msg = "  View configuration saved (" + settings_.default_layout + ", " +
+                      std::to_string(settings_.window_width) + "x" + std::to_string(settings_.window_height) + ")";
+    statusbar_->copy_label(msg.c_str());
+    statusbar_->redraw();
+
+    if (statusbar_hint_ && viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
+        statusbar_hint_->copy_label("View config saved  ");
+        statusbar_hint_->show();
+        statusbar_hint_->redraw();
+    }
 }
 
 

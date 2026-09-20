@@ -5,6 +5,17 @@
 namespace fs = std::filesystem;
 
 std::string AppSettings::get_cache_dir() {
+    const char* pic_cache = getenv("PICEXPLORE_CACHE_DIR");
+    if (pic_cache && pic_cache[0] != '\0') {
+        try { fs::create_directories(pic_cache); } catch (...) {}
+        return pic_cache;
+    }
+    const char* xdg = getenv("XDG_CACHE_HOME");
+    if (xdg && xdg[0] != '\0') {
+        fs::path cache_dir = fs::path(xdg) / "picexplore";
+        try { fs::create_directories(cache_dir); } catch (...) {}
+        return cache_dir.string();
+    }
     const char* home = getenv("HOME");
     fs::path cache_dir = home ? (fs::path(home) / ".cache" / "picexplore") : fs::path("/tmp/picexplore");
     try {
@@ -60,6 +71,14 @@ void AppSettings::load() {
             try { int s = std::stoi(val); if (s == 128 || s == 256 || s == 512 || s == 1024) sift_thumbnail_size = s; } catch (...) {}
         } else if (key == "last_directory") {
             last_directory = val;
+        } else if (key == "default_layout") {
+            default_layout = val;
+        } else if (key == "default_treemap_metric") {
+            default_treemap_metric = val;
+        } else if (key == "default_treemap_style") {
+            default_treemap_style = val;
+        } else if (key == "default_row_height") {
+            try { double rh = std::stod(val); if (rh >= 50.0 && rh <= 800.0) default_row_height = rh; } catch (...) {}
         }
     }
 }
@@ -78,6 +97,10 @@ void AppSettings::save() const {
     out << "  \"hierarchy_thumbnail_threshold\": " << hierarchy_thumbnail_threshold << ",\n";
     out << "  \"deduplicate_flat_views\": " << (deduplicate_flat_views ? "true" : "false") << ",\n";
     out << "  \"sift_thumbnail_size\": " << sift_thumbnail_size << ",\n";
-    out << "  \"last_directory\": \"" << last_directory << "\"\n";
+    out << "  \"last_directory\": \"" << last_directory << "\",\n";
+    out << "  \"default_layout\": \"" << default_layout << "\",\n";
+    out << "  \"default_treemap_metric\": \"" << default_treemap_metric << "\",\n";
+    out << "  \"default_treemap_style\": \"" << default_treemap_style << "\",\n";
+    out << "  \"default_row_height\": " << default_row_height << "\n";
     out << "}\n";
 }

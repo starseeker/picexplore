@@ -221,8 +221,8 @@ int main(int argc, char* argv[]) {
         Fl::foreground(220, 220, 220);
         Fl::background2(28, 28, 28);
 
-        int win_w = (settings.save_window_size && settings.window_width >= 300) ? settings.window_width : 1024;
-        int win_h = (settings.save_window_size && settings.window_height >= 200) ? settings.window_height : 768;
+        int win_w = (settings.window_width >= 300) ? settings.window_width : 1024;
+        int win_h = (settings.window_height >= 200) ? settings.window_height : 768;
 
         MainWindow win(win_w, win_h, "PicExplore", directory, db_path);
         if (settings.save_window_size && settings.window_x >= 0 && settings.window_y >= 0) {

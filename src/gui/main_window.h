@@ -102,6 +102,7 @@ private:
     void update_statusbar();
     void rebuild_menu();
     void recompute_layout(bool reprioritize = true);
+    void save_view_config();
 
     std::thread gc_thread_;
     std::atomic<bool> gc_running_{false};
