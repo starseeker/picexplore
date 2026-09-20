@@ -18,6 +18,10 @@ enum class ThumbQuality {
     SQUARE_128 = 12800  // 128x128 square crop thumbnail
 };
 
+inline bool is_square_quality(ThumbQuality q) {
+    return q == ThumbQuality::SQUARE_64 || q == ThumbQuality::SQUARE_128;
+}
+
 struct UpdateEvent {
     enum class Type {
         IMAGE_DISCOVERED,

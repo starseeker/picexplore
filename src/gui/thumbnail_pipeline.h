@@ -32,8 +32,8 @@ public:
     void request_thumbnail(size_t image_index, const std::string& filepath, const std::string& hash, ThumbQuality quality, bool urgent, uint64_t generation = 0, int layout_w = 0, int layout_h = 0);
     
     bool decode_jpeg(const uint8_t* data, size_t size, std::vector<uint8_t>& rgb_data, int& width, int& height);
-    bool load_jpeg_scaled_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_data, int& out_w, int& out_h);
-    bool generate_png_streaming(size_t image_index, const std::string& filepath, int max_w, int max_h, std::vector<uint8_t>& out_rgb, int& out_w, int& out_h);
+    bool load_jpeg_scaled_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_data, int& out_w, int& out_h, int* orig_w = nullptr, int* orig_h = nullptr);
+    bool generate_png_streaming(size_t image_index, const std::string& filepath, int max_w, int max_h, std::vector<uint8_t>& out_rgb, int& out_w, int& out_h, int* orig_w = nullptr, int* orig_h = nullptr);
 
     void set_generation(uint64_t gen);
     uint64_t get_generation() const;

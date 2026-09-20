@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <tiffio.h>
 #include "database.h"
+#include "utils.h"
+#include "gui/update_events.h"
 
 namespace fs = std::filesystem;
 
@@ -241,6 +243,20 @@ int main() {
         assert(!sz_data.empty());
         tiff_db.abort_transaction();
     }
+
+    // Test load_tiff_file original dimension preservation
+    std::vector<uint8_t> tiff_scaled_rgb;
+    int tiff_out_w = 0, tiff_out_h = 0, tiff_orig_w = 0, tiff_orig_h = 0;
+    assert(load_tiff_file(tiff_file, 40, 30, tiff_scaled_rgb, tiff_out_w, tiff_out_h, &tiff_orig_w, &tiff_orig_h));
+    assert(tiff_out_w == 40 && tiff_out_h == 30);
+    assert(tiff_orig_w == 120 && tiff_orig_h == 90);
+
+    // Test is_square_quality
+    assert(is_square_quality(ThumbQuality::SQUARE_64));
+    assert(is_square_quality(ThumbQuality::SQUARE_128));
+    assert(!is_square_quality(ThumbQuality::SMALL));
+    assert(!is_square_quality(ThumbQuality::XLARGE));
+    assert(!is_square_quality(ThumbQuality::FULL));
 
     // 12. Test Concurrent Multi-Instance Open & Non-Blocking Read While Writer Is Active
     std::string conc_db_path = "/tmp/test_concurrent_instance.db";

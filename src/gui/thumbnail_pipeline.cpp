@@ -170,13 +170,15 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
                     req.image_index, req.filepath, hash, found_quality, std::vector<uint8_t>(rgb_decoded), dec_w, dec_h, req.generation
                 ));
 
-                if (req.target_quality == ThumbQuality::SQUARE_128 || req.target_quality == ThumbQuality::SQUARE_64) {
-                    return true;
-                }
-
-                // If cached thumbnail in LMDB already meets or exceeds target quality, we're done!
-                if (static_cast<int>(found_quality) >= static_cast<int>(req.target_quality)) {
-                    return true;
+                if (is_square_quality(req.target_quality)) {
+                    if (static_cast<int>(found_quality) >= static_cast<int>(req.target_quality)) {
+                        return true;
+                    }
+                } else {
+                    // Cached square thumbnails must not satisfy non-square layout requests
+                    if (!is_square_quality(found_quality) && static_cast<int>(found_quality) >= static_cast<int>(req.target_quality)) {
+                        return true;
+                    }
                 }
 
                 // Enqueue upgrade to background upgrade queue so other urgent fast-cache requests are never blocked
@@ -187,6 +189,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
             }
         }
         int w = 0, h = 0, channels = 0;
+        int orig_w = 0, orig_h = 0;
         unsigned char* img = nullptr;
         std::vector<uint8_t> rgb_decoded;
 
@@ -196,19 +199,19 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
         
         bool fast_decoded = false;
         if (ext == ".jpg" || ext == ".jpeg") {
-            if (load_jpeg_scaled_file(req.filepath, target_w, target_h, rgb_decoded, w, h)) {
+            if (load_jpeg_scaled_file(req.filepath, target_w, target_h, rgb_decoded, w, h, &orig_w, &orig_h)) {
                 fast_decoded = true;
             }
         } else if (ext == ".webp") {
-            if (load_webp_file(req.filepath, target_w, target_h, rgb_decoded, w, h)) {
+            if (load_webp_file(req.filepath, target_w, target_h, rgb_decoded, w, h, &orig_w, &orig_h)) {
                 fast_decoded = true;
             }
         } else if (ext == ".tif" || ext == ".tiff") {
-            if (load_tiff_file(req.filepath, target_w, target_h, rgb_decoded, w, h)) {
+            if (load_tiff_file(req.filepath, target_w, target_h, rgb_decoded, w, h, &orig_w, &orig_h)) {
                 fast_decoded = true;
             }
         } else if (ext == ".png") {
-            if (load_png_file(req.filepath, target_w, target_h, rgb_decoded, w, h)) {
+            if (load_png_file(req.filepath, target_w, target_h, rgb_decoded, w, h, &orig_w, &orig_h)) {
                 fast_decoded = true;
             }
         }
@@ -217,6 +220,8 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
             int info_w, info_h, info_c;
             bool is_massive_png = false;
             if (ext == ".png" && stbi_info(req.filepath.c_str(), &info_w, &info_h, &info_c)) {
+                orig_w = info_w;
+                orig_h = info_h;
                 if ((long long)info_w * info_h > 25000000LL) {
                     is_massive_png = true;
                 }
@@ -224,7 +229,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
 
             if (is_massive_png) {
                 // generate_png_streaming will emit progress as it decodes row by row
-                if (generate_png_streaming(req.image_index, req.filepath, target_w, target_h, rgb_decoded, w, h)) {
+                if (generate_png_streaming(req.image_index, req.filepath, target_w, target_h, rgb_decoded, w, h, &orig_w, &orig_h)) {
                     fast_decoded = true;
                 }
             } else {
@@ -232,9 +237,13 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
                     update_queue_.enqueue(UpdateEvent::make_thumb_generation_progress(req.image_index, req.filepath, 0));
                 }
                 img = stbi_load(req.filepath.c_str(), &w, &h, &channels, 3);
+                if (img) {
+                    orig_w = w;
+                    orig_h = h;
+                }
             }
             if (!img && !fast_decoded) {
-                if (ext == ".png" && generate_png_streaming(req.image_index, req.filepath, target_w, target_h, rgb_decoded, w, h)) {
+                if (ext == ".png" && generate_png_streaming(req.image_index, req.filepath, target_w, target_h, rgb_decoded, w, h, &orig_w, &orig_h)) {
                     fast_decoded = true;
                 } else {
                     update_queue_.enqueue(UpdateEvent::make_thumb_failed(req.image_index, req.filepath, req.target_quality));
@@ -256,10 +265,12 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
                      (unsigned long long)hval.high64, (unsigned long long)hval.low64);
             hash = hash_str;
         }
-        double ar = static_cast<double>(w) / h;
+        int full_w = (orig_w > 0) ? orig_w : w;
+        int full_h = (orig_h > 0) ? orig_h : h;
+        double ar = (full_h > 0) ? (static_cast<double>(full_w) / full_h) : 1.0;
         if (req.layout_w <= 0 || req.layout_h <= 0) {
             int tw = static_cast<int>(req.target_quality);
-            if (w > h) {
+            if (full_w > full_h) {
                 target_w = tw;
                 target_h = static_cast<int>(tw / ar);
             } else {
@@ -333,19 +344,25 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
                         }
                     }
 
-                    // Ensure metadata is stored in DB
+                    // Ensure metadata is stored in DB with true original image dimensions
                     ImageMetadata meta;
-                    if (!db_.get_image_metadata(hash, meta)) {
-                        uint64_t file_size = 0, file_timestamp = 0;
-                        try {
-                            file_size = std::filesystem::file_size(req.filepath);
-                            file_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
-                                std::filesystem::last_write_time(req.filepath).time_since_epoch()).count();
-                        } catch (...) {}
+                    bool meta_exists = db_.get_image_metadata(hash, meta);
+                    int true_w = (orig_w > 0) ? orig_w : w;
+                    int true_h = (orig_h > 0) ? orig_h : h;
+                    if (!meta_exists || (true_w > meta.orig_width || true_h > meta.orig_height)) {
+                        uint64_t file_size = meta_exists ? meta.file_size : 0;
+                        uint64_t file_timestamp = meta_exists ? meta.file_timestamp : 0;
+                        if (!meta_exists || file_size == 0) {
+                            try {
+                                file_size = std::filesystem::file_size(req.filepath);
+                                file_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+                                    std::filesystem::last_write_time(req.filepath).time_since_epoch()).count();
+                            } catch (...) {}
+                        }
                         meta.file_size = file_size;
                         meta.file_timestamp = file_timestamp;
-                        meta.orig_width = w;
-                        meta.orig_height = h;
+                        meta.orig_width = true_w;
+                        meta.orig_height = true_h;
                         db_.store_image_metadata(hash, meta);
                     }
 
@@ -444,7 +461,7 @@ bool ThumbnailPipeline::decode_jpeg(const uint8_t* jpeg_data, size_t jpeg_size, 
     return true;
 }
 
-bool ThumbnailPipeline::load_jpeg_scaled_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_data, int& out_w, int& out_h) {
+bool ThumbnailPipeline::load_jpeg_scaled_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_data, int& out_w, int& out_h, int* orig_w, int* orig_h) {
     FILE* infile = fopen(filepath.c_str(), "rb");
     if (!infile) return false;
 
@@ -473,6 +490,9 @@ bool ThumbnailPipeline::load_jpeg_scaled_file(const std::string& filepath, int t
     jpeg_create_decompress(&cinfo);
     jpeg_stdio_src(&cinfo, infile);
     jpeg_read_header(&cinfo, TRUE);
+
+    if (orig_w) *orig_w = cinfo.image_width;
+    if (orig_h) *orig_h = cinfo.image_height;
     
     // Calculate optimal scaling factor (1/1, 1/2, 1/4, 1/8)
     int scale = 1;
@@ -537,7 +557,7 @@ bool ThumbnailPipeline::load_jpeg_scaled_file(const std::string& filepath, int t
     return true;
 }
 
-bool ThumbnailPipeline::generate_png_streaming(size_t image_index, const std::string& filepath, int max_w, int max_h, std::vector<uint8_t>& out_rgb, int& out_w, int& out_h) {
+bool ThumbnailPipeline::generate_png_streaming(size_t image_index, const std::string& filepath, int max_w, int max_h, std::vector<uint8_t>& out_rgb, int& out_w, int& out_h, int* orig_w, int* orig_h) {
     FILE *fp = fopen(filepath.c_str(), "rb");
     if (!fp) return false;
     
@@ -566,6 +586,8 @@ bool ThumbnailPipeline::generate_png_streaming(size_t image_index, const std::st
 
     int width = png_get_image_width(png, info);
     int height = png_get_image_height(png, info);
+    if (orig_w) *orig_w = width;
+    if (orig_h) *orig_h = height;
     png_byte color_type = png_get_color_type(png, info);
     png_byte bit_depth  = png_get_bit_depth(png, info);
 
