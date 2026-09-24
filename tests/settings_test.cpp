@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cassert>
+#include <vector>
 #include <filesystem>
 #include "gui/app_settings.h"
 
@@ -22,6 +23,7 @@ int main() {
     s.default_treemap_metric = "pixel-area";
     s.default_treemap_style = "cushion";
     s.default_row_height = 180.0;
+    s.default_sort_order = "file-size-desc";
 
     s.save();
 
@@ -40,6 +42,30 @@ int main() {
     assert(loaded.default_treemap_metric == "pixel-area");
     assert(loaded.default_treemap_style == "cushion");
     assert(loaded.default_row_height == 180.0);
+    assert(loaded.default_sort_order == "file-size-desc");
+
+    // Test fresh default settings
+    AppSettings fresh;
+    assert(fresh.default_sort_order == "alphabetical-asc");
+
+    // Test different sort orders
+    std::vector<std::string> sort_orders = {
+        "alphabetical-asc", "alphabetical-desc",
+        "file-size-asc", "file-size-desc",
+        "date-asc", "date-desc",
+        "pixel-area-asc", "pixel-area-desc",
+        "duplicate-count-asc", "duplicate-count-desc"
+    };
+
+    for (const auto& so : sort_orders) {
+        AppSettings s2;
+        s2.default_sort_order = so;
+        s2.save();
+
+        AppSettings loaded2;
+        loaded2.load();
+        assert(loaded2.default_sort_order == so);
+    }
 
     std::cout << "[PASS] AppSettings save and load test passed!" << std::endl;
     std::filesystem::remove_all(test_cache);

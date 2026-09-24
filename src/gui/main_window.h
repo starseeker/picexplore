@@ -103,6 +103,8 @@ private:
     void rebuild_menu();
     void recompute_layout(bool reprioritize = true);
     void save_view_config();
+    std::string get_sort_order_string() const;
+    void apply_sort_order_string(const std::string& order_str);
 
     std::thread gc_thread_;
     std::atomic<bool> gc_running_{false};

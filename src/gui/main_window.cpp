@@ -112,6 +112,8 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
         target_height_ = settings_.default_row_height;
     }
 
+    apply_sort_order_string(settings_.default_sort_order);
+
     // Create ~/.cache/picexplore for tiles
     cache_dir_ = AppSettings::get_cache_dir();
     tile_manager_ = new TileManager(update_queue_);
@@ -1317,6 +1319,12 @@ void MainWindow::poll_events() {
             std::cout << "Scan complete." << std::endl;
             scan_complete_ = true;
             status_dirty = true;
+            if (store_.size() > 0 &&
+                current_sort_criteria_ != ImageStore::SortCriteria::SIMILARITY_FAST &&
+                current_sort_criteria_ != ImageStore::SortCriteria::SIMILARITY_ACCURATE) {
+                store_.sort_entries(current_sort_criteria_, sort_ascending_);
+                layout_dirty_ = true;
+            }
         } else if (ev.type == UpdateEvent::Type::GC_PROGRESS) {
             std::string msg = "  Garbage Collecting: Checked " + std::to_string(ev.gc.checked) +
                               " / " + std::to_string(ev.gc.total) +
@@ -2030,10 +2038,12 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         default: return;
     }
     
-    if ((choice >= 1 && choice <= 6) || choice == 17 || choice == 18) {
+    if ((choice >= 1 && choice <= 6) || choice == 17 || choice == 18 || choice == 36 || choice == 37) {
         win->current_sort_criteria_ = criteria;
         win->sort_ascending_ = ascending;
         win->store_.sort_entries(criteria, ascending);
+        win->settings_.default_sort_order = win->get_sort_order_string();
+        win->settings_.save();
         win->layout_dirty_ = true;
         win->viewport_->set_scroll_offset(0);
         win->recompute_layout(true);
@@ -2291,6 +2301,11 @@ void MainWindow::save_view_config() {
 
     settings_.default_row_height = target_height_;
 
+    if (current_sort_criteria_ != ImageStore::SortCriteria::SIMILARITY_FAST &&
+        current_sort_criteria_ != ImageStore::SortCriteria::SIMILARITY_ACCURATE) {
+        settings_.default_sort_order = get_sort_order_string();
+    }
+
     // Save default view size as well, even if save_window_size is false
     settings_.window_width = w();
     settings_.window_height = h();
@@ -2310,6 +2325,60 @@ void MainWindow::save_view_config() {
         statusbar_hint_->copy_label("View config saved  ");
         statusbar_hint_->show();
         statusbar_hint_->redraw();
+    }
+}
+
+std::string MainWindow::get_sort_order_string() const {
+    switch (current_sort_criteria_) {
+        case ImageStore::SortCriteria::ALPHABETICAL:
+            return sort_ascending_ ? "alphabetical-asc" : "alphabetical-desc";
+        case ImageStore::SortCriteria::FILE_SIZE:
+            return sort_ascending_ ? "file-size-asc" : "file-size-desc";
+        case ImageStore::SortCriteria::TIMESTAMP:
+            return sort_ascending_ ? "date-asc" : "date-desc";
+        case ImageStore::SortCriteria::PIXEL_AREA:
+            return sort_ascending_ ? "pixel-area-asc" : "pixel-area-desc";
+        case ImageStore::SortCriteria::DUPLICATE_COUNT:
+            return sort_ascending_ ? "duplicate-count-asc" : "duplicate-count-desc";
+        default:
+            return "alphabetical-asc";
+    }
+}
+
+void MainWindow::apply_sort_order_string(const std::string& order_str) {
+    std::string s = order_str;
+    for (char& c : s) c = std::tolower(c);
+
+    if (s == "alphabetical-desc" || s == "name-desc" || s == "za" || s == "z-a") {
+        current_sort_criteria_ = ImageStore::SortCriteria::ALPHABETICAL;
+        sort_ascending_ = false;
+    } else if (s == "file-size-asc" || s == "size-asc" || s == "smallest") {
+        current_sort_criteria_ = ImageStore::SortCriteria::FILE_SIZE;
+        sort_ascending_ = true;
+    } else if (s == "file-size-desc" || s == "file-size" || s == "size-desc" || s == "largest") {
+        current_sort_criteria_ = ImageStore::SortCriteria::FILE_SIZE;
+        sort_ascending_ = false;
+    } else if (s == "date-asc" || s == "timestamp-asc" || s == "oldest") {
+        current_sort_criteria_ = ImageStore::SortCriteria::TIMESTAMP;
+        sort_ascending_ = true;
+    } else if (s == "date-desc" || s == "timestamp-desc" || s == "date" || s == "timestamp" || s == "newest") {
+        current_sort_criteria_ = ImageStore::SortCriteria::TIMESTAMP;
+        sort_ascending_ = false;
+    } else if (s == "pixel-area-asc" || s == "area-asc") {
+        current_sort_criteria_ = ImageStore::SortCriteria::PIXEL_AREA;
+        sort_ascending_ = true;
+    } else if (s == "pixel-area-desc" || s == "pixel-area" || s == "area-desc") {
+        current_sort_criteria_ = ImageStore::SortCriteria::PIXEL_AREA;
+        sort_ascending_ = false;
+    } else if (s == "duplicate-count-asc" || s == "duplicates-asc") {
+        current_sort_criteria_ = ImageStore::SortCriteria::DUPLICATE_COUNT;
+        sort_ascending_ = true;
+    } else if (s == "duplicate-count-desc" || s == "duplicate-count" || s == "duplicates-desc" || s == "duplicates") {
+        current_sort_criteria_ = ImageStore::SortCriteria::DUPLICATE_COUNT;
+        sort_ascending_ = false;
+    } else {
+        current_sort_criteria_ = ImageStore::SortCriteria::ALPHABETICAL;
+        sort_ascending_ = true;
     }
 }
 
