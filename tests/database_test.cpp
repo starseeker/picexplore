@@ -408,6 +408,67 @@ int main() {
     fs::remove_all(gc_test_dir);
     fs::remove_all(gc_tile_dir);
 
-    std::cout << "All database duplicate, metadata, unified cache, TIFF, concurrent, directory filter, and garbage collection tests passed successfully!" << std::endl;
+    // 14. Test Canonical File Content Hashing and Duplicate Avoidance
+    std::string hash_test_dir = "/tmp/test_file_hash_dir";
+    fs::create_directories(hash_test_dir);
+
+    std::vector<uint8_t> rgb_a(64 * 64 * 3, 50);
+    std::vector<uint8_t> rgb_b(64 * 64 * 3, 200);
+    std::vector<uint8_t> jpg_a = encode_jpeg(rgb_a.data(), 64, 64, 90);
+    std::vector<uint8_t> jpg_b = encode_jpeg(rgb_b.data(), 64, 64, 90);
+
+    std::string file_a = hash_test_dir + "/img_a.jpg";
+    std::string file_a_dup = hash_test_dir + "/img_a_dup.jpg";
+    std::string file_b = hash_test_dir + "/img_b.jpg";
+
+    {
+        std::ofstream f(file_a, std::ios::binary);
+        f.write(reinterpret_cast<const char*>(jpg_a.data()), jpg_a.size());
+    }
+    {
+        std::ofstream f(file_a_dup, std::ios::binary);
+        f.write(reinterpret_cast<const char*>(jpg_a.data()), jpg_a.size());
+    }
+    {
+        std::ofstream f(file_b, std::ios::binary);
+        f.write(reinterpret_cast<const char*>(jpg_b.data()), jpg_b.size());
+    }
+
+    std::string hash_a, hash_a_dup, hash_b;
+    assert(compute_file_hash(file_a, hash_a));
+    assert(compute_file_hash(file_a_dup, hash_a_dup));
+    assert(compute_file_hash(file_b, hash_b));
+
+    assert(!hash_a.empty() && hash_a.size() == 32);
+    assert(hash_a == hash_a_dup);
+    assert(hash_a != hash_b);
+
+    std::string file_hash_db_path = "/tmp/test_file_hash.db";
+    if (fs::exists(file_hash_db_path)) fs::remove(file_hash_db_path);
+
+    DatabaseManager hash_db;
+    assert(hash_db.open(file_hash_db_path));
+    Timer hash_timer;
+    StatusReporter hash_reporter(10);
+    int hash_scanned = hash_db.scan_directory_parallel(hash_test_dir, hash_timer, hash_reporter, 2);
+    assert(hash_scanned == 3);
+
+    auto all_hash_imgs = hash_db.get_all_images();
+    // 3 image files on disk
+    assert(all_hash_imgs.size() == 3);
+    assert(all_hash_imgs[0].hash == hash_a);
+    assert(all_hash_imgs[1].hash == hash_a);
+    assert(all_hash_imgs[2].hash == hash_b);
+
+    auto dups_a = hash_db.get_paths_for_hash(hash_a);
+    assert(dups_a.size() == 2);
+    auto dups_b = hash_db.get_paths_for_hash(hash_b);
+    assert(dups_b.size() == 1);
+
+    hash_db.close();
+    fs::remove(file_hash_db_path);
+    fs::remove_all(hash_test_dir);
+
+    std::cout << "All database duplicate, metadata, unified cache, TIFF, concurrent, directory filter, garbage collection, and canonical file hashing tests passed successfully!" << std::endl;
     return 0;
 }

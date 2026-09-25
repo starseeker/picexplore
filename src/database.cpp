@@ -608,6 +608,28 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	Timer& timer, bool& should_skip) {
     should_skip = false;
 
+    std::string hash_str;
+    if (!compute_file_hash(filepath, hash_str)) {
+        fprintf(stderr, "Error: Failed to compute hash for '%s'\n", filepath.c_str());
+        should_skip = true;
+        return false;
+    }
+
+    // Check if this hash already exists (duplicate detection) using non-blocking read
+    bool has_existing = false;
+    std::string dummy_val;
+    if (get_key_value_concurrent(hash_str + ":paths", dummy_val) ||
+        get_key_value_concurrent(hash_str + ":path", dummy_val)) {
+        has_existing = true;
+    }
+
+    if (has_existing) {
+        write_tasks.emplace_back(WriteTask::ADD_PATH_FOR_HASH, hash_str, filepath);
+        write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, hash_str);
+        should_skip = true;
+        return true; // Not an error, just a duplicate
+    }
+
     auto ext = fs::path(filepath).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
@@ -660,33 +682,9 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
         needs_free_malloc = true;
     }
 
-    // Compute content hash using fast SIMD-vectorized 128-bit hash
-    size_t data_size = width * height * channels;
-    XXH128_hash_t hash = XXH3_128bits(image_data, data_size);
-    char hash_str[33];
-    snprintf(hash_str, sizeof(hash_str), "%016llx%016llx",
-             (unsigned long long)hash.high64, (unsigned long long)hash.low64);
-
-    // Check if this hash already exists (duplicate detection) using non-blocking read
-    bool has_existing = false;
-    std::string dummy_val;
-    if (get_key_value_concurrent(std::string(hash_str) + ":paths", dummy_val) ||
-        get_key_value_concurrent(std::string(hash_str) + ":path", dummy_val)) {
-        has_existing = true;
-    }
-
-    if (has_existing) {
-        if (needs_free_stbi && image_data) stbi_image_free(image_data);
-        else if (needs_free_malloc && image_data) free(image_data);
-        write_tasks.emplace_back(WriteTask::ADD_PATH_FOR_HASH, std::string(hash_str), filepath);
-        write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, std::string(hash_str));
-        should_skip = true;
-        return true; // Not an error, just a duplicate
-    }
-
     // Store file path as write task
-    write_tasks.emplace_back(WriteTask::ADD_PATH_FOR_HASH, std::string(hash_str), filepath);
-    write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, std::string(hash_str));
+    write_tasks.emplace_back(WriteTask::ADD_PATH_FOR_HASH, hash_str, filepath);
+    write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, hash_str);
 
     // Store metadata write task (file size, timestamp, orig dimensions)
     uint64_t f_size = 0, f_time = 0;

@@ -148,6 +148,10 @@ void ScanCoordinator::scan_worker() {
         if (file_queue_.try_dequeue(path)) {
             int w = 0, h = 0;
             if (get_image_info(path, &w, &h) && w > 0 && h > 0) {
+                std::string hash;
+                if (!compute_file_hash(path, hash)) {
+                    hash = "";
+                }
                 double ar = static_cast<double>(w) / h;
                 uintmax_t fsize = 0, ftime = 0;
                 try {
@@ -156,7 +160,7 @@ void ScanCoordinator::scan_worker() {
                                 fs::last_write_time(path).time_since_epoch()).count();
                 } catch (...) {}
                 UpdateEvent ev = UpdateEvent::make_image_discovered(
-                    path, "", w, h, ar, fsize, ftime, ThumbQuality::NONE
+                    path, hash, w, h, ar, fsize, ftime, ThumbQuality::NONE
                 );
                 update_queue_.enqueue(std::move(ev));
                 

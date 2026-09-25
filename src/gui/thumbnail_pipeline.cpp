@@ -104,6 +104,9 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
         if (hash.empty() && db_.is_open()) {
             db_.get_hash_for_path_concurrent(req.filepath, hash);
         }
+        if (hash.empty()) {
+            compute_file_hash(req.filepath, hash);
+        }
 
         std::vector<uint8_t> jpeg_data;
         bool target_found = false;
@@ -252,19 +255,6 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
             }
         }
 
-        if (hash.empty() && img) {
-            XXH128_hash_t hval = XXH3_128bits(img, w * h * 3);
-            char hash_str[33];
-            snprintf(hash_str, sizeof(hash_str), "%016llx%016llx",
-                     (unsigned long long)hval.high64, (unsigned long long)hval.low64);
-            hash = hash_str;
-        } else if (hash.empty() && fast_decoded) {
-            XXH128_hash_t hval = XXH3_128bits(rgb_decoded.data(), w * h * 3);
-            char hash_str[33];
-            snprintf(hash_str, sizeof(hash_str), "%016llx%016llx",
-                     (unsigned long long)hval.high64, (unsigned long long)hval.low64);
-            hash = hash_str;
-        }
         int full_w = (orig_w > 0) ? orig_w : w;
         int full_h = (orig_h > 0) ? orig_h : h;
         double ar = (full_h > 0) ? (static_cast<double>(full_w) / full_h) : 1.0;

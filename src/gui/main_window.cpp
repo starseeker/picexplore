@@ -254,10 +254,15 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
             } else {
                 current_selected_filepath_ = path;
                 auto& entry = store_.get(idx);
-                if (entry.content_hash.empty() && db_ && db_->is_open()) {
-                    std::string h;
-                    if (db_->get_hash_for_path(path, h)) {
-                        entry.content_hash = h;
+                if (entry.content_hash.empty()) {
+                    if (db_ && db_->is_open()) {
+                        std::string h;
+                        if (db_->get_hash_for_path(path, h)) {
+                            entry.content_hash = h;
+                        }
+                    }
+                    if (entry.content_hash.empty()) {
+                        compute_file_hash(path, entry.content_hash);
                     }
                 }
                 if (info_panel_visible_) {
@@ -399,18 +404,7 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     int screen_dim = std::max(w(), h());
     int max_overview_size = entry.original_width > 0 ? std::min((int)entry.original_width, 8192) : 8192;
     if (entry.content_hash.empty()) {
-        std::string key = filepath;
-        try {
-            key = std::filesystem::canonical(filepath).string();
-            key += ":" + std::to_string(std::filesystem::file_size(filepath));
-            key += ":" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
-                std::filesystem::last_write_time(filepath).time_since_epoch()).count());
-        } catch (...) {}
-        XXH128_hash_t h = XXH3_128bits(key.data(), key.size());
-        char buf[33];
-        snprintf(buf, sizeof(buf), "%016llx%016llx",
-                 (unsigned long long)h.high64, (unsigned long long)h.low64);
-        entry.content_hash = buf;
+        compute_file_hash(filepath, entry.content_hash);
     }
 
     current_selected_filepath_ = filepath;
@@ -755,9 +749,14 @@ void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string
                 current_selected_filepath_ = hit_image;
                 if (info_panel_visible_) {
                     auto& entry = store_.get(idx);
-                    if (entry.content_hash.empty() && db_ && db_->is_open()) {
-                        std::string h;
-                        if (db_->get_hash_for_path(hit_image, h)) entry.content_hash = h;
+                    if (entry.content_hash.empty()) {
+                        if (db_ && db_->is_open()) {
+                            std::string h;
+                            if (db_->get_hash_for_path(hit_image, h)) entry.content_hash = h;
+                        }
+                        if (entry.content_hash.empty()) {
+                            compute_file_hash(hit_image, entry.content_hash);
+                        }
                     }
                     auto dups = reconcile_and_get_duplicates(entry.content_hash, hit_image);
                     info_panel_->display_info(entry, dups);
@@ -1436,10 +1435,15 @@ void MainWindow::recompute_layout(bool reprioritize) {
 
         for (const auto& [raw_idx, ar] : indexed) {
             auto& entry = store_.get(raw_idx);
-            if (entry.content_hash.empty() && db_ && db_->is_open()) {
-                std::string h;
-                if (db_->get_hash_for_path(entry.filepath, h) && !h.empty()) {
-                    entry.content_hash = h;
+            if (entry.content_hash.empty()) {
+                if (db_ && db_->is_open()) {
+                    std::string h;
+                    if (db_->get_hash_for_path(entry.filepath, h) && !h.empty()) {
+                        entry.content_hash = h;
+                    }
+                }
+                if (entry.content_hash.empty()) {
+                    compute_file_hash(entry.filepath, entry.content_hash);
                 }
             }
 

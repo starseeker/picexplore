@@ -4,26 +4,16 @@
 #include <cstring>
 #include <chrono>
 #include <xxhash.h>
+#include "utils.h"
 #include "../third_party/stb/stb_image_write.h"
 #include "../third_party/stb/stb_image.h"
 
 static std::string resolve_tile_hash(const std::string& hash, const std::string& filepath) {
     if (!hash.empty()) return hash;
 
-    // Fallback: Compute deterministic 128-bit hash from canonical path + file size + mtime
-    std::string key = filepath;
-    try {
-        key = std::filesystem::canonical(filepath).string();
-        key += ":" + std::to_string(std::filesystem::file_size(filepath));
-        key += ":" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
-            std::filesystem::last_write_time(filepath).time_since_epoch()).count());
-    } catch (...) {}
-
-    XXH128_hash_t h = XXH3_128bits(key.data(), key.size());
-    char buf[33];
-    snprintf(buf, sizeof(buf), "%016llx%016llx",
-             (unsigned long long)h.high64, (unsigned long long)h.low64);
-    return std::string(buf);
+    std::string h;
+    if (compute_file_hash(filepath, h)) return h;
+    return "";
 }
 
 TileManager::TileManager(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue)

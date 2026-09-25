@@ -30,6 +30,7 @@
 #include <png.h>
 #include <jpeglib.h>
 #include <setjmp.h>
+#include <xxhash.h>
 
 /* Utils is where we put the implementation
  * sections for stb */
@@ -603,6 +604,34 @@ bool load_png_file(const std::string& filepath, int target_w, int target_h, std:
         out_h = height;
     }
 
+    return true;
+}
+
+bool compute_file_hash(const std::string& filepath, std::string& hash_out) {
+    FILE* fp = fopen(filepath.c_str(), "rb");
+    if (!fp) return false;
+
+    XXH3_state_t* state = XXH3_createState();
+    if (!state) {
+        fclose(fp);
+        return false;
+    }
+    XXH3_128bits_reset(state);
+
+    char buf[65536];
+    size_t bytes_read = 0;
+    while ((bytes_read = fread(buf, 1, sizeof(buf), fp)) > 0) {
+        XXH3_128bits_update(state, buf, bytes_read);
+    }
+    fclose(fp);
+
+    XXH128_hash_t hash = XXH3_128bits_digest(state);
+    XXH3_freeState(state);
+
+    char hash_str[33];
+    snprintf(hash_str, sizeof(hash_str), "%016llx%016llx",
+             (unsigned long long)hash.high64, (unsigned long long)hash.low64);
+    hash_out = hash_str;
     return true;
 }
 
