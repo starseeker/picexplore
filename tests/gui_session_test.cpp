@@ -69,7 +69,8 @@ struct MainWindowTestAccess {
             std::ofstream file(path + "/album/" + std::to_string(i) + ".jpg", std::ios::binary);
             file.write(reinterpret_cast<const char*>(jpeg.data()), jpeg.size());
         }
-        MainWindow window(900, 620, "PicExplore navigation", path, base + "/controls.db");
+        const auto relative_path = std::filesystem::relative(path).string() + "/./";
+        MainWindow window(900, 620, "PicExplore navigation", relative_path, base + "/controls.db");
         window.show(); window.start();
         auto until = [&](auto condition) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -80,11 +81,16 @@ struct MainWindowTestAccess {
             } while (std::chrono::steady_clock::now() < deadline);
             assert(false && "GUI control update timed out");
         };
-        until([&] { return window.store_.size() == 3 && window.pending_db_build_.empty(); });
+        until([&] { return window.store_.size() == 3 && window.pending_db_build_.empty() && !window.layout_dirty_; });
+        assert(window.layout_result_.layout_type == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP);
+        assert(window.layout_result_.boxes.size() == 3);
+        assert(window.layout_result_.container_boxes.size() == 1);
+        assert(window.layout_result_.container_boxes.front().dir_path == path + "/album");
         assert(window.breadcrumbs_->visible() && window.layout_choice_->visible());
         window.layout_choice_->value(0); window.layout_choice_->do_callback();
         assert(window.layout_mode() == LayoutEngine::LayoutType::JUSTIFIED);
-        window.apply_directory_filter(path + "/album");
+        window.apply_directory_filter(relative_path + "album");
+        assert(window.layout_result_.boxes.size() == 3);
         assert(window.breadcrumb_paths_.size() == 2);
         assert(window.viewport_->gallery_key(FL_Home));
         const auto first = window.viewport_->get_selected_image();
@@ -116,6 +122,10 @@ struct MainWindowTestAccess {
         window.rescan_and_retry();
         until([&] { return !window.store_.contains(viewed); });
         assert(window.breadcrumbs_->visible());
+        window.switch_directory(relative_path);
+        until([&] { return window.store_.size() == 2 && !window.layout_dirty_; });
+        assert(window.layout_result_.boxes.size() == 2);
+        assert(window.layout_result_.container_boxes.size() == 1);
         window.hide();
     }
     static void run(const std::string& base) {

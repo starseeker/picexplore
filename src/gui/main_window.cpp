@@ -84,7 +84,7 @@ void FileTypeLegendWidget::draw() {
 }
 
 MainWindow::MainWindow(int w, int h, const char* title, const std::string& directory, const std::string& db_path)
-    : Fl_Double_Window(w, h, title), directory_(directory), db_path_(db_path), explicit_db_path_(db_path) {
+    : Fl_Double_Window(w, h, title), directory_(normalize_path(directory)), db_path_(db_path), explicit_db_path_(db_path) {
 
     settings_.load();
     hierarchy_thumbnail_threshold_ = settings_.hierarchy_thumbnail_threshold;
@@ -589,7 +589,7 @@ void MainWindow::apply_directory_filter(const std::string& dir) {
     if (dir.empty() || canon_dir == canon_root || !path_is_within(canon_dir, canon_root)) {
         directory_filter_.clear();
     } else {
-        directory_filter_ = dir;
+        directory_filter_ = normalize_path(dir);
     }
 
     current_generation_++;
@@ -659,7 +659,7 @@ void MainWindow::switch_directory(const std::string& new_dir) {
     stop_session();
 
     background_error_.clear();
-    directory_ = new_dir;
+    directory_ = normalize_path(new_dir);
     db_path_ = explicit_db_path_;
     directory_filter_.clear();
     pre_viewer_filter_.clear();
