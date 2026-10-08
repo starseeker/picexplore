@@ -23,7 +23,7 @@ public:
     bool are_tiles_ready(const std::string& hash) const;
     // Cache lookup only. A miss schedules a bounded, deduplicated disk read.
     std::shared_ptr<const Tile> get_tile(const std::string& hash, int tx, int ty, int zoom_level);
-    static const int TILE_SIZE = 512;
+    static constexpr int TILE_SIZE = 512;
 private:
     friend struct TileTestAccess;
     struct Request { JobToken token; std::string path, hash; uint64_t sequence = 0; };

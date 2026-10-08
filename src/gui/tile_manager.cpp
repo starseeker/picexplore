@@ -1,7 +1,6 @@
 #include "tile_manager.h"
 #include "utils.h"
 #include "stb_image.h"
-#include "stb_image_write.h"
 #include <png.h>
 #include <filesystem>
 #include <fstream>
@@ -166,7 +165,8 @@ bool TileManager::generate_tiles(const Request& req) {
     if (!info) { png_destroy_read_struct(&png, nullptr, nullptr); fclose(file); return false; }
     auto memory = ByteBudget::decode().acquire(132ULL * 1024 * 1024, &stop_);
     if (!memory) { png_destroy_read_struct(&png, &info, nullptr); fclose(file); return false; }
-    std::vector<uint8_t> stripe, tile;
+    std::vector<uint8_t> stripe, tile, encoded;
+    std::ofstream output;
     std::string tile_path;
     auto close = [&] { png_destroy_read_struct(&png, &info, nullptr); fclose(file); };
     if (setjmp(png_jmpbuf(png))) { close(); return false; }
@@ -196,7 +196,12 @@ bool TileManager::generate_tiles(const Request& req) {
             for (int y = 0; y < th; ++y) std::copy_n(stripe.data() + (size_t(y) * width + tx * TILE_SIZE) * 3,
                 tw * 3, tile.data() + size_t(y) * tw * 3);
             tile_path = (temporary / ("z0_" + std::to_string(tx) + "_" + std::to_string(ty) + ".jpg")).string();
-            if (!stbi_write_jpg(tile_path.c_str(), tw, th, 3, tile.data(), 85)) { close(); return false; }
+            encoded = encode_jpeg(tile.data(), tw, th, 85);
+            if (encoded.empty()) { close(); return false; }
+            output.open(tile_path, std::ios::binary | std::ios::trunc);
+            output.write(reinterpret_cast<const char*>(encoded.data()), encoded.size());
+            output.close();
+            if (!output) { close(); return false; }
         }
         publisher_.enqueue(UpdateEvent::make_tile_progress(req.token.image_id, req.path, ty + 1, rows), req.token);
     }
