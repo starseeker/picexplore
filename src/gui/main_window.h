@@ -80,6 +80,15 @@ private:
     Fl_Scrollbar*    scrollbar_;
     InfoPanel*       info_panel_;
     class Fl_Menu_Bar* menubar_;
+    class Fl_Menu_Button* breadcrumbs_;
+    class Fl_Choice* layout_choice_;
+    class Fl_Button* up_button_;
+    class Fl_Button* retry_button_;
+    Fl_Box* toolbar_background_;
+    std::vector<std::string> breadcrumb_paths_;
+    std::string breadcrumb_location_;
+    void update_navigation();
+    void rescan_and_retry();
     Fl_Box*          statusbar_;
     Fl_Box*          statusbar_hint_;
     FileTypeLegendWidget* legend_widget_;

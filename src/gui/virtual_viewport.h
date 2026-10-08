@@ -46,6 +46,8 @@ public:
     void set_tile_manager(class TileManager* tm, const std::string& hash, int orig_w, int orig_h);
 
     int scroll_to_image(size_t raw_idx);
+    bool gallery_key(int key);
+    std::function<void(int)> on_gallery_scroll;
 
     void set_selected_image(size_t raw_idx);
     size_t get_selected_image() const { return selected_idx_; }

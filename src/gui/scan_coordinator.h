@@ -16,6 +16,9 @@ public:
                     moodycamel::ConcurrentQueue<UpdateEvent>& update_queue,
                     const std::string& db_path = "", uint64_t session = 0);
     ~ScanCoordinator();
+    // Seed the UI's retained paths before restarting a session, including paths
+    // that disappeared while the old session was stopping.
+    void track_existing(const std::string& path) { if (!worker_.joinable()) known_.emplace(path, Record{}); }
     void start();
     void stop();
     void request_rescan();

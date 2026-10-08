@@ -5,6 +5,9 @@
 #include <FL/Fl.H>
 #include <FL/Fl_Output.H>
 #include <FL/Fl_Menu_Bar.H>
+#include <FL/Fl_Menu_Button.H>
+#include <FL/Fl_Choice.H>
+#include <FL/Fl_Button.H>
 #include <FL/Fl_Menu_Item.H>
 #include <FL/Fl_File_Chooser.H>
 #include <FL/fl_ask.H>
@@ -24,7 +27,8 @@ struct DirectorySession {
     std::unique_ptr<FileWatcher> watcher;
 };
 
-static constexpr int MENU_H   = 25;
+static constexpr int MENU_H = 25;
+static constexpr int TOP_H = 61;
 static constexpr int STATUS_H = 20;
 static constexpr int SCROLL_W = 20;
 static constexpr int INFO_W   = 250;
@@ -127,7 +131,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     // Create ~/.cache/picexplore for tiles
     cache_dir_ = AppSettings::get_cache_dir();
 
-    int vp_h = h - MENU_H - STATUS_H;
+    int vp_h = h - TOP_H - STATUS_H;
 
     color(fl_rgb_color(38, 38, 38));
     box(FL_FLAT_BOX);
@@ -138,10 +142,42 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     menubar_->textcolor(fl_rgb_color(220, 220, 220));
     menubar_->selection_color(fl_rgb_color(60, 160, 255));
 
-    viewport_  = new VirtualViewport(0, MENU_H, w, vp_h, store_);
+    toolbar_background_ = new Fl_Box(0, MENU_H, w, TOP_H - MENU_H);
+    toolbar_background_->box(FL_FLAT_BOX);
+    toolbar_background_->color(fl_rgb_color(45, 45, 45));
+    up_button_ = new Fl_Button(6, MENU_H + 5, 36, 26, "Up");
+    up_button_->tooltip("Parent folder (Alt+Up)");
+    up_button_->shortcut(FL_ALT | FL_Up);
+    up_button_->callback([](Fl_Widget*, void* data) {
+        auto* win = static_cast<MainWindow*>(data);
+        if (win->viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) win->exit_single_image_mode();
+        else win->navigate_to_parent_directory();
+    }, this);
+    breadcrumbs_ = new Fl_Menu_Button(48, MENU_H + 5, std::max(40, w - 392), 26);
+    breadcrumbs_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_CLIP);
+    layout_choice_ = new Fl_Choice(w - 282, MENU_H + 5, 168, 26, "Layout:");
+    layout_choice_->add("Gallery|Flat treemap|Folder treemap");
+    layout_choice_->callback([](Fl_Widget* widget, void* data) {
+        auto* win = static_cast<MainWindow*>(data);
+        if (win->viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) win->exit_single_image_mode();
+        win->set_layout_mode(static_cast<LayoutEngine::LayoutType>(static_cast<Fl_Choice*>(widget)->value()));
+        win->viewport_->take_focus();
+    }, this);
+    retry_button_ = new Fl_Button(w - 108, MENU_H + 5, 102, 26, "Rescan (F5)");
+    retry_button_->callback([](Fl_Widget*, void* data) { static_cast<MainWindow*>(data)->rescan_and_retry(); }, this);
+    for (Fl_Widget* widget : std::initializer_list<Fl_Widget*>{up_button_, breadcrumbs_, layout_choice_, retry_button_}) {
+        widget->color(fl_rgb_color(58, 58, 58));
+        widget->labelcolor(fl_rgb_color(230, 230, 230));
+        widget->labelsize(12);
+    }
+    breadcrumbs_->textcolor(FL_WHITE);
+    layout_choice_->textcolor(FL_WHITE);
+    layout_choice_->textsize(12);
+
+    viewport_  = new VirtualViewport(0, TOP_H, w, vp_h, store_);
     viewport_->set_hierarchy_thumbnail_threshold(hierarchy_thumbnail_threshold_);
     viewport_->set_treemap_render_style(treemap_style_);
-    scrollbar_ = new Fl_Scrollbar(w - SCROLL_W, MENU_H, SCROLL_W, vp_h);
+    scrollbar_ = new Fl_Scrollbar(w - SCROLL_W, TOP_H, SCROLL_W, vp_h);
     scrollbar_->type(FL_VERTICAL);
     scrollbar_->box(FL_FLAT_BOX);
     scrollbar_->color(fl_rgb_color(32, 32, 32));
@@ -150,12 +186,12 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     scrollbar_->callback(scroll_cb, this);
     scrollbar_->hide();
 
-    info_panel_ = new InfoPanel(w - info_panel_width_, MENU_H, info_panel_width_, vp_h);
+    info_panel_ = new InfoPanel(w - info_panel_width_, TOP_H, info_panel_width_, vp_h);
     info_panel_->hide();
     info_panel_->set_root_dir(directory_);
 
     // Status bar at the very bottom
-    statusbar_ = new Fl_Box(0, MENU_H + vp_h, w, STATUS_H, "");
+    statusbar_ = new Fl_Box(0, TOP_H + vp_h, w, STATUS_H, "");
     statusbar_->box(FL_FLAT_BOX);
     statusbar_->color(fl_rgb_color(28, 28, 28));
     statusbar_->labelcolor(fl_rgb_color(180, 180, 180));
@@ -163,7 +199,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     statusbar_->labelfont(FL_HELVETICA);
     statusbar_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
 
-    statusbar_hint_ = new Fl_Box(w - 220, MENU_H + vp_h, 220, STATUS_H, "");
+    statusbar_hint_ = new Fl_Box(w - 220, TOP_H + vp_h, 220, STATUS_H, "");
     statusbar_hint_->box(FL_FLAT_BOX);
     statusbar_hint_->color(fl_rgb_color(28, 28, 28));
     statusbar_hint_->labelcolor(fl_rgb_color(150, 190, 240));
@@ -172,13 +208,13 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     statusbar_hint_->align(FL_ALIGN_RIGHT | FL_ALIGN_INSIDE);
     statusbar_hint_->hide();
 
-    legend_widget_ = new FileTypeLegendWidget(w - 420, MENU_H + vp_h, 420, STATUS_H);
+    legend_widget_ = new FileTypeLegendWidget(w - 420, TOP_H + vp_h, 420, STATUS_H);
     legend_widget_->hide();
 
     // Wire info panel breadcrumb → directory filter
     // Only fires when info panel is already visible (panel must be shown to click it).
     info_panel_->on_dir_clicked = [this](const std::string& dir) {
-        if (!scrollbar_->visible()) {
+        if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
             exit_single_image_mode();
         }
         apply_directory_filter(dir);
@@ -213,7 +249,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
                     reset_directory_filter();
                 }
             }
-            if (!scrollbar_->visible()) {
+            if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
                 // Single image mode
                 enter_single_image_mode(idx, path);
             } else {
@@ -262,17 +298,6 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
             } else {
                 current_selected_filepath_ = path;
                 auto& entry = store_.get(idx);
-                if (entry.content_hash.empty()) {
-                    if (db_ && db_->is_open()) {
-                        std::string h;
-                        if (db_->get_hash_for_path(path, h)) {
-                            entry.content_hash = h;
-                        }
-                    }
-                    if (entry.content_hash.empty()) {
-                        compute_file_hash(path, entry.content_hash);
-                    }
-                }
                 if (info_panel_visible_) {
                     auto dups = reconcile_and_get_duplicates(entry.content_hash, path);
                     info_panel_->display_info(entry, dups);
@@ -282,6 +307,10 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
         }
     };
 
+    viewport_->on_gallery_scroll = [this](int offset) {
+        scrollbar_->value(offset);
+        reprioritize_thumbnails();
+    };
     viewport_->on_image_double_clicked = [this](const std::string& path) {
         size_t idx = store_.find_by_filepath(path);
         if (idx != (size_t)-1) {
@@ -391,6 +420,7 @@ void MainWindow::start() {
     watcher_->start(directory_, update_queue_, session_id_);
     session_->scanner = std::make_unique<ScanCoordinator>(directory_, update_queue_, db_path_, session_id_);
     scanner_ = session_->scanner.get();
+    for (auto id : store_.order()) scanner_->track_existing(store_.get(id).filepath);
     scanner_->start();
 
     resize(x(), y(), w(), h());
@@ -444,13 +474,13 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
         statusbar_->copy_label(label.c_str());
     }
     
-    int vp_h = h() - MENU_H - STATUS_H;
+    int vp_h = h() - TOP_H - STATUS_H;
     int info_w = std::clamp(info_panel_width_, 160, std::max(160, w() - 200));
     int vp_w = w();
     if (info_panel_visible_) vp_w -= info_w;
 
-    statusbar_->resize(0, MENU_H + vp_h, w() - 280, STATUS_H);
-    statusbar_hint_->resize(w() - 280, MENU_H + vp_h, 280, STATUS_H);
+    statusbar_->resize(0, TOP_H + vp_h, w() - 280, STATUS_H);
+    statusbar_hint_->resize(w() - 280, TOP_H + vp_h, 280, STATUS_H);
     statusbar_hint_->copy_label("Left/Right: Prev/Next  |  Esc: Exit  ");
     statusbar_hint_->show();
     statusbar_->redraw();
@@ -458,7 +488,7 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
 
     scrollbar_->hide();
     info_panel_->set_single_image_mode(true);
-    viewport_->resize(0, MENU_H, vp_w, vp_h); // Expand over scrollbar
+    viewport_->resize(0, TOP_H, vp_w, vp_h); // Expand over scrollbar
     rebuild_menu();
 }
 
@@ -504,10 +534,10 @@ void MainWindow::exit_single_image_mode() {
     directory_filter_ = pre_viewer_filter_;
     full_res_loader_->cancel();
     
-    int vp_h = h() - MENU_H - STATUS_H;
+    int vp_h = h() - TOP_H - STATUS_H;
     statusbar_hint_->copy_label("");
     statusbar_hint_->hide();
-    statusbar_->resize(0, MENU_H + vp_h, w(), STATUS_H);
+    statusbar_->resize(0, TOP_H + vp_h, w(), STATUS_H);
 
     int info_w = std::clamp(info_panel_width_, 160, std::max(160, w() - 200));
     int vp_w = w();
@@ -515,12 +545,12 @@ void MainWindow::exit_single_image_mode() {
 
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
         scrollbar_->hide();
-        viewport_->resize(0, MENU_H, vp_w, vp_h);
+        viewport_->resize(0, TOP_H, vp_w, vp_h);
     } else {
         scrollbar_->show();
         int content_w = std::max(vp_w - SCROLL_W, 10);
-        viewport_->resize(0, MENU_H, content_w, vp_h);
-        scrollbar_->resize(content_w, MENU_H, SCROLL_W, vp_h);
+        viewport_->resize(0, TOP_H, content_w, vp_h);
+        scrollbar_->resize(content_w, TOP_H, SCROLL_W, vp_h);
     }
     
     last_visible_.clear();
@@ -951,8 +981,11 @@ std::vector<std::string> MainWindow::reconcile_and_get_duplicates(const std::str
 }
 
 void MainWindow::update_statusbar() {
+    update_navigation();
     if (!background_error_.empty()) {
         statusbar_->copy_label(background_error_.c_str());
+        statusbar_->copy_tooltip(background_error_.c_str());
+        statusbar_->redraw();
         return;
     }
     if (gc_running_) return;
@@ -1059,7 +1092,8 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Info Panel Font Size/X-Large (24pt)", 0, menu_cb, (void*)14, FL_MENU_RADIO | (font_sz == 24 ? FL_MENU_VALUE : 0));
         menubar_->add("View/Info Panel Font Size/Custom...",      0, menu_cb, (void*)15, 0);
         menubar_->add("View/Reset Directory Filter", FL_CTRL | 'r', menu_cb, (void*)16, 0);
-        menubar_->redraw();
+        update_navigation();
+    menubar_->redraw();
         return;
     }
 
@@ -1070,10 +1104,10 @@ void MainWindow::rebuild_menu() {
         int val_dc = (treemap_metric_ == LayoutEngine::TreemapMetric::DUPLICATE_COUNT) ? FL_MENU_VALUE : 0;
         int val_eq = (treemap_metric_ == LayoutEngine::TreemapMetric::EQUAL_SIZE) ? FL_MENU_VALUE : 0;
 
-        menubar_->add("Sort/File Size",       0, menu_cb, (void*)22, FL_MENU_RADIO | val_fs);
-        menubar_->add("Sort/Pixel Area",      0, menu_cb, (void*)23, FL_MENU_RADIO | val_pa);
-        menubar_->add("Sort/Duplicate Count", 0, menu_cb, (void*)29, FL_MENU_RADIO | val_dc);
-        menubar_->add("Sort/Equal Size",      0, menu_cb, (void*)24, FL_MENU_RADIO | val_eq);
+        menubar_->add("Size tiles by/File Size",       0, menu_cb, (void*)22, FL_MENU_RADIO | val_fs);
+        menubar_->add("Size tiles by/Pixel Area",      0, menu_cb, (void*)23, FL_MENU_RADIO | val_pa);
+        menubar_->add("Size tiles by/Duplicate Count", 0, menu_cb, (void*)29, FL_MENU_RADIO | val_dc);
+        menubar_->add("Size tiles by/Equal Size",      0, menu_cb, (void*)24, FL_MENU_RADIO | val_eq);
 
         // View menu for Treemap mode
         menubar_->add("View/Layout/Justified Grid",       FL_CTRL | '1', menu_cb, (void*)20, FL_MENU_RADIO);
@@ -1168,6 +1202,7 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Reset Directory Filter", FL_CTRL | 'r', menu_cb, (void*)16, 0);
     }
 
+    update_navigation();
     menubar_->redraw();
 }
 
@@ -1821,7 +1856,7 @@ void MainWindow::draw() {
 
     if (info_panel_visible_ && info_panel_->visible()) {
         int split_x = info_panel_->x();
-        int top_y = MENU_H;
+        int top_y = TOP_H;
         int bot_y = h() - STATUS_H;
         fl_color(fl_rgb_color(24, 24, 24));
         fl_line(split_x - 1, top_y, split_x - 1, bot_y);
@@ -1842,7 +1877,7 @@ void MainWindow::resize(int X, int Y, int W, int H) {
     }
 
     Fl_Double_Window::resize(X, Y, W, H);
-    int vp_h = H - MENU_H - STATUS_H;
+    int vp_h = H - TOP_H - STATUS_H;
 
     int info_w = std::clamp(info_panel_width_, 160, std::max(160, W - 200));
     int vp_w = W;
@@ -1851,6 +1886,10 @@ void MainWindow::resize(int X, int Y, int W, int H) {
     }
 
     menubar_->resize(0, 0, W, MENU_H);
+    toolbar_background_->resize(0, MENU_H, W, TOP_H - MENU_H);
+    breadcrumbs_->resize(48, MENU_H + 5, std::max(40, W - 392), 26);
+    layout_choice_->resize(W - 282, MENU_H + 5, 168, 26);
+    retry_button_->resize(W - 108, MENU_H + 5, 102, 26);
 
     bool is_treemap = (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP);
     bool show_legend = (viewport_->current_mode() == VirtualViewport::ViewMode::GRID &&
@@ -1860,37 +1899,37 @@ void MainWindow::resize(int X, int Y, int W, int H) {
     int legend_w = std::min(450, std::max(200, W - 200));
 
     if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
-        viewport_->resize(0, MENU_H, vp_w, vp_h);
+        viewport_->resize(0, TOP_H, vp_w, vp_h);
         scrollbar_->hide();
         legend_widget_->hide();
-        statusbar_->resize(0, MENU_H + vp_h, W - 280, STATUS_H);
-        statusbar_hint_->resize(W - 280, MENU_H + vp_h, 280, STATUS_H);
+        statusbar_->resize(0, TOP_H + vp_h, W - 280, STATUS_H);
+        statusbar_hint_->resize(W - 280, TOP_H + vp_h, 280, STATUS_H);
         statusbar_hint_->show();
     } else if (show_legend) {
-        viewport_->resize(0, MENU_H, vp_w, vp_h);
+        viewport_->resize(0, TOP_H, vp_w, vp_h);
         scrollbar_->hide();
         statusbar_hint_->hide();
-        statusbar_->resize(0, MENU_H + vp_h, std::max(10, W - legend_w), STATUS_H);
-        legend_widget_->resize(W - legend_w, MENU_H + vp_h, legend_w, STATUS_H);
+        statusbar_->resize(0, TOP_H + vp_h, std::max(10, W - legend_w), STATUS_H);
+        legend_widget_->resize(W - legend_w, TOP_H + vp_h, legend_w, STATUS_H);
         legend_widget_->show();
     } else if (is_treemap) {
-        viewport_->resize(0, MENU_H, vp_w, vp_h);
+        viewport_->resize(0, TOP_H, vp_w, vp_h);
         scrollbar_->hide();
         statusbar_hint_->hide();
         legend_widget_->hide();
-        statusbar_->resize(0, MENU_H + vp_h, W, STATUS_H);
+        statusbar_->resize(0, TOP_H + vp_h, W, STATUS_H);
     } else {
         int content_w = std::max(vp_w - SCROLL_W, 10);
-        viewport_->resize(0, MENU_H, content_w, vp_h);
-        scrollbar_->resize(content_w, MENU_H, SCROLL_W, vp_h);
+        viewport_->resize(0, TOP_H, content_w, vp_h);
+        scrollbar_->resize(content_w, TOP_H, SCROLL_W, vp_h);
         scrollbar_->show();
         statusbar_hint_->hide();
         legend_widget_->hide();
-        statusbar_->resize(0, MENU_H + vp_h, W, STATUS_H);
+        statusbar_->resize(0, TOP_H + vp_h, W, STATUS_H);
     }
 
     if (info_panel_visible_) {
-        info_panel_->resize(vp_w, MENU_H, info_w, vp_h);
+        info_panel_->resize(vp_w, TOP_H, info_w, vp_h);
         info_panel_->show();
     } else {
         info_panel_->hide();
@@ -2003,14 +2042,7 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
             win->open_directory_dialog();
             return;
         case 58:
-            win->background_error_.clear();
-            win->scan_complete_ = false;
-            if (win->scanner_) win->scanner_->request_rescan();
-            if (win->viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
-                const auto id = win->viewport_->current_single_image();
-                if (win->store_.contains(id)) win->enter_single_image_mode(id, win->store_.get(id).filepath);
-            } else win->reprioritize_thumbnails();
-            win->update_statusbar();
+            win->rescan_and_retry();
             return;
         case 60:
             win->open_pdf_export_dialog();
@@ -2166,7 +2198,7 @@ int MainWindow::handle(int event) {
     int split_x = info_panel_->x();
     int ey = Fl::event_y();
     int ex = Fl::event_x();
-    bool in_split_zone = (info_panel_visible_ && ey >= MENU_H && ey <= h() - STATUS_H && std::abs(ex - split_x) <= 4);
+    bool in_split_zone = (info_panel_visible_ && ey >= TOP_H && ey <= h() - STATUS_H && std::abs(ex - split_x) <= 4);
 
     if (dragging_h_splitter_) {
         if (event == FL_DRAG) {
@@ -2421,4 +2453,67 @@ bool MainWindow::queue_thumbnail(size_t id, const std::string& path, const std::
     reprioritize_pending_ = true;
     last_resize_time_ = std::chrono::steady_clock::now();
     return false;
+}
+
+void MainWindow::update_navigation() {
+    const std::string location = directory_filter_.empty() ? directory_ : directory_filter_;
+    if (location != breadcrumb_location_) {
+        breadcrumb_location_ = location;
+        breadcrumbs_->clear(); breadcrumb_paths_.clear();
+        std::filesystem::path root(normalize_path(directory_));
+        std::filesystem::path current = root;
+        breadcrumb_paths_.push_back(root.string());
+        const auto relative = std::filesystem::path(normalize_path(location)).lexically_relative(root);
+        for (const auto& part : relative) {
+            if (part == "." || part.empty()) continue;
+            if (part == "..") break;
+            current /= part;
+            breadcrumb_paths_.push_back(current.string());
+        }
+        std::string trail;
+        for (size_t i = 0; i < breadcrumb_paths_.size(); ++i) {
+            std::string name = std::filesystem::path(breadcrumb_paths_[i]).filename().string();
+            if (name.empty()) name = "Root";
+            if (i) trail += "  >  ";
+            trail += name;
+            const std::string menu_label = std::string(i * 2, ' ') + name;
+            breadcrumbs_->add(menu_label.c_str(), 0, [](Fl_Widget* widget, void* value) {
+                auto* win = static_cast<MainWindow*>(widget->window());
+                const size_t index = reinterpret_cast<uintptr_t>(value);
+                if (index >= win->breadcrumb_paths_.size()) return;
+                const auto path = win->breadcrumb_paths_[index];
+                if (win->viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) win->exit_single_image_mode();
+                win->apply_directory_filter(path);
+                win->viewport_->take_focus();
+            }, reinterpret_cast<void*>(i));
+        }
+        breadcrumbs_->copy_label(trail.c_str());
+        breadcrumbs_->copy_tooltip(location.c_str());
+    }
+    layout_choice_->value(static_cast<int>(active_layout_));
+    retry_button_->copy_label(background_error_.empty() ? "Rescan (F5)" : "Retry (F5)");
+    retry_button_->copy_tooltip(background_error_.empty() ? "Rescan files and retry background services" : background_error_.c_str());
+    if (directory_filter_.empty() && viewport_->current_mode() != VirtualViewport::ViewMode::SINGLE_IMAGE) up_button_->deactivate();
+    else up_button_->activate();
+}
+
+void MainWindow::rescan_and_retry() {
+    const auto id = viewport_->current_single_image();
+    const bool viewing = viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE;
+    stop_session();
+    background_error_.clear();
+    statusbar_->tooltip(nullptr);
+    pending_db_build_.clear(); background_to_queue_.clear(); db_build_total_ = 0;
+    scan_complete_ = false;
+    ++current_generation_;
+    for (auto image : store_.order()) {
+        auto& entry = store_.get(image);
+        entry.last_requested_generation = 0;
+        if (entry.best_quality == ThumbQuality::FAILED) entry.best_quality = ThumbQuality::NONE;
+    }
+    last_visible_.clear();
+    start();
+    if (viewing && store_.contains(id)) enter_single_image_mode(id, store_.get(id).filepath);
+    else { layout_dirty_ = true; recompute_layout(true); }
+    viewport_->take_focus();
 }

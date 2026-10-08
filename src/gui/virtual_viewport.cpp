@@ -1012,6 +1012,7 @@ int VirtualViewport::handle(int event) {
                 }
                 return 1;
             case FL_KEYDOWN:
+                if (!(Fl::event_state() & (FL_CTRL | FL_ALT)) && gallery_key(Fl::event_key())) return 1;
                 if (Fl::event_key() == FL_Escape) {
                     if (on_escape_pressed) {
                         on_escape_pressed();
@@ -1428,4 +1429,48 @@ void VirtualViewport::draw_minimap(float target_orig_w, float target_orig_h, con
     fl_line_style(FL_SOLID, 2);
     fl_rect(geom.proxy_x, geom.proxy_y, geom.proxy_w, geom.proxy_h);
     fl_line_style(0); // Reset line style
+}
+
+bool VirtualViewport::gallery_key(int key) {
+    if (!layout_ || layout_->boxes.empty() || view_mode_ != ViewMode::GRID) return false;
+    if (key == FL_Enter || key == FL_KP_Enter) {
+        if (store_.contains(selected_idx_) && on_image_double_clicked) on_image_double_clicked(store_.get(selected_idx_).filepath);
+        return true;
+    }
+    if (key != FL_Left && key != FL_Right && key != FL_Up && key != FL_Down && key != FL_Home && key != FL_End) return false;
+    const LayoutEngine::LayoutResult::Box* current = nullptr;
+    const LayoutEngine::LayoutResult::Box* next = nullptr;
+    for (const auto& box : layout_->boxes) {
+        if (!store_.contains(box.image_index)) continue;
+        if (!next || key == FL_End) next = &box;
+        if (box.image_index == selected_idx_) current = &box;
+    }
+    if (current && key != FL_Home && key != FL_End) {
+        next = current;
+        double best = 1e300;
+        for (const auto& box : layout_->boxes) {
+            if (!store_.contains(box.image_index) || box.image_index == selected_idx_) continue;
+            const double dx = box.x + box.w / 2 - current->x - current->w / 2;
+            const double dy = box.y + box.h / 2 - current->y - current->h / 2;
+            const bool horizontal = key == FL_Left || key == FL_Right;
+            const double forward = horizontal ? (key == FL_Left ? -dx : dx) : (key == FL_Up ? -dy : dy);
+            const double sideways = horizontal ? std::abs(dy) : std::abs(dx);
+            const double score = forward * forward + 4 * sideways * sideways;
+            if (forward > 0.1 && score < best) { best = score; next = &box; }
+        }
+    }
+    if (next && next->image_index != selected_idx_) {
+        const auto id = next->image_index;
+        if (on_image_clicked) on_image_clicked(store_.get(id).filepath);
+        set_selected_image(id);
+        if (layout_->layout_type == LayoutEngine::LayoutType::JUSTIFIED) {
+            int offset = scroll_offset_;
+            if (next->y < offset) offset = int(next->y);
+            else if (next->y + next->h > offset + h()) offset = int(next->y + next->h - h());
+            offset = std::clamp(offset, 0, std::max(0, int(layout_->total_height) - h()));
+            set_scroll_offset(offset);
+            if (on_gallery_scroll) on_gallery_scroll(offset);
+        }
+    }
+    return true;
 }
