@@ -51,6 +51,13 @@ int main() {
     assert(snapshot.get(b).revision != store.get(b).revision);
     assert(snapshot.get(b).scaled.rgb_data.empty());
 
+    // Public mutation APIs accept strings borrowed from the entry they mutate.
+    const auto borrowed_path = store.get(b).filepath;
+    store.remove_image(store.get(b).filepath);
+    assert(store.find_by_filepath(borrowed_path) == static_cast<size_t>(-1));
+    assert(!store.contains(b));
+    assert(store.add_image(borrowed_path, 1) != b);
+
     store.clear();
     assert(store.add_image("b.jpg", 1) != b);
 }

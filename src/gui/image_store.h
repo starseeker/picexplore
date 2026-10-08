@@ -85,16 +85,16 @@ public:
     void clear();
 
     // Add a new image (from scan discovery or LMDB load)
-    size_t add_image(const std::string& filepath, double aspect_ratio,
+    size_t add_image(std::string filepath, double aspect_ratio,
                      int width = 0, int height = 0,
                      uintmax_t file_size = 0, uintmax_t file_timestamp = 0,
-                     const std::string& hash = "", const FileStamp& stamp = {});
+                     std::string hash = "", FileStamp stamp = {});
 
     // Remove an image (e.g. from file deletion)
-    void remove_image(const std::string& filepath);
+    void remove_image(std::string filepath);
 
     // Rename an image (e.g. from file rename)
-    void rename_image(const std::string& old_filepath, const std::string& new_filepath);
+    void rename_image(std::string old_filepath, std::string new_filepath);
 
     void set_thumbnail(size_t index, const std::string& filepath, ThumbQuality quality,
                        const uint8_t* jpeg_data, size_t jpeg_size,
@@ -132,8 +132,6 @@ public:
                             std::atomic<size_t>* progress_counter = nullptr,
                             int preferred_size = 512,
                             std::atomic<bool>* stop_requested = nullptr);
-    void ensure_file_sizes();
-    void ensure_pixel_dimensions();
     void ensure_duplicate_counts();
     size_t find_by_filepath(const std::string& filepath) const;
 

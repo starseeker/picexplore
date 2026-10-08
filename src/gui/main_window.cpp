@@ -516,6 +516,9 @@ void MainWindow::navigate_single_image(int delta) {
         return;
     }
 
+    while (next_pos >= 0 && next_pos < static_cast<int>(layout_result_.boxes.size()) &&
+           !store_.contains(layout_result_.boxes[next_pos].image_index)) next_pos += delta > 0 ? 1 : -1;
+    if (next_pos < 0 || next_pos >= static_cast<int>(layout_result_.boxes.size())) return;
     size_t next_raw_idx = layout_result_.boxes[next_pos].image_index;
     const auto& next_entry = store_.get(next_raw_idx);
 
@@ -581,7 +584,7 @@ void MainWindow::apply_directory_filter(const std::string& dir) {
         canon_root = fs::canonical(directory_).string();
     } catch (...) {}
 
-    if (dir.empty() || canon_dir == canon_root || canon_dir.size() < canon_root.size()) {
+    if (dir.empty() || canon_dir == canon_root || !path_is_within(canon_dir, canon_root)) {
         directory_filter_.clear();
     } else {
         directory_filter_ = dir;
@@ -623,7 +626,7 @@ void MainWindow::navigate_to_parent_directory() {
         fs::path parent_p = cur_p.parent_path();
         std::string canon_parent = fs::canonical(parent_p).string();
         std::string canon_root = root_p.string();
-        if (canon_parent == canon_root || canon_parent.size() < canon_root.size()) {
+        if (canon_parent == canon_root || !path_is_within(canon_parent, canon_root)) {
             reset_directory_filter();
         } else {
             apply_directory_filter(parent_p.string());
@@ -1232,6 +1235,12 @@ void MainWindow::poll_events() {
         if (ev.type == UpdateEvent::Type::FILESYSTEM_CHANGED) {
             if (scanner_) scanner_->request_rescan();
         } else if (ev.type == UpdateEvent::Type::FILESYSTEM_RENAMED) {
+            for (auto* filter : {&directory_filter_, &pre_viewer_filter_}) {
+                if (!filter->empty() && path_is_within(*filter, ev.rename.old_filepath))
+                    *filter = ev.rename.new_filepath + filter->substr(ev.rename.old_filepath.size());
+            }
+            layout_dirty_ = true;
+            status_dirty = true;
             if (scanner_) scanner_->request_rename(ev.rename.old_filepath, ev.rename.new_filepath);
         } else if (ev.type == UpdateEvent::Type::DATABASE_ERROR || ev.type == UpdateEvent::Type::SCAN_ERROR ||
                    ev.type == UpdateEvent::Type::WATCH_STATUS) {
@@ -1356,10 +1365,18 @@ void MainWindow::poll_events() {
         } else if (ev.type == UpdateEvent::Type::IMAGE_RENAMED) {
             std::cout << "RENAMED: " << ev.rename.old_filepath
                       << " -> " << ev.rename.new_filepath << std::endl;
+            const auto source_id = store_.find_by_filepath(ev.rename.old_filepath);
+            const auto replaced_id = store_.find_by_filepath(ev.rename.new_filepath);
+            const auto viewed_id = viewport_->current_single_image();
+            const bool affected_viewer = viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
+                (viewed_id == source_id || viewed_id == replaced_id);
             store_.rename_image(ev.rename.old_filepath, ev.rename.new_filepath);
-            if (current_selected_filepath_ == ev.rename.old_filepath) {
+            pending_db_build_.erase(replaced_id);
+            if (current_selected_filepath_ == ev.rename.old_filepath || current_selected_filepath_ == ev.rename.new_filepath) {
                 current_selected_filepath_ = ev.rename.new_filepath;
+                viewport_->set_selected_image(source_id);
             }
+            if (affected_viewer && store_.contains(source_id)) enter_single_image_mode(source_id, ev.rename.new_filepath);
             layout_dirty_ = true;
             status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::SCAN_COMPLETE) {
@@ -1525,11 +1542,7 @@ void MainWindow::recompute_layout(bool reprioritize) {
     }
 
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP) {
-        if (treemap_metric_ == LayoutEngine::TreemapMetric::FILE_SIZE) {
-            store_.ensure_file_sizes();
-        } else if (treemap_metric_ == LayoutEngine::TreemapMetric::PIXEL_AREA) {
-            store_.ensure_pixel_dimensions();
-        } else if (treemap_metric_ == LayoutEngine::TreemapMetric::DUPLICATE_COUNT) {
+        if (treemap_metric_ == LayoutEngine::TreemapMetric::DUPLICATE_COUNT) {
             store_.ensure_duplicate_counts();
         }
 
@@ -1557,11 +1570,7 @@ void MainWindow::recompute_layout(bool reprioritize) {
         viewport_->set_scroll_offset(0);
         scrollbar_->value(0, viewport_->h(), 0, viewport_->h());
     } else if (active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
-        if (treemap_metric_ == LayoutEngine::TreemapMetric::FILE_SIZE) {
-            store_.ensure_file_sizes();
-        } else if (treemap_metric_ == LayoutEngine::TreemapMetric::PIXEL_AREA) {
-            store_.ensure_pixel_dimensions();
-        } else if (treemap_metric_ == LayoutEngine::TreemapMetric::DUPLICATE_COUNT) {
+        if (treemap_metric_ == LayoutEngine::TreemapMetric::DUPLICATE_COUNT) {
             store_.ensure_duplicate_counts();
         }
 

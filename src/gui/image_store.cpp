@@ -33,10 +33,10 @@ void ImageStore::clear() {
     scaled_rgb_memory_used_ = 0;
 }
 
-size_t ImageStore::add_image(const std::string& filepath, double aspect_ratio,
+size_t ImageStore::add_image(std::string filepath, double aspect_ratio,
                              int width, int height, uintmax_t file_size,
-                             uintmax_t file_timestamp, const std::string& hash,
-                             const FileStamp& stamp) {
+                             uintmax_t file_timestamp, std::string hash,
+                             FileStamp stamp) {
     size_t idx = find_by_filepath(filepath);
     if (idx == static_cast<size_t>(-1)) {
         idx = next_id_++;
@@ -145,7 +145,7 @@ bool ImageStore::decode_jpeg(const uint8_t* jpeg_data, size_t jpeg_size, std::ve
     return true;
 }
 
-void ImageStore::remove_image(const std::string& filepath) {
+void ImageStore::remove_image(std::string filepath) {
     size_t index = find_by_filepath(filepath);
     if (index == static_cast<size_t>(-1)) return;
     
@@ -167,7 +167,7 @@ void ImageStore::remove_image(const std::string& filepath) {
     aspects_dirty_ = true;
 }
 
-void ImageStore::rename_image(const std::string& old_filepath, const std::string& new_filepath) {
+void ImageStore::rename_image(std::string old_filepath, std::string new_filepath) {
     size_t index = find_by_filepath(old_filepath);
     if (index == static_cast<size_t>(-1)) return;
     if (old_filepath == new_filepath) return;
@@ -358,31 +358,6 @@ const std::vector<std::pair<size_t,double>>& ImageStore::get_filtered_aspects(co
 }
 
 
-void ImageStore::ensure_file_sizes() {
-    for (auto id : order_) {
-        auto& entry = entries_.at(id);
-        if (entry.file_size == 0) {
-            try {
-                entry.file_size = std::filesystem::file_size(entry.filepath);
-            } catch (...) {}
-        }
-    }
-}
-
-void ImageStore::ensure_pixel_dimensions() {
-    for (auto id : order_) {
-        auto& entry = entries_.at(id);
-        if (entry.original_width <= 0 || entry.original_height <= 0) {
-            int w = 0, h = 0;
-            if (get_image_info(entry.filepath, &w, &h) && w > 0 && h > 0) {
-                entry.original_width = w;
-                entry.original_height = h;
-                entry.aspect_ratio = (double)w / h;
-            }
-        }
-    }
-}
-
 void ImageStore::ensure_duplicate_counts() {
     std::unordered_map<std::string, int> hash_counts;
     for (auto id : order_) {
@@ -407,23 +382,8 @@ void ImageStore::ensure_duplicate_counts() {
 }
 
 void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
-    if (criteria == SortCriteria::FILE_SIZE) {
-        ensure_file_sizes();
-    } else if (criteria == SortCriteria::TIMESTAMP) {
-        for (auto id : order_) {
-        auto& entry = entries_.at(id);
-            if (entry.file_timestamp == 0) {
-                try {
-                    entry.file_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
-                        std::filesystem::last_write_time(entry.filepath).time_since_epoch()).count();
-                } catch (...) {}
-            }
-        }
-    } else if (criteria == SortCriteria::PIXEL_AREA) {
-        ensure_pixel_dimensions();
-    } else if (criteria == SortCriteria::DUPLICATE_COUNT) {
-        ensure_duplicate_counts();
-    }
+    // Metadata arrives from the reconciler; sorting never performs filesystem I/O.
+    if (criteria == SortCriteria::DUPLICATE_COUNT) ensure_duplicate_counts();
 
     std::sort(order_.begin(), order_.end(), [this, criteria, ascending](size_t aid, size_t bid) {
         const auto& a = get(aid);
@@ -562,8 +522,8 @@ bool ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
                         results[i].score = SiftFeatureEngine::compute_fast_similarity(query_sift.global_vector, entry_sift.global_vector);
                     }
                 } else if (entry.sift_vector_loaded && !high_accuracy) {
-                    results[i].score = SiftFeatureEngine::compute_fast_similarity(query_sift.global_vector, entry_sift.global_vector);
-                    results[i].global_vec = entry_sift.global_vector;
+                    results[i].score = SiftFeatureEngine::compute_fast_similarity(query_sift.global_vector, entry.sift_global_vector);
+                    results[i].global_vec = entry.sift_global_vector;
                     results[i].loaded = true;
                 } else {
                     results[i].score = 0.0;

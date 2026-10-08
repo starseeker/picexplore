@@ -58,6 +58,11 @@ struct MainWindowTestAccess {
         window.rescan_and_retry();
         until([&] { return window.viewport_->full_res_ready_ && window.scan_complete_; });
         assert(window.viewport_->current_single_image() == viewed);
+        // Navigation can see the previous layout briefly after a deletion.
+        const auto last = window.layout_result_.boxes.back().image_index;
+        if (last != viewed) window.store_.remove_image(window.store_.get(last).filepath);
+        window.navigate_single_image(1);
+        assert(window.viewport_->current_single_image() == viewed);
         window.exit_single_image_mode();
         window.layout_choice_->value(2); window.layout_choice_->do_callback();
         assert(window.layout_mode() == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP);
