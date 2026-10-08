@@ -21,6 +21,7 @@ ImageStore::~ImageStore() {
 
 void ImageStore::clear() {
     entries_.clear();
+    order_.clear();
     path_to_index_.clear();
     all_aspects_cache_.clear();
     filtered_aspects_cache_.clear();
@@ -59,7 +60,7 @@ size_t ImageStore::add_image(const std::string& filepath, double aspect_ratio,
         return idx;
     }
 
-    size_t idx = entries_.size();
+    size_t idx = next_id_++;
     ImageEntry entry;
     entry.filepath = filepath;
     entry.index = idx;
@@ -71,7 +72,8 @@ size_t ImageStore::add_image(const std::string& filepath, double aspect_ratio,
     if (width > 0 && height > 0) {
         entry.metadata_known = true;
     }
-    entries_.push_back(entry);
+    entries_.emplace(idx, std::move(entry));
+    order_.push_back(idx);
     path_to_index_[filepath] = idx;
     aspects_dirty_ = true;
     return idx;
@@ -167,41 +169,20 @@ void ImageStore::remove_image(const std::string& filepath) {
         lru_map_.erase(lru_it);
     }
     
-    entries_.erase(entries_.begin() + index);
-    path_to_index_.clear();
-    
-    std::unordered_map<size_t, std::list<size_t>::iterator> new_lru_map;
-    for (auto list_it = lru_list_.begin(); list_it != lru_list_.end(); ) {
-        if (*list_it == index) {
-            list_it = lru_list_.erase(list_it);
-        } else {
-            if (*list_it > index) {
-                *list_it = *list_it - 1;
-            }
-            new_lru_map[*list_it] = list_it;
-            ++list_it;
-        }
-    }
-    lru_map_ = std::move(new_lru_map);
-    
-    std::unordered_set<size_t> new_visible;
-    for (size_t vis_idx : currently_visible_set_) {
-        if (vis_idx == index) continue;
-        if (vis_idx > index) new_visible.insert(vis_idx - 1);
-        else new_visible.insert(vis_idx);
-    }
-    currently_visible_set_ = std::move(new_visible);
-    
-    for (size_t i = 0; i < entries_.size(); ++i) {
-        entries_[i].index = i;
-        path_to_index_[entries_[i].filepath] = i;
-    }
+    decoded_rgb_memory_used_ -= entry.square_thumb.rgb_data.size();
+    entries_.erase(index);
+    path_to_index_.erase(filepath);
+    order_.erase(std::remove(order_.begin(), order_.end(), index), order_.end());
+    currently_visible_set_.erase(index);
     aspects_dirty_ = true;
 }
 
 void ImageStore::rename_image(const std::string& old_filepath, const std::string& new_filepath) {
     size_t index = find_by_filepath(old_filepath);
     if (index == static_cast<size_t>(-1)) return;
+    if (old_filepath == new_filepath) return;
+    // rename(2) may replace an existing destination atomically.
+    remove_image(new_filepath);
     path_to_index_.erase(old_filepath);
     entries_[index].filepath = new_filepath;
     path_to_index_[new_filepath] = index;
@@ -212,7 +193,7 @@ void ImageStore::rename_image(const std::string& old_filepath, const std::string
 void ImageStore::set_thumbnail(size_t index, const std::string& filepath, ThumbQuality quality,
                                const uint8_t* jpeg_data, size_t jpeg_size,
                                int width, int height) {
-    if (index >= entries_.size()) return;
+    if (!contains(index)) return;
     
     // Verify the file path to handle race conditions during sorting
     if (entries_[index].filepath != filepath) {
@@ -260,7 +241,7 @@ void ImageStore::set_thumbnail(size_t index, const std::string& filepath, ThumbQ
 
 void ImageStore::set_thumbnail_rgb(size_t index, const std::string& filepath, ThumbQuality quality,
                                    std::vector<uint8_t>&& rgb_data, int width, int height, uint64_t generation) {
-    if (index >= entries_.size()) return;
+    if (!contains(index)) return;
     
     if (entries_[index].filepath != filepath) {
         index = find_by_filepath(filepath);
@@ -334,15 +315,15 @@ void ImageStore::set_thumbnail_rgb(size_t index, const std::string& filepath, Th
 }
 
 ImageEntry& ImageStore::get(size_t index) {
-    return entries_[index];
+    return entries_.at(index);
 }
 
 const ImageEntry& ImageStore::get(size_t index) const {
-    return entries_[index];
+    return entries_.at(index);
 }
 
 const uint8_t* ImageStore::get_scaled_image(size_t index, int draw_w, int draw_h) {
-    if (index >= entries_.size()) return nullptr;
+    if (!contains(index)) return nullptr;
     auto& entry = entries_[index];
     if (entry.scaled.rgb_data.empty()) {
         return nullptr;
@@ -358,7 +339,7 @@ size_t ImageStore::count() const {
 std::vector<double> ImageStore::get_aspect_ratios() const {
     std::vector<double> ratios(entries_.size());
     for (size_t i = 0; i < entries_.size(); ++i) {
-        ratios[i] = entries_[i].aspect_ratio;
+        ratios[i] = at_position(i).aspect_ratio;
     }
     return ratios;
 }
@@ -369,7 +350,7 @@ const std::vector<std::pair<size_t,double>>& ImageStore::get_filtered_aspects(co
             all_aspects_cache_.clear();
             all_aspects_cache_.reserve(entries_.size());
             for (size_t i = 0; i < entries_.size(); ++i) {
-                all_aspects_cache_.emplace_back(i, entries_[i].aspect_ratio);
+                all_aspects_cache_.emplace_back(order_[i], at_position(i).aspect_ratio);
             }
             aspects_dirty_ = false;
         }
@@ -380,9 +361,9 @@ const std::vector<std::pair<size_t,double>>& ImageStore::get_filtered_aspects(co
         std::string prefix = dir;
         if (prefix.back() != '/') prefix += '/';
         for (size_t i = 0; i < entries_.size(); ++i) {
-            const std::string& fp = entries_[i].filepath;
+            const std::string& fp = at_position(i).filepath;
             if (fp.size() > prefix.size() && fp.compare(0, prefix.size(), prefix) == 0) {
-                filtered_aspects_cache_.emplace_back(i, entries_[i].aspect_ratio);
+                filtered_aspects_cache_.emplace_back(order_[i], at_position(i).aspect_ratio);
             }
         }
         return filtered_aspects_cache_;
@@ -391,7 +372,8 @@ const std::vector<std::pair<size_t,double>>& ImageStore::get_filtered_aspects(co
 
 
 void ImageStore::ensure_file_sizes() {
-    for (auto& entry : entries_) {
+    for (auto id : order_) {
+        auto& entry = entries_.at(id);
         if (entry.file_size == 0) {
             try {
                 entry.file_size = std::filesystem::file_size(entry.filepath);
@@ -401,7 +383,8 @@ void ImageStore::ensure_file_sizes() {
 }
 
 void ImageStore::ensure_pixel_dimensions() {
-    for (auto& entry : entries_) {
+    for (auto id : order_) {
+        auto& entry = entries_.at(id);
         if (entry.original_width <= 0 || entry.original_height <= 0) {
             int w = 0, h = 0;
             if (get_image_info(entry.filepath, &w, &h) && w > 0 && h > 0) {
@@ -415,12 +398,14 @@ void ImageStore::ensure_pixel_dimensions() {
 
 void ImageStore::ensure_duplicate_counts() {
     std::unordered_map<std::string, int> hash_counts;
-    for (const auto& entry : entries_) {
+    for (auto id : order_) {
+        const auto& entry = entries_.at(id);
         if (!entry.content_hash.empty()) {
             hash_counts[entry.content_hash]++;
         }
     }
-    for (auto& entry : entries_) {
+    for (auto id : order_) {
+        auto& entry = entries_.at(id);
         if (!entry.content_hash.empty()) {
             auto it = hash_counts.find(entry.content_hash);
             if (it != hash_counts.end()) {
@@ -438,7 +423,8 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
     if (criteria == SortCriteria::FILE_SIZE) {
         ensure_file_sizes();
     } else if (criteria == SortCriteria::TIMESTAMP) {
-        for (auto& entry : entries_) {
+        for (auto id : order_) {
+        auto& entry = entries_.at(id);
             if (entry.file_timestamp == 0) {
                 try {
                     entry.file_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
@@ -452,7 +438,9 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
         ensure_duplicate_counts();
     }
 
-    std::sort(entries_.begin(), entries_.end(), [criteria, ascending](const ImageEntry& a, const ImageEntry& b) {
+    std::sort(order_.begin(), order_.end(), [this, criteria, ascending](size_t aid, size_t bid) {
+        const auto& a = get(aid);
+        const auto& b = get(bid);
         if (criteria == SortCriteria::ALPHABETICAL) {
             return ascending ? (a.filepath < b.filepath) : (a.filepath > b.filepath);
         } else if (criteria == SortCriteria::FILE_SIZE) {
@@ -481,28 +469,7 @@ void ImageStore::sort_entries(SortCriteria criteria, bool ascending) {
         return a.filepath < b.filepath;
     });
 
-    // Reassign indices and rebuild path_to_index_ map
-    path_to_index_.clear();
-    for (size_t i = 0; i < entries_.size(); ++i) {
-        entries_[i].index = i;
-        path_to_index_[entries_[i].filepath] = i;
-    }
     aspects_dirty_ = true;
-    
-    // Clear visibility state because indices changed completely
-    currently_visible_set_.clear();
-    
-    // We cannot just clear lru_list_ because the entries still hold memory.
-    // If we clear lru_list_, the eviction engine cannot free the memory of sorted images,
-    // leading to an infinite eviction loop for new images.
-    lru_list_.clear();
-    lru_map_.clear();
-    for (size_t i = 0; i < entries_.size(); ++i) {
-        if (!entries_[i].decoded.rgb_data.empty() || !entries_[i].scaled.rgb_data.empty()) {
-            lru_list_.push_back(i);
-            lru_map_[i] = std::prev(lru_list_.end());
-        }
-    }
 }
 
 struct SimilarityResult {
@@ -515,7 +482,7 @@ void ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
                                     std::atomic<size_t>* progress_counter,
                                     int preferred_size,
                                     std::atomic<bool>* stop_requested) {
-    if (query_index >= entries_.size()) return;
+    if (!contains(query_index)) return;
 
     std::string query_path = entries_[query_index].filepath;
     std::string query_hash = entries_[query_index].content_hash;
@@ -553,9 +520,10 @@ void ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
     std::vector<SimilarityResult> results(total);
 
     // Query item always has similarity 1.0
-    results[query_index].score = 1.0;
-    results[query_index].global_vec = query_sift.global_vector;
-    results[query_index].loaded = true;
+    const size_t query_position = std::find(order_.begin(), order_.end(), query_index) - order_.begin();
+    results[query_position].score = 1.0;
+    results[query_position].global_vec = query_sift.global_vector;
+    results[query_position].loaded = true;
 
     unsigned int num_threads = std::max(1u, std::thread::hardware_concurrency());
     std::vector<std::thread> workers;
@@ -572,12 +540,12 @@ void ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
                     break;
                 }
 
-                if (i == query_index) {
+                if (order_[i] == query_index) {
                     if (progress_counter) progress_counter->fetch_add(1, std::memory_order_relaxed);
                     continue;
                 }
 
-                const auto& entry = entries_[i];
+                const auto& entry = at_position(i);
                 SiftFeatureData entry_sift;
                 bool has_sift = false;
 
@@ -631,41 +599,27 @@ void ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
 
     // Apply computed scores to ImageStore entries
     for (size_t i = 0; i < total; ++i) {
-        entries_[i].similarity_score = results[i].score;
+        at_position(i).similarity_score = results[i].score;
         if (results[i].loaded) {
-            entries_[i].sift_global_vector = results[i].global_vec;
-            entries_[i].sift_vector_loaded = true;
+            at_position(i).sift_global_vector = results[i].global_vec;
+            at_position(i).sift_vector_loaded = true;
         }
     }
 
     // Sort descending by similarity score (satisfying strict weak ordering)
-    std::sort(entries_.begin(), entries_.end(), [query_path](const ImageEntry& a, const ImageEntry& b) {
+    std::sort(order_.begin(), order_.end(), [this, query_path](size_t aid, size_t bid) {
+        const auto& a = get(aid);
+        const auto& b = get(bid);
         if (a.filepath == b.filepath) return false;
         if (a.filepath == query_path) return true;
         if (b.filepath == query_path) return false;
-        if (std::abs(a.similarity_score - b.similarity_score) > 1e-6) {
+        if (a.similarity_score != b.similarity_score) {
             return a.similarity_score > b.similarity_score;
         }
         return a.filepath < b.filepath;
     });
 
-    // Reassign indices and rebuild path_to_index_ map
-    path_to_index_.clear();
-    for (size_t i = 0; i < entries_.size(); ++i) {
-        entries_[i].index = i;
-        path_to_index_[entries_[i].filepath] = i;
-    }
     aspects_dirty_ = true;
-    currently_visible_set_.clear();
-
-    lru_list_.clear();
-    lru_map_.clear();
-    for (size_t i = 0; i < entries_.size(); ++i) {
-        if (!entries_[i].decoded.rgb_data.empty() || !entries_[i].scaled.rgb_data.empty()) {
-            lru_list_.push_back(i);
-            lru_map_[i] = std::prev(lru_list_.end());
-        }
-    }
 }
 
 size_t ImageStore::find_by_filepath(const std::string& filepath) const {

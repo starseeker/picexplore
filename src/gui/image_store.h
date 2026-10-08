@@ -16,7 +16,9 @@ struct ImageEntry {
     // Identity
     std::string filepath;
     std::string content_hash;
-    size_t index;
+    // Stable catalog identity; never a position in the display order.
+    size_t index = static_cast<size_t>(-1);
+    uint64_t revision = 1;
 
     // Metadata
     int original_width = 0;
@@ -67,6 +69,15 @@ class ImageStore {
 public:
     ImageStore();
     ~ImageStore();
+    ImageStore(const ImageStore&) = delete;
+    ImageStore& operator=(const ImageStore&) = delete;
+    ImageStore(ImageStore&&) = default;
+    ImageStore& operator=(ImageStore&&) = default;
+
+    bool contains(size_t id) const { return entries_.count(id) != 0; }
+    const std::vector<size_t>& order() const { return order_; }
+    ImageEntry& at_position(size_t position) { return get(order_.at(position)); }
+    const ImageEntry& at_position(size_t position) const { return get(order_.at(position)); }
 
     // Clear all entries and caches
     void clear();
@@ -100,7 +111,7 @@ public:
     std::vector<double> get_aspect_ratios() const;
 
     // Filtered aspect ratios for layout engine.
-    // Returns {raw_store_index, aspect_ratio} pairs.
+    // Returns {image_id, aspect_ratio} pairs.
     // If dir is empty, returns all images (equivalent to get_aspect_ratios with indices).
     const std::vector<std::pair<size_t,double>>& get_filtered_aspects(const std::string& dir) const;
 
@@ -128,7 +139,9 @@ public:
     void mark_visible(const std::vector<size_t>& visible_indices);
 
 private:
-    std::vector<ImageEntry> entries_;
+    std::unordered_map<size_t, ImageEntry> entries_;
+    std::vector<size_t> order_;
+    size_t next_id_ = 0;
     std::unordered_map<std::string, size_t> path_to_index_;
 
     mutable std::vector<std::pair<size_t, double>> all_aspects_cache_;
@@ -139,7 +152,6 @@ private:
     std::unordered_set<size_t> currently_visible_set_;
     
     // Configurable memory budgets (in bytes)
-    size_t max_memory_bytes_;
     size_t decoded_rgb_memory_used_ = 0;
     size_t scaled_rgb_memory_used_ = 0;
 

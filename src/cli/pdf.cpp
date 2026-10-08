@@ -316,7 +316,7 @@ LayoutEngine::LayoutResult PDFGenerator::calculate_treemap_layout(
         hitems.reserve(store.size());
 
         for (size_t i = 0; i < store.size(); ++i) {
-            const auto& entry = store.get(i);
+            const auto& entry = store.at_position(i);
             double weight = 1.0;
             switch (options.treemap_metric) {
                 case LayoutEngine::TreemapMetric::FILE_SIZE:
@@ -341,7 +341,7 @@ LayoutEngine::LayoutResult PDFGenerator::calculate_treemap_layout(
         titems.reserve(store.size());
 
         for (size_t i = 0; i < store.size(); ++i) {
-            const auto& entry = store.get(i);
+            const auto& entry = store.at_position(i);
             double weight = 1.0;
             switch (options.treemap_metric) {
                 case LayoutEngine::TreemapMetric::FILE_SIZE:
@@ -440,7 +440,7 @@ std::vector<uint8_t> PDFGenerator::render_preview_page(
         std::vector<std::pair<size_t, double>> indexed_aspects;
         indexed_aspects.reserve(store.size());
         for (size_t i = 0; i < store.size(); ++i) {
-            const auto& entry = store.get(i);
+            const auto& entry = store.at_position(i);
             double ar = (entry.aspect_ratio > 0.0) ? entry.aspect_ratio : 1.0;
             indexed_aspects.push_back({entry.index, ar});
         }
@@ -563,7 +563,7 @@ bool PDFGenerator::generate_from_store(
         std::vector<std::pair<size_t, double>> indexed_aspects;
         indexed_aspects.reserve(store.size());
         for (size_t i = 0; i < store.size(); ++i) {
-            const auto& entry = store.get(i);
+            const auto& entry = store.at_position(i);
             double ar = (entry.aspect_ratio > 0.0) ? entry.aspect_ratio : 1.0;
             indexed_aspects.push_back({entry.index, ar});
         }

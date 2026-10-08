@@ -54,7 +54,7 @@ void test_justified_pagination() {
 
     std::vector<std::pair<size_t, double>> indexed_aspects;
     for (size_t i = 0; i < store.size(); ++i) {
-        const auto& e = store.get(i);
+        const auto& e = store.at_position(i);
         indexed_aspects.push_back({e.index, e.aspect_ratio});
     }
 

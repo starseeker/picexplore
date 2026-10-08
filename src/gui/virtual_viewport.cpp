@@ -314,6 +314,7 @@ void VirtualViewport::draw_grid() {
             fl_rectf(draw_x - 3, draw_y - 3, draw_w + 6, draw_h + 6);
         }
 
+        if (!store_.contains(box.image_index)) continue;
         auto& entry = store_.get(box.image_index);
         const uint8_t* img_data = nullptr;
         
@@ -488,6 +489,7 @@ void VirtualViewport::draw_treemap() {
         if (draw_w <= 0 || draw_h <= 0) continue;
 
         bool is_selected = (box.image_index == selected_idx_);
+        if (!store_.contains(box.image_index)) continue;
         auto& entry = store_.get(box.image_index);
 
         FileTypeColors::ColorRGB rgb_col = FileTypeColors::get_color_rgb(entry.filepath);

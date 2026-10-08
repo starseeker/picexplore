@@ -150,6 +150,16 @@ target_compile_definitions(pdf_test PRIVATE
 target_compile_options(pdf_test PRIVATE -g -O2)
 add_test(NAME pdf_test COMMAND pdf_test)
 
+# Catalog tests exercise the same implementation and dependencies as PDF export.
+get_target_property(CATALOG_TEST_SOURCES pdf_test SOURCES)
+list(REMOVE_ITEM CATALOG_TEST_SOURCES pdf_test.cpp)
+add_executable(catalog_test catalog_test.cpp ${CATALOG_TEST_SOURCES})
+foreach(prop INCLUDE_DIRECTORIES LINK_LIBRARIES COMPILE_DEFINITIONS COMPILE_OPTIONS)
+    get_target_property(value pdf_test ${prop})
+    set_property(TARGET catalog_test PROPERTY ${prop} ${value})
+endforeach()
+add_test(NAME catalog_test COMMAND catalog_test)
+
 
 # Local Variables:
 # tab-width: 8

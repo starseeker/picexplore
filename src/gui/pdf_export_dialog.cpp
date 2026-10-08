@@ -48,7 +48,7 @@ void PDFPreviewWidget::update_preview(const ImageStore& store, const PDFOptions&
         std::vector<std::pair<size_t, double>> indexed_aspects;
         indexed_aspects.reserve(store.size());
         for (size_t i = 0; i < store.size(); ++i) {
-            const auto& entry = store.get(i);
+            const auto& entry = store.at_position(i);
             double ar = (entry.aspect_ratio > 0.0) ? entry.aspect_ratio : 1.0;
             indexed_aspects.push_back({entry.index, ar});
         }

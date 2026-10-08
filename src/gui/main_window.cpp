@@ -916,7 +916,7 @@ std::vector<std::string> MainWindow::reconcile_and_get_duplicates(const std::str
 
     // 2. Query in-memory store for any other image entries with the same hash
     for (size_t i = 0; i < store_.count(); ++i) {
-        const auto& e = store_.get(i);
+        const auto& e = store_.at_position(i);
         if (!e.content_hash.empty() && e.content_hash == hash) {
             candidate_paths.insert(e.filepath);
         }
@@ -968,7 +968,7 @@ void MainWindow::update_statusbar() {
     
     if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
         size_t idx = viewport_->current_single_image();
-        if (idx < store_.size()) {
+        if (store_.contains(idx)) {
             std::string filename = std::filesystem::path(store_.get(idx).filepath).filename().string();
             label = "  Viewing: " + filename;
         } else {
@@ -1220,6 +1220,7 @@ void MainWindow::poll_events() {
                 status_dirty = true;
             }
         } else if (ev.type == UpdateEvent::Type::THUMB_RGB_READY) {
+            if (!store_.contains(ev.thumb_rgb.image_index)) continue;
             auto& entry = store_.get(ev.thumb_rgb.image_index);
             if (entry.content_hash.empty() && !ev.thumb_rgb.content_hash.empty()) {
                 entry.content_hash = ev.thumb_rgb.content_hash;
@@ -1282,7 +1283,18 @@ void MainWindow::poll_events() {
             }
         } else if (ev.type == UpdateEvent::Type::IMAGE_DELETED) {
             std::cout << "DELETED: " << ev.deletion.filepath << std::endl;
+            const size_t removed_id = store_.find_by_filepath(ev.deletion.filepath);
             store_.remove_image(ev.deletion.filepath);
+            pending_db_build_.erase(removed_id);
+            if (viewport_->get_selected_image() == removed_id) {
+                viewport_->set_selected_image(static_cast<size_t>(-1));
+                current_selected_filepath_.clear();
+                info_panel_->clear_info();
+            }
+            if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
+                viewport_->current_single_image() == removed_id) {
+                exit_single_image_mode();
+            }
             if (db_ && db_->is_open()) {
                 std::lock_guard<std::mutex> lock(db_->get_mutex());
                 if (db_->begin_transaction()) {
@@ -1300,6 +1312,10 @@ void MainWindow::poll_events() {
             std::cout << "RENAMED: " << ev.rename.old_filepath
                       << " -> " << ev.rename.new_filepath << std::endl;
             store_.rename_image(ev.rename.old_filepath, ev.rename.new_filepath);
+            if (current_selected_filepath_ == ev.rename.old_filepath) {
+                current_selected_filepath_ = ev.rename.new_filepath;
+            }
+            layout_dirty_ = true;
             if (db_ && db_->is_open()) {
                 std::lock_guard<std::mutex> lock(db_->get_mutex());
                 if (db_->begin_transaction()) {
@@ -2017,13 +2033,13 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         }
         case 54: {
             std::string q = win->current_selected_filepath_;
-            if (q.empty() && win->store_.size() > 0) q = win->store_.get(0).filepath;
+            if (q.empty() && win->store_.size() > 0) q = win->store_.at_position(0).filepath;
             if (!q.empty()) win->sort_by_sift_similarity(q, false);
             return;
         }
         case 55: {
             std::string q = win->current_selected_filepath_;
-            if (q.empty() && win->store_.size() > 0) q = win->store_.get(0).filepath;
+            if (q.empty() && win->store_.size() > 0) q = win->store_.at_position(0).filepath;
             if (!q.empty()) win->sort_by_sift_similarity(q, true);
             return;
         }
@@ -2118,10 +2134,10 @@ void MainWindow::sort_by_sift_similarity(const std::string& query_filepath, bool
     }
 
     current_selected_filepath_ = query_filepath;
-    viewport_->set_selected_image(0); // Query image is at top index 0
+    viewport_->set_selected_image(store_.find_by_filepath(query_filepath));
 
     if (info_panel_visible_) {
-        const auto& entry = store_.get(0);
+        const auto& entry = store_.at_position(0);
         auto dups = reconcile_and_get_duplicates(entry.content_hash, entry.filepath);
         info_panel_->display_info(entry, dups);
     }
