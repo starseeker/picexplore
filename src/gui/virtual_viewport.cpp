@@ -1045,7 +1045,7 @@ void VirtualViewport::exit_single_image() {
 }
 
 std::string VirtualViewport::get_current_single_image_path() const {
-    if (view_mode_ == ViewMode::SINGLE_IMAGE && single_idx_ < store_.count()) {
+    if (view_mode_ == ViewMode::SINGLE_IMAGE && store_.contains(single_idx_)) {
         try {
             return store_.get(single_idx_).filepath;
         } catch (...) {}

@@ -51,7 +51,10 @@ struct UpdateEvent {
         GC_PROGRESS,
         GC_COMPLETE,
         DATABASE_ERROR,
-        SCAN_ERROR
+        SCAN_ERROR,
+        FILESYSTEM_CHANGED,
+        FILESYSTEM_RENAMED,
+        WATCH_STATUS
     };
 
     Type type;

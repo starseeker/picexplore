@@ -941,30 +941,12 @@ std::vector<std::string> MainWindow::reconcile_and_get_duplicates(const std::str
     // 3. Always ensure current filepath is present
     candidate_paths.insert(current_filepath);
 
-    // 4. Verify candidates against the live filesystem
+    // Duplicate display is read-only. The reconciler alone owns path records.
     std::vector<std::string> valid_paths;
-    std::vector<std::string> stale_paths;
-
-    for (const auto& p : candidate_paths) {
-        std::error_code ec;
-        if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
-            valid_paths.push_back(p);
-        } else {
-            stale_paths.push_back(p);
-        }
-    }
-
-    // 5. Update LMDB with the verified set and prune stale file keys
-    if (db_ && db_->is_open()) {
-        std::lock_guard<std::mutex> lock(db_->get_mutex());
-        if (db_->begin_transaction()) {
-            db_->set_paths_for_hash(hash, valid_paths);
-            db_->store_key_value("file:" + current_filepath, hash);
-            for (const auto& stale : stale_paths) {
-                db_->delete_key("file:" + stale);
-            }
-            db_->commit_transaction();
-        }
+    for (const auto& path : candidate_paths) {
+        std::string current_hash;
+        if (db_ && db_->get_valid_hash_for_path(path, current_hash) && current_hash == hash)
+            valid_paths.push_back(path);
     }
 
     // 6. Return list of duplicate copies (excluding current_filepath)
@@ -1065,6 +1047,7 @@ void MainWindow::rebuild_menu() {
 
     // File menu (placed to the left of Sort)
     menubar_->add("File/Open Directory...", FL_CTRL | 'o', menu_cb, (void*)50, 0);
+    menubar_->add("File/Rescan and Retry", FL_F + 5, menu_cb, (void*)58, 0);
     menubar_->add("File/Export as PDF...",  FL_CTRL | 'e', menu_cb, (void*)60, 0);
     menubar_->add("File/Save Window Size",  0,             menu_cb, (void*)51, FL_MENU_TOGGLE | (settings_.save_window_size ? FL_MENU_VALUE : 0));
     menubar_->add("File/Garbage Collect Database", 0,      menu_cb, (void*)53, 0);
@@ -1221,7 +1204,12 @@ void MainWindow::poll_events() {
         if (ev.job.has_image() && (!store_.contains(ev.job.image_id) ||
             store_.get(ev.job.image_id).revision != ev.job.revision)) continue;
         if (ev.job.request && ev.job.request != viewer_request_) continue;
-        if (ev.type == UpdateEvent::Type::DATABASE_ERROR || ev.type == UpdateEvent::Type::SCAN_ERROR) {
+        if (ev.type == UpdateEvent::Type::FILESYSTEM_CHANGED) {
+            if (scanner_) scanner_->request_rescan();
+        } else if (ev.type == UpdateEvent::Type::FILESYSTEM_RENAMED) {
+            if (scanner_) scanner_->request_rename(ev.rename.old_filepath, ev.rename.new_filepath);
+        } else if (ev.type == UpdateEvent::Type::DATABASE_ERROR || ev.type == UpdateEvent::Type::SCAN_ERROR ||
+                   ev.type == UpdateEvent::Type::WATCH_STATUS) {
             background_error_ = ev.message;
             status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::IMAGE_DISCOVERED) {
@@ -2007,6 +1995,13 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         }
         case 50:
             win->open_directory_dialog();
+            return;
+        case 58:
+            win->background_error_.clear();
+            win->scan_complete_ = false;
+            if (win->scanner_) win->scanner_->request_rescan();
+            win->reprioritize_thumbnails();
+            win->update_statusbar();
             return;
         case 60:
             win->open_pdf_export_dialog();

@@ -1,174 +1,167 @@
 #include "inotify_watcher.h"
 #include "utils.h"
-#include <sys/inotify.h>
 #include <unistd.h>
-#include <fcntl.h>
+#include <poll.h>
 #include <filesystem>
-#include <iostream>
-#include <algorithm>
+#include <cstring>
+#include <cerrno>
 
 namespace fs = std::filesystem;
-
-InotifyWatcher::InotifyWatcher() {}
-
-InotifyWatcher::~InotifyWatcher() {
-    stop();
-}
-
-void InotifyWatcher::start(const std::string& directory, moodycamel::ConcurrentQueue<UpdateEvent>& update_queue, uint64_t session) {
-    if (inotify_fd_ != -1) return;
-    
-    directory_ = directory;
-    update_queue_ = EventPublisher(update_queue, session);
+using Clock = std::chrono::steady_clock;
+InotifyWatcher::~InotifyWatcher() { stop(); }
+void InotifyWatcher::start(const std::string& directory, moodycamel::ConcurrentQueue<UpdateEvent>& queue, uint64_t session) {
+    if (watch_thread_.joinable()) return;
+    directory_ = normalize_path(directory);
+    update_queue_ = EventPublisher(queue, session);
     stop_requested_ = false;
-    
-    inotify_fd_ = inotify_init1(IN_NONBLOCK);
+    inotify_fd_ = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (inotify_fd_ == -1) {
-        std::cerr << "Failed to initialize inotify! Real-time watching disabled." << std::endl;
+        degraded("Could not initialize file watching");
         return;
     }
-    
     watch_thread_ = std::thread(&InotifyWatcher::watch_thread_func, this);
 }
-
 void InotifyWatcher::stop() {
-    if (stop_requested_) return;
     stop_requested_ = true;
-    if (watch_thread_.joinable()) {
-        watch_thread_.join();
-    }
-    if (inotify_fd_ != -1) {
-        close(inotify_fd_);
-        inotify_fd_ = -1;
-    }
+    if (watch_thread_.joinable()) watch_thread_.join();
+    if (inotify_fd_ != -1) close(inotify_fd_);
+    inotify_fd_ = -1;
     wd_to_path_.clear();
     pending_renames_.clear();
 }
-
-#include <dirent.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-
+void InotifyWatcher::changed() { changed_ = true; }
+void InotifyWatcher::degraded(const std::string& reason) {
+    if (!degraded_) update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::WATCH_STATUS,
+        reason + ". Periodic scans remain active; File > Rescan retries now."));
+    degraded_ = true;
+    changed();
+}
 void InotifyWatcher::add_watch_recursive(const std::string& path) {
     if (stop_requested_ || is_cache_or_db_path(path)) return;
-
-    // Safety cap: don't exhaust kernel inotify watch table on massive directories
-    if (wd_to_path_.size() >= 16384) return;
-
-    int wd = inotify_add_watch(inotify_fd_, path.c_str(), 
-        IN_CLOSE_WRITE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE);
-    if (wd == -1) {
-        // Silently skip unreadable directories or if inotify table full
+    auto add = [this](const std::string& dir) {
+        if (wd_to_path_.size() >= 16384) { degraded("File watch limit reached"); return; }
+        int wd = inotify_add_watch(inotify_fd_, dir.c_str(), IN_CLOSE_WRITE | IN_DELETE | IN_MOVED_FROM |
+            IN_MOVED_TO | IN_CREATE | IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF | IN_ONLYDIR | IN_DONT_FOLLOW);
+        if (wd < 0) { degraded("Cannot watch " + dir + ": " + std::strerror(errno)); return; }
+        wd_to_path_[wd] = dir;
+    };
+    add(path);
+    std::error_code ec;
+    fs::recursive_directory_iterator it(path, fs::directory_options::none, ec), end;
+    if (ec) degraded("Cannot enumerate watched directories in " + path);
+    while (it != end && !stop_requested_) {
+        const std::string child = it->path().string();
+        std::error_code status_error;
+        if (is_cache_or_db_path(child)) it.disable_recursion_pending();
+        else if (it->is_directory(status_error) && !it->is_symlink(status_error)) add(child);
+        it.increment(ec);
+        if (ec) degraded("Some directories could not be watched");
+    }
+}
+void InotifyWatcher::remove_subtree(const std::string& path) {
+    for (auto it = wd_to_path_.begin(); it != wd_to_path_.end();) {
+        if (path_is_within(it->second, path)) {
+            inotify_rm_watch(inotify_fd_, it->first);
+            it = wd_to_path_.erase(it);
+        } else ++it;
+    }
+}
+void InotifyWatcher::expire_renames() {
+    const auto now = Clock::now();
+    for (auto it = pending_renames_.begin(); it != pending_renames_.end();) {
+        if (now - it->second.time >= std::chrono::milliseconds(250)) {
+            if (it->second.directory) remove_subtree(it->second.path);
+            it = pending_renames_.erase(it);
+            changed();
+        } else ++it;
+    }
+}
+void InotifyWatcher::handle_event(const inotify_event& event) {
+    // Overflow and watch lifecycle events have no filename.
+    if (event.mask & IN_Q_OVERFLOW) {
+        degraded("File notifications overflowed; reconciling the directory");
+        rebuild_ = true;
         return;
     }
-    wd_to_path_[wd] = path;
-    
-    DIR* dir = opendir(path.c_str());
-    if (!dir) return;
-
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != nullptr) {
-        if (stop_requested_) break;
-        if (wd_to_path_.size() >= 16384) break;
-
-        // Skip . and ..
-        if (entry->d_name[0] == '.' && (entry->d_name[1] == '\0' || (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
-            continue;
-        }
-
-        bool is_dir = (entry->d_type == DT_DIR);
-        if (entry->d_type == DT_UNKNOWN || entry->d_type == DT_LNK) {
-            struct stat st;
-            std::string sub = path + "/" + entry->d_name;
-            if (lstat(sub.c_str(), &st) == 0 && S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode)) {
-                is_dir = true;
-            } else {
-                is_dir = false;
-            }
-        }
-
-        if (is_dir) {
-            std::string subpath = path + "/" + entry->d_name;
-            if (!is_cache_or_db_path(subpath)) {
-                add_watch_recursive(subpath);
-            }
-        }
+    const auto entry = wd_to_path_.find(event.wd);
+    if (entry == wd_to_path_.end()) return;
+    const std::string dir = entry->second;
+    if (event.mask & IN_IGNORED) { wd_to_path_.erase(entry); changed(); return; }
+    if (event.mask & (IN_UNMOUNT | IN_DELETE_SELF | IN_MOVE_SELF)) {
+        changed();
+        if (dir == directory_ || (event.mask & IN_UNMOUNT)) rebuild_ = true;
+        if (event.mask & IN_UNMOUNT) degraded("A watched filesystem was unmounted");
     }
-    closedir(dir);
+    if (event.len == 0) return;
+    const std::string path = (fs::path(dir) / event.name).lexically_normal().string();
+    if (is_cache_or_db_path(path)) return;
+    const bool directory = event.mask & IN_ISDIR;
+    // Pair all names: editors commonly rename a non-image temporary file over an image.
+    if (event.mask & IN_MOVED_FROM) {
+        pending_renames_[event.cookie] = {path, directory, Clock::now()};
+        return;
+    }
+    if (event.mask & IN_MOVED_TO) {
+        auto from = pending_renames_.find(event.cookie);
+        if (from != pending_renames_.end()) {
+            const std::string old_path = from->second.path;
+            if (directory) for (auto& watch : wd_to_path_)
+                if (path_is_within(watch.second, old_path)) watch.second = path + watch.second.substr(old_path.size());
+            auto rename = UpdateEvent::make_image_renamed(old_path, path);
+            rename.type = UpdateEvent::Type::FILESYSTEM_RENAMED;
+            update_queue_.enqueue(std::move(rename));
+            pending_renames_.erase(from);
+        }
+        if (directory) add_watch_recursive(path);
+        changed();
+    } else if (event.mask & (IN_CREATE | IN_CLOSE_WRITE | IN_DELETE | IN_ATTRIB)) {
+        if (directory && (event.mask & IN_CREATE)) add_watch_recursive(path);
+        if (directory && (event.mask & IN_DELETE)) remove_subtree(path);
+        changed();
+    }
 }
-
 void InotifyWatcher::watch_thread_func() {
     add_watch_recursive(directory_);
-
-    const size_t buf_size = 8192;
-    char buffer[buf_size] __attribute__((aligned(__alignof__(struct inotify_event))));
-    
+    // Rescan after watch installation closes the initial scan/registration race.
+    changed();
+    auto retry_at = Clock::now() + std::chrono::seconds(10);
+    alignas(inotify_event) char buffer[65536];
     while (!stop_requested_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        
-        ssize_t len = read(inotify_fd_, buffer, buf_size);
-        if (len <= 0) {
-            // Clean up old pending renames that didn't get an IN_MOVED_TO (moved outside)
-            if (!pending_renames_.empty()) {
-                for (const auto& pair : pending_renames_) {
-                    update_queue_.enqueue(UpdateEvent::make_image_deleted(pair.second));
-                }
-                pending_renames_.clear();
+        pollfd fd{inotify_fd_, POLLIN, 0};
+        const int ready = poll(&fd, 1, 100);
+        if (ready < 0 && errno != EINTR) { degraded("File watcher read failed"); break; }
+        for (;;) {
+            ssize_t len = read(inotify_fd_, buffer, sizeof(buffer));
+            if (len <= 0) {
+                if (len < 0 && errno != EAGAIN && errno != EINTR) degraded("File watcher read failed");
+                break;
             }
-            continue;
+            for (size_t offset = 0; offset + sizeof(inotify_event) <= size_t(len);) {
+                const auto& event = *reinterpret_cast<const inotify_event*>(buffer + offset);
+                if (offset + sizeof(event) + event.len > size_t(len)) { rebuild_ = true; changed(); break; }
+                handle_event(event);
+                offset += sizeof(event) + event.len;
+            }
+            if (stop_requested_) break;
         }
-        
-        const struct inotify_event* event;
-        for (char* ptr = buffer; ptr < buffer + len; ptr += sizeof(struct inotify_event) + event->len) {
-            event = (const struct inotify_event*)ptr;
-            
-            if (event->len == 0) continue;
-            
-            auto it = wd_to_path_.find(event->wd);
-            if (it == wd_to_path_.end()) continue;
-            
-            std::string dir_path = it->second;
-            std::string full_path = fs::path(dir_path + "/" + event->name).lexically_normal().string();
-            
-            if (is_cache_or_db_path(full_path)) continue;
-
-            if (event->mask & IN_ISDIR) {
-                if (event->mask & (IN_CREATE | IN_MOVED_TO)) {
-                    add_watch_recursive(full_path);
-                }
-                continue;
-            }
-            
-            if (!is_image_file(full_path)) continue;
-            
-            if (event->mask & IN_CLOSE_WRITE) {
-                int w = 0, h = 0;
-                if (get_image_info(full_path, &w, &h) && w > 0 && h > 0) {
-                    double ar = static_cast<double>(w) / h;
-                    uintmax_t fsize = 0, ftime = 0;
-                    try {
-                        fsize = fs::file_size(full_path);
-                        ftime = std::chrono::duration_cast<std::chrono::seconds>(fs::last_write_time(full_path).time_since_epoch()).count();
-                    } catch (...) {}
-                    update_queue_.enqueue(UpdateEvent::make_image_discovered(full_path, "", w, h, ar, fsize, ftime, ThumbQuality::NONE));
-                }
-            } else if (event->mask & IN_DELETE) {
-                update_queue_.enqueue(UpdateEvent::make_image_deleted(full_path));
-            } else if (event->mask & IN_MOVED_FROM) {
-                pending_renames_[event->cookie] = full_path;
-            } else if (event->mask & IN_MOVED_TO) {
-                auto rit = pending_renames_.find(event->cookie);
-                if (rit != pending_renames_.end()) {
-                    update_queue_.enqueue(UpdateEvent::make_image_renamed(rit->second, full_path));
-                    pending_renames_.erase(rit);
-                } else {
-                    int w = 0, h = 0;
-                    if (get_image_info(full_path, &w, &h) && w > 0 && h > 0) {
-                        double ar = static_cast<double>(w) / h;
-                        update_queue_.enqueue(UpdateEvent::make_image_discovered(full_path, "", w, h, ar));
-                    }
-                }
-            }
+        expire_renames();
+        if (rebuild_ || (degraded_ && Clock::now() >= retry_at)) {
+            rebuild_ = false;
+            degraded_ = false;
+            // Rebuild the descriptor set too: after overflow, a path can now name a
+            // different inode while its old watch still follows a moved-out directory.
+            close(inotify_fd_);
+            inotify_fd_ = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+            wd_to_path_.clear();
+            pending_renames_.clear();
+            if (inotify_fd_ < 0) { degraded("Could not restart file watching"); break; }
+            add_watch_recursive(directory_);
+            retry_at = Clock::now() + std::chrono::seconds(10);
+            changed();
+        }
+        if (changed_) {
+            update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::FILESYSTEM_CHANGED, ""));
+            changed_ = false;
         }
     }
 }

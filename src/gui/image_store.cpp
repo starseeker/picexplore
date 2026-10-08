@@ -694,6 +694,7 @@ ImageStore ImageStore::snapshot() const {
         ImageEntry entry;
         entry.index = id;
         entry.revision = source.revision;
+        entry.file_stamp = source.file_stamp;
         entry.filepath = source.filepath;
         entry.content_hash = source.content_hash;
         entry.original_width = source.original_width;

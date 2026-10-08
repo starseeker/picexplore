@@ -81,9 +81,16 @@ int main() {
     // Reopening validates on-disk bytes instead of trusting cached paths.
     write_jpeg(file, 7, 9, 22);
     ScanCoordinator reopened(root, queue, base + "/cache.db");
-    reopened.start(); scan(); reopened.stop();
+    reopened.start(); scan();
     assert(catalog.get(id).original_width == 7);
     assert(catalog.get(id).original_height == 9);
+    // An unreadable subtree is an incomplete scan, not evidence that its files vanished.
+    fs::permissions(root, fs::perms::none);
+    reopened.request_rescan(); scan();
+    assert(catalog.contains(id));
+    assert(db.get_hash_for_path(file, hash));
+    fs::permissions(root, fs::perms::owner_all);
+    reopened.stop();
     assert(path_is_within("/tmp/dir/file.jpg", "/tmp/dir"));
     assert(!path_is_within("/tmp/dir-other/file.jpg", "/tmp/dir"));
     assert(!is_cache_or_db_path("/tmp/picexplore-photos/a.jpg"));

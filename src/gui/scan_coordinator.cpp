@@ -61,6 +61,12 @@ void ScanCoordinator::rename(DatabaseManager& db, const std::string& from, const
 bool ScanCoordinator::reconcile(DatabaseManager& db) {
     std::unordered_set<std::string> seen;
     bool complete = true, retry = false;
+    std::unordered_multimap<std::string, std::string> identities;
+    auto identity = [](const FileStamp& stamp) {
+        return std::to_string(stamp.device) + ":" + std::to_string(stamp.inode);
+    };
+    for (const auto& item : known_) if (item.second.stamp.valid)
+        identities.emplace(identity(item.second.stamp), item.first);
     std::error_code ec;
     fs::recursive_directory_iterator it(directory_, fs::directory_options::none, ec), end;
     if (ec) {
@@ -82,6 +88,17 @@ bool ScanCoordinator::reconcile(DatabaseManager& db) {
             if (read_file_stamp(path, before)) {
                 seen.insert(path);
                 auto known = known_.find(path);
+                if (known == known_.end()) {
+                    const auto candidates = identities.equal_range(identity(before));
+                    for (auto candidate = candidates.first; candidate != candidates.second; ++candidate) {
+                        FileStamp previous;
+                        if (candidate->second != path && !read_file_stamp(candidate->second, previous) && errno == ENOENT) {
+                            rename(db, candidate->second, path);
+                            known = known_.find(path);
+                            break;
+                        }
+                    }
+                }
                 if (known == known_.end() || known->second.stamp != before || known->second.width == 0) {
                     Record record;
                     record.stamp = before;
