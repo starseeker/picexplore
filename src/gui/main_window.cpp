@@ -1383,6 +1383,11 @@ void MainWindow::poll_events() {
             if (gc_thread_.joinable()) {
                 gc_thread_.join();
             }
+            if (ev.gc.pruned < 0) {
+                background_error_ = "Cache cleanup failed. Check permissions and free disk space, then retry.";
+                update_statusbar();
+                continue;
+            }
             std::string msg = "  Garbage Collection Complete: Checked " + std::to_string(ev.gc.checked) +
                               ", pruned " + std::to_string(ev.gc.pruned) + " stale entries.";
             statusbar_->copy_label(msg.c_str());
@@ -2312,7 +2317,7 @@ void MainWindow::start_garbage_collection() {
     EventPublisher publisher(update_queue_, session_id_, &gc_stop_requested_);
     gc_thread_ = std::thread([this, db_p, cache_d, publisher]() {
         DatabaseManager db;
-        int checked = 0, total = 0, pruned = 0;
+        int checked = 0, total = 0, pruned = -1;
         if (db.open(db_p)) {
             pruned = db.garbage_collect(
                 cache_d,

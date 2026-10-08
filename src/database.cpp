@@ -737,11 +737,11 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
 
 	// Process batch in a single transaction
 	{
-	    std::lock_guard<std::mutex> lock(db_mutex_);
-
-	    if (!begin_transaction()) {
+        WriteTransaction transaction(*this);
+	    if (!transaction) {
 		fprintf(stderr, "Error: Failed to begin transaction for batch write\n");
-		continue;
+        stop_processing_ = true;
+        break;
 	    }
 
 	    bool batch_success = true;
@@ -768,12 +768,8 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
 		}
 	    }
 
-	    if (batch_success) {
-		commit_transaction();
-		write_count.fetch_add(batch.size());
-	    } else {
-		abort_transaction();
-	    }
+        if (batch_success && transaction.commit()) write_count.fetch_add(batch.size());
+        else { stop_processing_ = true; break; }
 	}
     }
 }
@@ -869,7 +865,7 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
     timer.stop("Parallel Image Processing");
 
     reporter.update_status("Scanning complete");
-    return processed_count.load();
+    return stop_processing_.load() ? -1 : processed_count.load();
 }
 
 int DatabaseManager::scan_directory(const std::string& directory, Timer& timer, StatusReporter& reporter) {
@@ -1253,140 +1249,76 @@ void DatabaseManager::apply_orientation_transform(unsigned char* data, int& widt
 }
 
 int DatabaseManager::garbage_collect(const std::string& tile_cache_dir,
-                                     std::function<void(int checked, int total, int pruned)> progress_cb,
-                                     std::atomic<bool>* stop_flag) {
-    if (!is_open_) return 0;
-
-    struct HashRecord {
-        std::string hash;
-        std::vector<std::string> paths;
-    };
-    std::vector<HashRecord> hash_records;
-    std::vector<std::pair<std::string, std::string>> file_mappings; // {filepath, hash}
-
+        std::function<void(int, int, int)> progress_cb, std::atomic<bool>* stop_flag) {
+    if (!is_open_) return -1;
+    std::map<std::string, std::vector<std::string>> candidates;
     {
-        MDB_txn* read_txn = nullptr;
-        MDB_dbi read_dbi;
+        ReadTransaction read(env_);
+        if (!read.txn) return -1;
         MDB_cursor* cursor = nullptr;
-
-        if (mdb_txn_begin(env_, nullptr, MDB_RDONLY, &read_txn) == 0 &&
-            mdb_dbi_open(read_txn, nullptr, 0, &read_dbi) == 0 &&
-            mdb_cursor_open(read_txn, read_dbi, &cursor) == 0) {
-
-            MDB_val key, data;
-            int rc = mdb_cursor_get(cursor, &key, &data, MDB_FIRST);
-            while (rc == 0) {
-                if (stop_flag && stop_flag->load()) break;
-                std::string_view k((const char*)key.mv_data, key.mv_size);
-                std::string_view v((const char*)data.mv_data, data.mv_size);
-
-                if (k.rfind("file:", 0) == 0) {
-                    file_mappings.emplace_back(std::string(k.substr(5)), std::string(v));
-                } else if (k.length() > 6 && k.substr(k.length() - 6) == ":paths") {
-                    std::string h(k.substr(0, k.length() - 6));
-                    hash_records.push_back({h, parse_paths(std::string(v))});
-                } else if (k.length() > 5 && k.substr(k.length() - 5) == ":path") {
-                    std::string h(k.substr(0, k.length() - 5));
-                    hash_records.push_back({h, parse_paths(std::string(v))});
-                }
-                rc = mdb_cursor_get(cursor, &key, &data, MDB_NEXT);
-            }
-
-            mdb_cursor_close(cursor);
-            mdb_txn_abort(read_txn);
+        if (mdb_cursor_open(read.txn, dbi_, &cursor)) return -1;
+        MDB_val key, value;
+        int rc = mdb_cursor_get(cursor, &key, &value, MDB_FIRST);
+        while (!rc) {
+            if (stop_flag && stop_flag->load()) { mdb_cursor_close(cursor); return 0; }
+            const std::string k(static_cast<char*>(key.mv_data), key.mv_size);
+            const std::string v(static_cast<char*>(value.mv_data), value.mv_size);
+            if (k.rfind("file:", 0) == 0) candidates[v].push_back(k.substr(5));
+            else if (k.size() > 6 && k.compare(k.size() - 6, 6, ":paths") == 0) candidates[k.substr(0, k.size() - 6)];
+            else if (k.size() > 5 && k.compare(k.size() - 5, 5, ":path") == 0) candidates[k.substr(0, k.size() - 5)];
+            rc = mdb_cursor_get(cursor, &key, &value, MDB_NEXT);
         }
+        mdb_cursor_close(cursor);
+        if (rc != MDB_NOTFOUND) return -1;
     }
-
-    int total_items = static_cast<int>(hash_records.size());
-    int checked_items = 0;
-    int pruned_hashes = 0;
-
-    std::vector<std::string> hashes_to_delete;
-    std::vector<std::pair<std::string, std::vector<std::string>>> hashes_to_update;
-    std::vector<std::string> stale_file_keys;
-
-    // Check all hash records against filesystem
-    for (const auto& rec : hash_records) {
+    int checked = 0, pruned = 0;
+    for (const auto& candidate : candidates) {
         if (stop_flag && stop_flag->load()) break;
-
-        std::vector<std::string> valid_paths;
-        for (const auto& p : rec.paths) {
+        if (progress_cb) progress_cb(checked, candidates.size(), pruned);
+        const auto& hash = candidate.first;
+        // Re-read the current path set under the writer lock. A snapshot taken
+        // before a scan/rename must never replace newer reverse mappings.
+        WriteTransaction tx(*this);
+        if (!tx) return -1;
+        auto paths = get_paths_for_hash(hash);
+        paths.insert(paths.end(), candidate.second.begin(), candidate.second.end());
+        std::sort(paths.begin(), paths.end()); paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+        std::vector<std::string> retained;
+        for (const auto& path : paths) {
+            std::string mapped;
+            const bool mapped_here = get_hash_for_path(path, mapped) && mapped == hash;
+            if (!mapped.empty() && mapped != hash) continue;
             std::error_code ec;
-            if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
-                valid_paths.push_back(p);
+            const auto status = fs::status(path, ec);
+            const bool missing = ec == std::errc::no_such_file_or_directory ||
+                ec == std::errc::not_a_directory || (!ec && !fs::exists(status));
+            if (missing) {
+                if (mapped_here && !remove_file_record(path)) return -1;
             } else {
-                stale_file_keys.push_back("file:" + p);
+                // Permission, I/O and mount errors are not evidence of deletion.
+                retained.push_back(path);
             }
         }
-
-        if (valid_paths.empty()) {
-            hashes_to_delete.push_back(rec.hash);
-            pruned_hashes++;
-        } else if (valid_paths.size() < rec.paths.size()) {
-            hashes_to_update.push_back({rec.hash, valid_paths});
-        }
-
-        checked_items++;
-        if (progress_cb && (checked_items % 50 == 0 || checked_items == total_items)) {
-            progress_cb(checked_items, total_items, pruned_hashes);
-        }
-    }
-
-    // Check all file: mappings
-    for (const auto& [fpath, fhash] : file_mappings) {
-        if (stop_flag && stop_flag->load()) break;
-        std::error_code ec;
-        if (!fs::exists(fpath, ec) || !fs::is_regular_file(fpath, ec)) {
-            stale_file_keys.push_back("file:" + fpath);
-        }
-    }
-
-    // Apply database cleanup in a write transaction
-    {
-        std::lock_guard<std::mutex> lock(db_mutex_);
-        if (begin_transaction()) {
-            for (const auto& key : stale_file_keys) {
-                delete_key(key);
+        const bool removed = retained.empty();
+        if (removed) {
+            for (const char* suffix : {"paths", "path", "meta", "32", "64", "128", "256", "512", "1024", "2048", "4096", "8192", "sq64", "sq128", "sift", "render-policy"})
+                if (!delete_key(hash + ":" + suffix)) return -1;
+        } else if (!set_paths_for_hash(hash, retained)) return -1;
+        if (!tx.commit()) return -1;
+        if (removed) {
+            ++pruned;
+            // Cache keys are names, never filesystem paths.
+            if (!tile_cache_dir.empty() && !hash.empty() && hash != "." && hash != ".." &&
+                hash.find_first_of("/\\") == std::string::npos) {
+                std::error_code ec;
+                fs::remove_all(fs::path(tile_cache_dir) / "tiles" / hash, ec);
+                if (ec) return -1;
             }
-            for (const auto& [h, vpaths] : hashes_to_update) {
-                set_paths_for_hash(h, vpaths);
-            }
-            for (const auto& h : hashes_to_delete) {
-                delete_key(h + ":paths");
-                delete_key(h + ":path");
-                delete_key(h + ":meta");
-                delete_key(h + ":32");
-                delete_key(h + ":64");
-                delete_key(h + ":128");
-                delete_key(h + ":256");
-                delete_key(h + ":512");
-                delete_key(h + ":1024");
-                delete_key(h + ":2048");
-                delete_key(h + ":sq64");
-                delete_key(h + ":sq128");
-                delete_key(h + ":sift");
-            }
-            commit_transaction();
         }
+        ++checked;
     }
-
-    // Clean up cached tile directories on disk
-    if (!tile_cache_dir.empty()) {
-        for (const auto& h : hashes_to_delete) {
-            try {
-                fs::path tile_path = fs::path(tile_cache_dir) / "tiles" / h;
-                if (fs::exists(tile_path)) {
-                    fs::remove_all(tile_path);
-                }
-            } catch (...) {}
-        }
-    }
-
-    if (progress_cb) {
-        progress_cb(checked_items, total_items, pruned_hashes);
-    }
-
-    return pruned_hashes;
+    if (progress_cb) progress_cb(checked, candidates.size(), pruned);
+    return pruned;
 }
 
 bool DatabaseManager::store_sift_features(const std::string& hash, const SiftFeatureData& data) {

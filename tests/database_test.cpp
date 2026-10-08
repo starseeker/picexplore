@@ -413,6 +413,32 @@ int main() {
     assert(!db_gc.get_image_metadata("hash_stale", dummy_meta));
     assert(!fs::exists(gc_tile_dir + "/tiles/hash_stale"));
 
+    {
+        DatabaseManager::WriteTransaction tx(db_gc);
+        assert(tx);
+        assert(db_gc.store_key_value("file:" + stale_file, "hash_revived"));
+        assert(db_gc.add_path_for_hash("hash_revived", stale_file));
+        assert(db_gc.store_key_data("hash_revived:128", {7, 8, 9}));
+        assert(tx.commit());
+    }
+    bool revived = false;
+    const auto revived_file = gc_test_dir + "/revived.jpg";
+    const int second_gc = db_gc.garbage_collect(gc_tile_dir, [&](int, int, int) {
+        if (revived) return;
+        revived = true;
+        std::ofstream(revived_file) << "live";
+        DatabaseManager peer;
+        assert(peer.open(gc_db_path));
+        DatabaseManager::WriteTransaction tx(peer);
+        assert(tx);
+        assert(peer.store_key_value("file:" + revived_file, "hash_revived"));
+        assert(peer.add_path_for_hash("hash_revived", revived_file));
+        assert(tx.commit());
+    });
+    assert(second_gc == 0);
+    assert(db_gc.get_paths_for_hash("hash_revived") == std::vector<std::string>{revived_file});
+    assert(db_gc.get_key_data("hash_revived:128", thumb));
+
     db_gc.close();
     fs::remove(gc_db_path);
     fs::remove_all(gc_test_dir);
