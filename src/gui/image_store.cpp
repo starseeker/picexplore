@@ -34,47 +34,37 @@ void ImageStore::clear() {
 }
 
 size_t ImageStore::add_image(const std::string& filepath, double aspect_ratio,
-                             int width, int height,
-                             uintmax_t file_size, uintmax_t file_timestamp) {
-    auto it = path_to_index_.find(filepath);
-    if (it != path_to_index_.end()) {
-        size_t idx = it->second;
-        auto& entry = entries_[idx];
-        if (aspect_ratio > 0.0) {
-            entry.aspect_ratio = aspect_ratio;
+                             int width, int height, uintmax_t file_size,
+                             uintmax_t file_timestamp, const std::string& hash,
+                             const FileStamp& stamp) {
+    size_t idx = find_by_filepath(filepath);
+    if (idx == static_cast<size_t>(-1)) {
+        idx = next_id_++;
+        entries_.emplace(idx, ImageEntry{});
+        order_.push_back(idx);
+        path_to_index_[filepath] = idx;
+    } else {
+        auto& old = entries_.at(idx);
+        if ((stamp.valid && old.file_stamp != stamp) ||
+            (!hash.empty() && old.content_hash != hash)) {
+            const auto revision = old.revision + 1;
+            decoded_rgb_memory_used_ -= old.decoded.rgb_data.size() + old.square_thumb.rgb_data.size();
+            scaled_rgb_memory_used_ -= old.scaled.rgb_data.size();
+            old = ImageEntry{};
+            old.revision = revision;
         }
-        if (width > 0 && height > 0) {
-            // Upgrade original dimensions if incoming info has higher resolution (e.g. true original size vs thumbnail)
-            if ((long long)width * height > (long long)entry.original_width * entry.original_height) {
-                entry.original_width = width;
-                entry.original_height = height;
-                entry.metadata_known = true;
-            }
-        }
-        if (file_size > 0) {
-            entry.file_size = file_size;
-        }
-        if (file_timestamp > 0) {
-            entry.file_timestamp = file_timestamp;
-        }
-        return idx;
     }
-
-    size_t idx = next_id_++;
-    ImageEntry entry;
+    auto& entry = entries_.at(idx);
     entry.filepath = filepath;
     entry.index = idx;
-    entry.aspect_ratio = aspect_ratio;
+    entry.aspect_ratio = aspect_ratio > 0 ? aspect_ratio : 1;
     entry.original_width = width;
     entry.original_height = height;
+    entry.metadata_known = width > 0 && height > 0;
     entry.file_size = file_size;
     entry.file_timestamp = file_timestamp;
-    if (width > 0 && height > 0) {
-        entry.metadata_known = true;
-    }
-    entries_.emplace(idx, std::move(entry));
-    order_.push_back(idx);
-    path_to_index_[filepath] = idx;
+    if (stamp.valid) entry.file_stamp = stamp;
+    if (!hash.empty()) entry.content_hash = hash;
     aspects_dirty_ = true;
     return idx;
 }
@@ -185,6 +175,8 @@ void ImageStore::rename_image(const std::string& old_filepath, const std::string
     remove_image(new_filepath);
     path_to_index_.erase(old_filepath);
     entries_[index].filepath = new_filepath;
+    ++entries_[index].revision;
+    entries_[index].last_requested_generation = 0;
     path_to_index_[new_filepath] = index;
     aspects_dirty_ = true;
 }
@@ -195,11 +187,7 @@ void ImageStore::set_thumbnail(size_t index, const std::string& filepath, ThumbQ
                                int width, int height) {
     if (!contains(index)) return;
     
-    // Verify the file path to handle race conditions during sorting
-    if (entries_[index].filepath != filepath) {
-        index = find_by_filepath(filepath);
-        if (index == static_cast<size_t>(-1)) return;
-    }
+    if (entries_[index].filepath != filepath) return;
     
     auto& entry = entries_[index];
     
@@ -243,10 +231,7 @@ void ImageStore::set_thumbnail_rgb(size_t index, const std::string& filepath, Th
                                    std::vector<uint8_t>&& rgb_data, int width, int height, uint64_t generation) {
     if (!contains(index)) return;
     
-    if (entries_[index].filepath != filepath) {
-        index = find_by_filepath(filepath);
-        if (index == static_cast<size_t>(-1)) return;
-    }
+    if (entries_[index].filepath != filepath) return;
     
     auto& entry = entries_[index];
     

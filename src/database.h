@@ -167,6 +167,11 @@ class DatabaseManager {
 	bool get_key_data_concurrent(const std::string& key, std::vector<uint8_t>& data) const;
 	bool get_hash_for_path(const std::string& filepath, std::string& hash_out);
 	bool get_hash_for_path_concurrent(const std::string& filepath, std::string& hash_out) const;
+    bool get_valid_hash_for_path(const std::string& filepath, std::string& hash_out,
+                                FileStamp* stamp = nullptr) const;
+    // Called inside a write transaction. Both directions and file freshness change together.
+    bool store_file_record(const std::string& filepath, const std::string& hash, const FileStamp& stamp);
+    bool remove_file_record(const std::string& filepath);
 	std::vector<std::string> get_paths_for_hash(const std::string& hash);
 	bool set_paths_for_hash(const std::string& hash, const std::vector<std::string>& paths);
 	bool add_path_for_hash(const std::string& hash, const std::string& filepath);

@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <utility>
 #include "update_events.h"
+#include "../utils.h"
 
 struct ImageEntry {
     // Identity
@@ -19,6 +20,7 @@ struct ImageEntry {
     // Stable catalog identity; never a position in the display order.
     size_t index = static_cast<size_t>(-1);
     uint64_t revision = 1;
+    FileStamp file_stamp;
 
     // Metadata
     int original_width = 0;
@@ -85,7 +87,8 @@ public:
     // Add a new image (from scan discovery or LMDB load)
     size_t add_image(const std::string& filepath, double aspect_ratio,
                      int width = 0, int height = 0,
-                     uintmax_t file_size = 0, uintmax_t file_timestamp = 0);
+                     uintmax_t file_size = 0, uintmax_t file_timestamp = 0,
+                     const std::string& hash = "", const FileStamp& stamp = {});
 
     // Remove an image (e.g. from file deletion)
     void remove_image(const std::string& filepath);

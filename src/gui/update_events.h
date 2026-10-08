@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include "../utils.h"
 #include "../third_party/concurrentqueue/concurrentqueue.h"
 
 // Thumbnail quality levels
@@ -49,7 +50,8 @@ struct UpdateEvent {
         TILE_GENERATION_PROGRESS,
         GC_PROGRESS,
         GC_COMPLETE,
-        DATABASE_ERROR
+        DATABASE_ERROR,
+        SCAN_ERROR
     };
 
     Type type;
@@ -66,6 +68,7 @@ struct UpdateEvent {
     struct {
         std::string filepath;
         std::string content_hash;
+        FileStamp stamp;
         int width;
         int height;
         double aspect_ratio;

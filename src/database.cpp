@@ -1800,3 +1800,43 @@ bool DatabaseManager::extract_sift_from_cached_thumbnail(const std::string& hash
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8 cino=N-s
+
+
+bool DatabaseManager::get_valid_hash_for_path(const std::string& filepath, std::string& hash_out,
+                                              FileStamp* stamp_out) const {
+    FileStamp current;
+    if (!read_file_stamp(filepath, current)) return false;
+    std::string value;
+    if (!get_key_value_concurrent("fileinfo:" + filepath, value)) return false;
+    std::istringstream input(value);
+    std::string version, hash;
+    FileStamp stored;
+    if (!(input >> version >> hash >> stored.device >> stored.inode >> stored.size >>
+          stored.modified_ns >> stored.changed_ns) || version != "v1") return false;
+    stored.valid = true;
+    if (stored != current) return false;
+    hash_out = hash;
+    if (stamp_out) *stamp_out = current;
+    return true;
+}
+
+bool DatabaseManager::store_file_record(const std::string& filepath, const std::string& hash,
+                                        const FileStamp& stamp) {
+    if (!txn_ || !stamp.valid || hash.empty()) return false;
+    std::string old_hash;
+    if (get_hash_for_path(filepath, old_hash) && old_hash != hash) {
+        if (!remove_path_for_hash(old_hash, filepath)) return false;
+    }
+    std::ostringstream value;
+    value << "v1 " << hash << ' ' << stamp.device << ' ' << stamp.inode << ' ' << stamp.size
+          << ' ' << stamp.modified_ns << ' ' << stamp.changed_ns;
+    return store_key_value("file:" + filepath, hash) &&
+        store_key_value("fileinfo:" + filepath, value.str()) && add_path_for_hash(hash, filepath);
+}
+
+bool DatabaseManager::remove_file_record(const std::string& filepath) {
+    if (!txn_) return false;
+    std::string old_hash;
+    if (get_hash_for_path(filepath, old_hash) && !remove_path_for_hash(old_hash, filepath)) return false;
+    return delete_key("file:" + filepath) && delete_key("fileinfo:" + filepath);
+}

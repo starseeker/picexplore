@@ -1221,22 +1221,25 @@ void MainWindow::poll_events() {
         if (ev.job.has_image() && (!store_.contains(ev.job.image_id) ||
             store_.get(ev.job.image_id).revision != ev.job.revision)) continue;
         if (ev.job.request && ev.job.request != viewer_request_) continue;
-        if (ev.type == UpdateEvent::Type::DATABASE_ERROR) {
+        if (ev.type == UpdateEvent::Type::DATABASE_ERROR || ev.type == UpdateEvent::Type::SCAN_ERROR) {
             background_error_ = ev.message;
             status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::IMAGE_DISCOVERED) {
             size_t idx = store_.add_image(ev.image.filepath, ev.image.aspect_ratio,
                                           ev.image.width, ev.image.height,
-                                          ev.image.file_size, ev.image.file_timestamp);
+                                          ev.image.file_size, ev.image.file_timestamp,
+                                          ev.image.content_hash, ev.image.stamp);
             
             store_.get(idx).best_quality = ev.image.best_quality;
-            store_.get(idx).content_hash = ev.image.content_hash;
+            if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
+                viewport_->current_single_image() == idx) {
+                enter_single_image_mode(idx, ev.image.filepath);
+            }
             layout_dirty_ = true;
             status_dirty = true;
             
             if (ev.image.best_quality == ThumbQuality::NONE) {
-                pending_db_build_.insert(idx);
-                db_build_total_++;
+                if (pending_db_build_.insert(idx).second) db_build_total_++;
                 
                 // Queue a background task to generate the thumbnail so the DB fully populates.
                 // Generation 0 ensures it is not discarded when the user scrolls.
@@ -1330,17 +1333,6 @@ void MainWindow::poll_events() {
                 viewport_->current_single_image() == removed_id) {
                 exit_single_image_mode();
             }
-            if (db_ && db_->is_open()) {
-                DatabaseManager::WriteTransaction transaction(*db_);
-                if (transaction) {
-                    std::string hash;
-                    if (db_->get_hash_for_path(ev.deletion.filepath, hash)) {
-                        db_->remove_path_for_hash(hash, ev.deletion.filepath);
-                    }
-                    db_->delete_key("file:" + ev.deletion.filepath);
-                    if (!transaction.commit()) background_error_ = "Could not update the image cache. Check disk space, then rescan.";
-                }
-            }
             layout_dirty_ = true;
             status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::IMAGE_RENAMED) {
@@ -1351,19 +1343,6 @@ void MainWindow::poll_events() {
                 current_selected_filepath_ = ev.rename.new_filepath;
             }
             layout_dirty_ = true;
-            if (db_ && db_->is_open()) {
-                DatabaseManager::WriteTransaction transaction(*db_);
-                if (transaction) {
-                    std::string hash;
-                    if (db_->get_hash_for_path(ev.rename.old_filepath, hash)) {
-                        db_->delete_key("file:" + ev.rename.old_filepath);
-                        db_->remove_path_for_hash(hash, ev.rename.old_filepath);
-                        db_->add_path_for_hash(hash, ev.rename.new_filepath);
-                        db_->store_key_value("file:" + ev.rename.new_filepath, hash);
-                    }
-                    if (!transaction.commit()) background_error_ = "Could not update the image cache. Check disk space, then rescan.";
-                }
-            }
             status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::SCAN_COMPLETE) {
             std::cout << "Scan complete." << std::endl;

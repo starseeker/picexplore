@@ -1,184 +1,173 @@
 #include "scan_coordinator.h"
-#include "utils.h"
 #include <filesystem>
-#include <iostream>
-#include <algorithm>
 #include <unordered_set>
-#include "../third_party/stb/stb_image.h"
 
 namespace fs = std::filesystem;
 
 ScanCoordinator::ScanCoordinator(const std::string& directory,
-                                 moodycamel::ConcurrentQueue<UpdateEvent>& update_queue,
-                                 const std::string& db_path, uint64_t session)
-    : directory_(directory), db_path_(db_path), update_queue_(update_queue, session), stop_requested_(false) {
-    if (db_path_.empty()) {
-        const char* home = getenv("HOME");
-        fs::path cache_dir = home ? (fs::path(home) / ".cache" / "picexplore") : fs::path("/tmp/picexplore");
-        try {
-            fs::create_directories(cache_dir);
-        } catch (...) {}
-        db_path_ = (cache_dir / "cache.db").string();
-    }
-}
-
-ScanCoordinator::~ScanCoordinator() {
-    stop();
-}
-
+        moodycamel::ConcurrentQueue<UpdateEvent>& queue, const std::string& db_path, uint64_t session)
+    : directory_(normalize_path(directory)), db_path_(db_path), update_queue_(queue, session) {}
+ScanCoordinator::~ScanCoordinator() { stop(); }
 void ScanCoordinator::start() {
+    if (worker_.joinable()) return;
     stop_requested_ = false;
-    workers_.emplace_back(&ScanCoordinator::run, this);
-    
-    int num_workers = std::thread::hardware_concurrency();
-    if (num_workers < 2) num_workers = 2;
-    active_workers_ = num_workers;
-    for (int i = 0; i < num_workers; ++i) {
-        workers_.emplace_back(&ScanCoordinator::scan_worker, this);
-    }
+    worker_ = std::thread(&ScanCoordinator::run, this);
 }
-
 void ScanCoordinator::stop() {
     stop_requested_ = true;
-    for (auto& w : workers_) {
-        if (w.joinable()) w.join();
+    wake_.notify_all();
+    if (worker_.joinable()) worker_.join();
+}
+void ScanCoordinator::request_rescan() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dirty_ = true;
+    wake_.notify_one();
+}
+void ScanCoordinator::request_rename(const std::string& from, const std::string& to) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    renames_.emplace_back(normalize_path(from), normalize_path(to));
+    dirty_ = true;
+    wake_.notify_one();
+}
+void ScanCoordinator::error(const std::string& message) {
+    update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::SCAN_ERROR, message));
+}
+
+void ScanCoordinator::rename(DatabaseManager& db, const std::string& from, const std::string& to) {
+    std::vector<std::pair<std::string, Record>> moved;
+    for (const auto& item : known_) {
+        if (path_is_within(item.first, from)) moved.push_back(item);
     }
-    workers_.clear();
+    for (const auto& item : moved) {
+        const std::string target = to + item.first.substr(from.size());
+        FileStamp stamp;
+        // Ignore an obsolete rename hint if its destination was replaced again.
+        if (!path_is_within(target, directory_) || !is_image_file(target) ||
+            !read_file_stamp(target, stamp) || stamp.device != item.second.stamp.device ||
+            stamp.inode != item.second.stamp.inode) continue;
+        if (db.is_open()) {
+            DatabaseManager::WriteTransaction tx(db);
+            if (!tx || !db.remove_file_record(item.first) || !tx.commit())
+                error("Could not update the cache after a rename. Use File > Rescan to retry.");
+        }
+        known_.erase(item.first);
+        known_[target] = item.second;
+        known_[target].stamp.valid = false; // revalidate bytes, including simultaneous edits
+        update_queue_.enqueue(UpdateEvent::make_image_renamed(item.first, target));
+    }
+}
+
+// Returns true if a short retry is useful (e.g. a file was still being written).
+bool ScanCoordinator::reconcile(DatabaseManager& db) {
+    std::unordered_set<std::string> seen;
+    bool complete = true, retry = false;
+    std::error_code ec;
+    fs::recursive_directory_iterator it(directory_, fs::directory_options::none, ec), end;
+    if (ec) {
+        // Only confirmed absence permits removal. Permission and I/O failures do not.
+        complete = ec == std::errc::no_such_file_or_directory;
+        if (!complete) error("Cannot read " + directory_ + ": " + ec.message() + ". Use File > Rescan to retry.");
+    }
+    size_t found = 0;
+    while (it != end && !stop_requested_) {
+        const auto entry = *it;
+        const std::string path = entry.path().lexically_normal().string();
+        std::error_code type_error;
+        bool is_dir = entry.is_directory(type_error);
+        if (type_error) complete = false;
+        if (is_cache_or_db_path(path, db_path_)) {
+            if (is_dir) it.disable_recursion_pending();
+        } else if (!is_dir && is_image_file(path)) {
+            FileStamp before, after;
+            if (read_file_stamp(path, before)) {
+                seen.insert(path);
+                auto known = known_.find(path);
+                if (known == known_.end() || known->second.stamp != before || known->second.width == 0) {
+                    Record record;
+                    record.stamp = before;
+                    bool identified = get_image_info(path, &record.width, &record.height);
+                    if (!db.is_open() || !db.get_valid_hash_for_path(path, record.hash))
+                        identified = identified && compute_file_hash(path, record.hash);
+                    if (!read_file_stamp(path, after) || before != after) {
+                        retry = true;
+                    } else {
+                        if (!identified) {
+                            record.width = record.height = 0;
+                            record.hash.clear();
+                            retry = true;
+                            error("Cannot identify " + path + ". The file may be incomplete or damaged; use File > Rescan to retry.");
+                        }
+                        bool changed = known == known_.end() || known->second.stamp != before ||
+                            known->second.width != record.width || known->second.hash != record.hash;
+                        if (identified && db.is_open()) {
+                            DatabaseManager::WriteTransaction tx(db);
+                            ImageMetadata meta{before.size, static_cast<uint64_t>(before.modified_ns / 1000000000), record.width, record.height};
+                            if (!tx || !db.store_file_record(path, record.hash, before) ||
+                                !db.store_image_metadata(record.hash, meta) || !tx.commit())
+                                error("Could not save image metadata. Check disk space and use File > Rescan to retry.");
+                        }
+                        known_[path] = record;
+                        if (changed) {
+                            auto event = UpdateEvent::make_image_discovered(path, record.hash,
+                                record.width, record.height, record.height > 0 ? double(record.width) / record.height : 1,
+                                before.size, before.modified_ns / 1000000000,
+                                identified ? ThumbQuality::NONE : ThumbQuality::FAILED);
+                            event.image.stamp = before;
+                            update_queue_.enqueue(std::move(event));
+                        }
+                    }
+                }
+            } else {
+                // A failed stat is not proof of deletion. Keep any existing image.
+                seen.insert(path);
+                retry = true;
+            }
+        }
+        it.increment(ec);
+        if (ec) { complete = false; error("Directory scan incomplete: " + ec.message() + ". Existing images have been kept; use File > Rescan to retry."); }
+        if (++found % 1000 == 0) update_queue_.enqueue(UpdateEvent::make_scan_progress(found));
+    }
+    if (stop_requested_) return false;
+    if (complete) {
+        // Include persisted paths on first scan, but never display them without validation.
+        std::unordered_set<std::string> candidates;
+        for (const auto& item : known_) candidates.insert(item.first);
+        if (db.is_open()) for (const auto& image : db.get_images_for_directory(directory_)) candidates.insert(image.path);
+        for (const auto& path : candidates) {
+            if (seen.count(path)) continue;
+            if (db.is_open()) {
+                DatabaseManager::WriteTransaction tx(db);
+                if (!tx || !db.remove_file_record(path) || !tx.commit())
+                    error("Could not remove a stale cache record. Use File > Rescan to retry.");
+            }
+            if (known_.erase(path)) update_queue_.enqueue(UpdateEvent::make_image_deleted(path));
+        }
+    }
+    update_queue_.enqueue(UpdateEvent::make_scan_complete());
+    return retry;
 }
 
 void ScanCoordinator::run() {
     DatabaseManager db;
-    bool db_opened = db.open(db_path_);
-    std::vector<ImageInfo> images;
-    std::unordered_set<std::string> db_paths;
-    
-    if (db_opened) {
-        images = db.get_images_for_directory(directory_);
-        if (!images.empty()) {
-            std::cout << "Loading images from database: " << db_path_ << std::endl;
-            
-            int found = 0;
-            for (const auto& img : images) {
-                if (stop_requested_) break;
-                
-                db_paths.insert(img.path);
-                
-                ThumbQuality bq = static_cast<ThumbQuality>(img.best_thumb_size);
-                
-                int actual_w = (img.orig_width > 0) ? img.orig_width : img.thumb_width;
-                int actual_h = (img.orig_height > 0) ? img.orig_height : img.thumb_height;
-                double ar = img.aspect_ratio;
-
-                UpdateEvent ev = UpdateEvent::make_image_discovered(
-                    img.path, img.hash,
-                    actual_w, actual_h, ar, 
-                    img.file_size, img.file_timestamp,
-                    bq, {}, // Skip passing jpeg data to save memory, ThumbnailPipeline will load it
-                    img.thumb_width, img.thumb_height
-                );
-                
-                update_queue_.enqueue(std::move(ev));
-                
-                found++;
-                if (found % 1000 == 0) {
-                    update_queue_.enqueue(UpdateEvent::make_scan_progress(found));
-                }
-            }
-            std::cout << "Loaded " << found << " images from database." << std::endl;
-        }
-    }
-
-    // Now scan directory for current state
-    std::unordered_set<std::string> disk_paths;
-    try {
-        fs::recursive_directory_iterator it(directory_), end;
-        while (it != end && !stop_requested_) {
-            const auto& entry = *it;
-            std::string path = entry.path().string();
-
-            if (entry.is_directory()) {
-                if (is_cache_or_db_path(path, db_path_)) {
-                    it.disable_recursion_pending();
-                }
-            } else if (entry.is_regular_file()) {
-                if (!is_cache_or_db_path(path, db_path_) && is_image_file(path)) {
-                    disk_paths.insert(path);
-                    if (db_paths.find(path) == db_paths.end()) {
-                        // New file discovered!
-                        file_queue_.enqueue(path);
-                    }
-                }
-            }
-            ++it;
-        }
-    } catch (const fs::filesystem_error& e) {
-        std::cerr << "Filesystem error: " << e.what() << std::endl;
-    }
-
-    // Reconcile removed files (in DB from last time, but no longer on disk)
-    if (db_opened) {
-        for (const auto& db_path : db_paths) {
-            if (stop_requested_) break;
-            if (disk_paths.find(db_path) == disk_paths.end()) {
-                std::cout << "File removed from disk, updating database and store: " << db_path << std::endl;
-                
-                std::lock_guard<std::mutex> lock(db.get_mutex());
-                if (db.begin_transaction()) {
-                    std::string hash;
-                    if (db.get_hash_for_path(db_path, hash)) {
-                        db.remove_path_for_hash(hash, db_path);
-                    }
-                    db.delete_key("file:" + db_path);
-                    db.commit_transaction();
-                }
-                
-                update_queue_.enqueue(UpdateEvent::make_image_deleted(db_path));
-            }
-        }
-    }
-
-    // End of traversal
-    traversal_done_ = true;
-}
-
-void ScanCoordinator::scan_worker() {
-    int found = 0;
+    if (!db_path_.empty() && !db.open(db_path_)) error("Could not open the image cache. Check permissions and use File > Rescan to retry.");
+    unsigned retries = 0;
+    bool retry = reconcile(db);
     while (!stop_requested_) {
-        std::string path;
-        if (file_queue_.try_dequeue(path)) {
-            int w = 0, h = 0;
-            if (get_image_info(path, &w, &h) && w > 0 && h > 0) {
-                std::string hash;
-                if (!compute_file_hash(path, hash)) {
-                    hash = "";
-                }
-                double ar = static_cast<double>(w) / h;
-                uintmax_t fsize = 0, ftime = 0;
-                try {
-                    fsize = fs::file_size(path);
-                    ftime = std::chrono::duration_cast<std::chrono::seconds>(
-                                fs::last_write_time(path).time_since_epoch()).count();
-                } catch (...) {}
-                UpdateEvent ev = UpdateEvent::make_image_discovered(
-                    path, hash, w, h, ar, fsize, ftime, ThumbQuality::NONE
-                );
-                update_queue_.enqueue(std::move(ev));
-                
-                found++;
-                if (found % 100 == 0) {
-                    update_queue_.enqueue(UpdateEvent::make_scan_progress(found));
-                }
+        std::vector<std::pair<std::string, std::string>> renames;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            const auto delay = retry && retries < 3 ? std::chrono::milliseconds(250 << retries++) : std::chrono::milliseconds(30000);
+            wake_.wait_for(lock, delay, [this] { return stop_requested_ || dirty_; });
+            if (stop_requested_) break;
+            if (dirty_) {
+                // Coalesce bursts, with a fixed maximum latency even under constant activity.
+                wake_.wait_for(lock, std::chrono::milliseconds(150), [this] { return stop_requested_.load(); });
+                retries = 0;
             }
-        } else {
-            if (traversal_done_ && file_queue_.size_approx() == 0) {
-                break; // Traversal done and queue empty
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            dirty_ = false;
+            renames.swap(renames_);
         }
-    }
-    
-    // Only the last worker to exit sends the complete event
-    if (--active_workers_ == 0) {
-        update_queue_.enqueue(UpdateEvent::make_scan_complete());
+        for (const auto& item : renames) rename(db, item.first, item.second);
+        retry = reconcile(db);
     }
 }

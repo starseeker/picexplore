@@ -214,26 +214,15 @@ bool is_image_file(const std::string& filepath) {
 bool is_cache_or_db_path(const std::string& path, const std::string& db_path) {
     if (path.empty()) return false;
 
-    // Fast static cache directory strings
-    static const std::string user_cache = []() {
-        const char* home = getenv("HOME");
-        if (!home) return std::string("/tmp/picexplore");
-        namespace fs = std::filesystem;
-        return (fs::path(home) / ".cache" / "picexplore").lexically_normal().string();
-    }();
-    static const std::string tmp_cache = "/tmp/picexplore";
-
+    const char* override_dir = getenv("PICEXPLORE_CACHE_DIR");
+    const char* xdg = getenv("XDG_CACHE_HOME");
+    const char* home = getenv("HOME");
+    const std::string cache = override_dir && *override_dir ? override_dir :
+        xdg && *xdg ? (std::filesystem::path(xdg) / "picexplore").string() :
+        home ? (std::filesystem::path(home) / ".cache/picexplore").string() : "/tmp/picexplore";
+    if (path_is_within(path, cache) || path_is_within(path, "/tmp/picexplore")) return true;
+    if (!db_path.empty() && (path == db_path || path == db_path + "-lock")) return true;
     std::string_view p = path;
-    if (p.rfind(user_cache, 0) == 0 || p.rfind(tmp_cache, 0) == 0) {
-        return true;
-    }
-
-    if (!db_path.empty()) {
-        std::string_view db = db_path;
-        if (p == db || p.rfind(db, 0) == 0) {
-            return true;
-        }
-    }
 
     // Fast filename check without fs::path construction
     size_t last_slash = p.find_last_of("/\\");
@@ -643,3 +632,40 @@ bool compute_file_hash(const std::string& filepath, std::string& hash_out) {
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8 cino=N-s
+
+
+#include <sys/stat.h>
+
+bool read_file_stamp(const std::string& path, FileStamp& stamp) {
+    stamp = {};
+    struct stat info{};
+    if (stat(path.c_str(), &info) != 0 || !S_ISREG(info.st_mode)) return false;
+    stamp.device = info.st_dev;
+    stamp.inode = info.st_ino;
+    stamp.size = info.st_size;
+#if defined(__APPLE__)
+    stamp.modified_ns = int64_t(info.st_mtimespec.tv_sec) * 1000000000LL + info.st_mtimespec.tv_nsec;
+    stamp.changed_ns = int64_t(info.st_ctimespec.tv_sec) * 1000000000LL + info.st_ctimespec.tv_nsec;
+#else
+    stamp.modified_ns = int64_t(info.st_mtim.tv_sec) * 1000000000LL + info.st_mtim.tv_nsec;
+    stamp.changed_ns = int64_t(info.st_ctim.tv_sec) * 1000000000LL + info.st_ctim.tv_nsec;
+#endif
+    stamp.valid = true;
+    return true;
+}
+
+std::string normalize_path(const std::string& path) {
+    std::error_code error;
+    auto absolute = std::filesystem::absolute(path, error);
+    return error ? std::filesystem::path(path).lexically_normal().string() : absolute.lexically_normal().string();
+}
+
+bool path_is_within(const std::string& path, const std::string& directory) {
+    const auto p = std::filesystem::path(path).lexically_normal();
+    const auto root = std::filesystem::path(directory).lexically_normal();
+    auto pi = p.begin();
+    for (auto ri = root.begin(); ri != root.end(); ++ri, ++pi) {
+        if (pi == p.end() || *pi != *ri) return false;
+    }
+    return true;
+}

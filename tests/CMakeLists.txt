@@ -176,6 +176,7 @@ function(add_catalog_test name)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 add_catalog_test(catalog_test)
+add_catalog_test(reconcile_test)
 
 find_program(XVFB_RUN xvfb-run)
 if(XVFB_RUN)

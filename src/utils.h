@@ -32,6 +32,22 @@
 #include <thread>
 #include <mutex>
 #include <vector>
+#include <cstdint>
+
+// Filesystem identity and freshness belong to a path, not to shared image content.
+struct FileStamp {
+    uint64_t device = 0, inode = 0, size = 0;
+    int64_t modified_ns = 0, changed_ns = 0;
+    bool valid = false;
+    bool operator==(const FileStamp& other) const {
+        return valid && other.valid && device == other.device && inode == other.inode &&
+            size == other.size && modified_ns == other.modified_ns && changed_ns == other.changed_ns;
+    }
+    bool operator!=(const FileStamp& other) const { return !(*this == other); }
+};
+bool read_file_stamp(const std::string& path, FileStamp& stamp);
+std::string normalize_path(const std::string& path);
+bool path_is_within(const std::string& path, const std::string& directory);
 
 // Timer class for measuring execution time of different phases
 class Timer {

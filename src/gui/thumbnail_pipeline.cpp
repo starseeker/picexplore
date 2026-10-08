@@ -103,13 +103,15 @@ void ThumbnailPipeline::worker_thread() {
 
 bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade) {
     try {
-        std::string hash = req.hash;
-        if (hash.empty() && db_.is_open()) {
-            db_.get_hash_for_path_concurrent(req.filepath, hash);
+        FileStamp before, after;
+        if (!read_file_stamp(req.filepath, before)) return false;
+        std::string hash;
+        if (!db_.is_open() || !db_.get_valid_hash_for_path(req.filepath, hash)) {
+            if (!compute_file_hash(req.filepath, hash)) return false;
         }
-        if (hash.empty()) {
-            compute_file_hash(req.filepath, hash);
-        }
+        // A request names a source version. Never decode new bytes under an old hash.
+        if ((!req.hash.empty() && req.hash != hash) ||
+            !read_file_stamp(req.filepath, after) || before != after) return false;
 
         std::vector<uint8_t> jpeg_data;
         bool target_found = false;
@@ -172,6 +174,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
             std::vector<uint8_t> rgb_decoded;
             int dec_w = 0, dec_h = 0;
             if (decode_jpeg(jpeg_data.data(), jpeg_data.size(), rgb_decoded, dec_w, dec_h)) {
+                if (!read_file_stamp(req.filepath, after) || before != after) return false;
                 update_queue_.enqueue(UpdateEvent::make_thumb_rgb_ready(
                     req.image_index, req.filepath, hash, found_quality, std::vector<uint8_t>(rgb_decoded), dec_w, dec_h, req.generation
                 ), req.token);
@@ -315,6 +318,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
         if (img) stbi_image_free(img);
         img = nullptr;
 
+        if (!read_file_stamp(req.filepath, after) || before != after || stop_requested_) return false;
         std::vector<uint8_t> jpeg_data_out = encode_jpeg(resized.data(), target_w, target_h, 85);
 
         if (db_.is_open() && !hash.empty()) {
@@ -327,8 +331,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
                 else key = hash + ":" + std::to_string(static_cast<int>(req.target_quality));
 
                 if (db_.store_key_data(key, jpeg_data_out)) {
-                    db_.add_path_for_hash(hash, req.filepath);
-                    db_.store_key_value("file:" + req.filepath, hash);
+                    // Only the reconciler owns path records; jobs write immutable content caches.
 
                     // Also ensure square thumbnail is cached in DB if we didn't just write it
                     if (!sq128_jpeg.empty()) {
