@@ -144,6 +144,7 @@ public:
     void mark_visible(const std::vector<size_t>& visible_indices);
 
 private:
+    friend struct CatalogTestAccess;
     std::unordered_map<size_t, ImageEntry> entries_;
     std::vector<size_t> order_;
     size_t next_id_ = 0;

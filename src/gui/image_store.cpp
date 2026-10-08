@@ -593,56 +593,23 @@ void ImageStore::mark_visible(const std::vector<size_t>& visible_indices) {
 }
 
 void ImageStore::evict_memory_if_needed() {
-    if (decoded_rgb_memory_used_ <= MAX_DECODED_MEMORY && scaled_rgb_memory_used_ <= MAX_SCALED_MEMORY) {
-        return;
-    }
-
-    while ((decoded_rgb_memory_used_ > MAX_DECODED_MEMORY || 
-            scaled_rgb_memory_used_ > MAX_SCALED_MEMORY) && !lru_list_.empty()) {
-        
-        // Find least recently used that is NOT visible
-        bool found = false;
+    while ((decoded_rgb_memory_used_ > MAX_DECODED_MEMORY || scaled_rgb_memory_used_ > MAX_SCALED_MEMORY) && !lru_list_.empty()) {
+        auto victim = std::prev(lru_list_.end());
+        // Prefer off-screen entries, but visibility is not permission to exceed
+        // the byte budget (a treemap may expose the entire catalog at once).
         for (auto it = lru_list_.rbegin(); it != lru_list_.rend(); ++it) {
-            size_t idx = *it;
-            if (currently_visible_set_.find(idx) == currently_visible_set_.end()) {
-                // Evict this one
-                auto& entry = entries_[idx];
-                decoded_rgb_memory_used_ -= entry.decoded.rgb_data.size();
-                scaled_rgb_memory_used_ -= entry.scaled.rgb_data.size();
-                decoded_rgb_memory_used_ -= entry.square_thumb.rgb_data.size();
-                
-                entry.decoded.rgb_data.clear();
-                entry.decoded.rgb_data.shrink_to_fit();
-                entry.decoded.width = 0;
-                entry.decoded.height = 0;
-                entry.decoded.quality = ThumbQuality::NONE;
-                entry.best_quality = ThumbQuality::NONE; 
-                
-                entry.square_thumb.rgb_data.clear();
-                entry.square_thumb.rgb_data.shrink_to_fit();
-                entry.square_thumb.width = 0;
-                entry.square_thumb.height = 0;
-                entry.square_thumb.quality = ThumbQuality::NONE;
-
-                entry.scaled.rgb_data.clear();
-                entry.scaled.rgb_data.shrink_to_fit();
-                entry.scaled.width = 0;
-                entry.scaled.height = 0;
-                entry.scaled.layout_width = 0;
-                entry.scaled.layout_height = 0;
-                entry.scaled.quality = ThumbQuality::NONE;
-                
-                auto map_it = lru_map_.find(idx);
-                if (map_it != lru_map_.end()) {
-                    lru_list_.erase(map_it->second);
-                    lru_map_.erase(map_it);
-                }
-                
-                found = true;
-                break;
-            }
+            if (!currently_visible_set_.count(*it)) { victim = std::prev(it.base()); break; }
         }
-        if (!found) break; // Everything is visible, can't evict
+        const auto id = *victim;
+        auto& entry = entries_.at(id);
+        decoded_rgb_memory_used_ -= entry.decoded.rgb_data.size() + entry.square_thumb.rgb_data.size();
+        scaled_rgb_memory_used_ -= entry.scaled.rgb_data.size();
+        entry.decoded = {};
+        entry.square_thumb = {};
+        entry.scaled = {};
+        entry.best_quality = ThumbQuality::NONE;
+        lru_map_.erase(id);
+        lru_list_.erase(victim);
     }
 }
 

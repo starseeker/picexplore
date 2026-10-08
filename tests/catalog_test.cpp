@@ -2,7 +2,26 @@
 #include <cassert>
 #include <stdexcept>
 
+struct CatalogTestAccess {
+    static void check_visible_budget() {
+        ImageStore store;
+        store.MAX_DECODED_MEMORY = 64;
+        store.MAX_SCALED_MEMORY = 64;
+        std::vector<size_t> visible;
+        for (int i = 0; i < 8; ++i) visible.push_back(store.add_image(std::to_string(i), 1));
+        store.mark_visible(visible);
+        for (auto id : visible) {
+            store.set_thumbnail_rgb(id, store.get(id).filepath, ThumbQuality::SQUARE_64,
+                std::vector<uint8_t>(48, 42), 4, 4, 1);
+            assert(store.decoded_rgb_memory_used_ <= store.MAX_DECODED_MEMORY);
+            assert(store.scaled_rgb_memory_used_ <= store.MAX_SCALED_MEMORY);
+        }
+        assert(!store.get(visible.back()).square_thumb.rgb_data.empty());
+    }
+};
+
 int main() {
+    CatalogTestAccess::check_visible_budget();
     ImageStore store;
     const auto a = store.add_image("a.jpg", 1, 10, 10);
     const auto b = store.add_image("b.jpg", 2, 20, 10);
