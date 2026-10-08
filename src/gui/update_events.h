@@ -48,6 +48,7 @@ struct UpdateEvent {
         FULL_RES_FAILED,
         JOB_CANCELLED,
         TILES_READY,
+        TILE_AVAILABLE,
         SCAN_PROGRESS,
         SCAN_COMPLETE,
         TILE_GENERATION_PROGRESS,

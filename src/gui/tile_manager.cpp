@@ -1,230 +1,208 @@
 #include "tile_manager.h"
-#include <iostream>
-#include <png.h>
-#include <cstring>
-#include <chrono>
-#include <xxhash.h>
 #include "utils.h"
-#include "../third_party/stb/stb_image_write.h"
-#include "../third_party/stb/stb_image.h"
+#include "stb_image.h"
+#include "stb_image_write.h"
+#include <png.h>
+#include <filesystem>
+#include <fstream>
+#include <unistd.h>
 
-static std::string resolve_tile_hash(const std::string& hash, const std::string& filepath) {
-    if (!hash.empty()) return hash;
-
-    std::string h;
-    if (compute_file_hash(filepath, h)) return h;
-    return "";
+namespace fs = std::filesystem;
+TileManager::TileManager(moodycamel::ConcurrentQueue<UpdateEvent>& queue, uint64_t session)
+    : publisher_(queue, session) {
+    generator_ = std::thread(&TileManager::generate_worker, this);
+    reader_ = std::thread(&TileManager::read_worker, this);
 }
-
-TileManager::TileManager(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue, uint64_t session)
-    : update_queue_(update_queue, session) {
-    worker_ = std::thread(&TileManager::worker_thread, this);
-}
-
 TileManager::~TileManager() {
-    stop_requested_ = true;
-    if (worker_.joinable()) {
-        worker_.join();
-    }
+    stop_ = true;
+    cancel();
+    if (generator_.joinable()) generator_.join();
+    if (reader_.joinable()) reader_.join();
 }
-
 void TileManager::init(const std::string& cache_dir) {
     cache_dir_ = cache_dir + "/tiles";
-    std::filesystem::create_directories(cache_dir_);
 }
-
-void TileManager::request_tiles(size_t image_index, const std::string& filepath, const std::string& hash, uint64_t revision, uint64_t request) {
-    JobToken token{update_queue_.session(), image_index, revision, request};
-    std::string eff_hash = resolve_tile_hash(hash, filepath);
-
-    {
-        std::lock_guard<std::mutex> lock(ready_mutex_);
-        if (ready_hashes_.count(eff_hash)) {
-            // Already generated!
-            update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::TILES_READY, ""), token); // Using empty rgb as tiled signal
-            return;
-        }
-    }
-    
-    // Check if it already exists on disk
-    std::string marker_path = cache_dir_ + "/" + eff_hash + "/ready.marker";
-    if (std::filesystem::exists(marker_path)) {
-        std::lock_guard<std::mutex> lock(ready_mutex_);
-        ready_hashes_.insert(eff_hash);
-        update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::TILES_READY, ""), token);
-        return;
-    }
-
-    TileRequest req;
-    req.token = token;
-    req.image_index = image_index;
-    req.filepath = filepath;
-    req.hash = eff_hash;
-    request_queue_.enqueue(req);
+void TileManager::cancel() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++sequence_;
+    pending_ = false;
+    reads_.clear(); pending_reads_.clear(); failed_reads_.clear();
+    wake_.notify_all();
 }
-
+bool TileManager::current(const Request& req) const { return !stop_ && req.sequence == sequence_; }
+void TileManager::request_tiles(size_t id, const std::string& path, const std::string& hash, uint64_t revision, uint64_t request) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++sequence_;
+    active_ = {{publisher_.session(), id, revision, request}, path, hash, sequence_.load()};
+    reads_.clear(); pending_reads_.clear(); failed_reads_.clear();
+    pending_ = true;
+    wake_.notify_all();
+}
 bool TileManager::are_tiles_ready(const std::string& hash) const {
-    std::string marker_path = cache_dir_ + "/" + hash + "/ready.marker";
-    return std::filesystem::exists(marker_path);
+    std::lock_guard<std::mutex> lock(mutex_);
+    return ready_.count(hash) != 0;
 }
-
-std::vector<uint8_t> TileManager::get_tile(const std::string& hash, int tx, int ty, int zoom_level, int& out_w, int& out_h) {
-    std::string key = hash + "_z" + std::to_string(zoom_level) + "_" + std::to_string(tx) + "_" + std::to_string(ty);
-    
-    {
-        std::lock_guard<std::mutex> lock(cache_mutex_);
-        auto it = tile_cache_map_.find(key);
-        if (it != tile_cache_map_.end()) {
-            // Move to front
-            tile_cache_.splice(tile_cache_.begin(), tile_cache_, it->second);
-            out_w = tile_cache_.front().w;
-            out_h = tile_cache_.front().h;
-            return tile_cache_.front().rgb;
-        }
+std::shared_ptr<const TileManager::Tile> TileManager::get_tile(const std::string& hash, int tx, int ty, int zoom) {
+    if (tx < 0 || ty < 0 || zoom != 0) return {};
+    const std::string name = "z0_" + std::to_string(tx) + "_" + std::to_string(ty) + ".jpg";
+    const std::string key = hash + "/" + name;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto cached = cache_map_.find(key);
+    if (cached != cache_map_.end()) {
+        cache_.splice(cache_.begin(), cache_, cached->second);
+        return cached->second->tile;
     }
-
-    std::string tile_path = cache_dir_ + "/" + hash + "/z" + std::to_string(zoom_level) + "_" + std::to_string(tx) + "_" + std::to_string(ty) + ".jpg";
-    if (!std::filesystem::exists(tile_path)) return {};
-    
-    int channels;
-    unsigned char* data = stbi_load(tile_path.c_str(), &out_w, &out_h, &channels, 3);
-    if (!data) return {};
-    
-    std::vector<uint8_t> rgb_data(data, data + (out_w * out_h * 3));
-    stbi_image_free(data);
-    
-    {
-        std::lock_guard<std::mutex> lock(cache_mutex_);
-        tile_cache_.push_front({key, rgb_data, out_w, out_h});
-        tile_cache_map_[key] = tile_cache_.begin();
-        
-        if (tile_cache_.size() > MAX_CACHE_TILES) {
-            auto last = tile_cache_.end();
-            last--;
-            tile_cache_map_.erase(last->key);
-            tile_cache_.pop_back();
-        }
-    }
-    
-    return rgb_data;
+    if (hash != active_.hash || !ready_.count(hash) || reads_.size() >= MAX_PENDING_READS ||
+        pending_reads_.count(key) || failed_reads_.count(key)) return {};
+    pending_reads_.insert(key);
+    reads_.push_back({active_, key, cache_dir_ + "/" + hash + "/v2/" + name});
+    wake_.notify_all();
+    return {};
 }
-
-void TileManager::worker_thread() {
-    while (!stop_requested_) {
-        TileRequest req;
-        if (request_queue_.try_dequeue(req)) {
-            const auto probe = probe_image(req.filepath);
-            if (probe && !probe.supports_tiles) {
-                update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::FULL_RES_FAILED,
-                    "Full-resolution tiles are unavailable for this format. Showing the overview."), req.token);
+void TileManager::fail(const Request& req, const std::string& message) {
+    if (current(req)) publisher_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::FULL_RES_FAILED, message), req.token);
+}
+void TileManager::read_worker() {
+    while (!stop_) {
+        Read read;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            wake_.wait(lock, [this] { return stop_ || !reads_.empty(); });
+            if (stop_) break;
+            read = std::move(reads_.front()); reads_.pop_front();
+        }
+        auto tile = std::make_shared<Tile>();
+        int channels = 0;
+        // Check bounds before decoding a corrupt on-disk cache entry.
+        if (stbi_info(read.path.c_str(), &tile->width, &tile->height, &channels) &&
+            tile->width > 0 && tile->height > 0 && tile->width <= TILE_SIZE && tile->height <= TILE_SIZE) {
+            auto* data = stbi_load(read.path.c_str(), &tile->width, &tile->height, &channels, 3);
+            if (data) { tile->rgb.assign(data, data + size_t(tile->width) * tile->height * 3); stbi_image_free(data); }
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!current(read.request)) continue;
+            pending_reads_.erase(read.key);
+            if (tile->rgb.empty()) failed_reads_.insert(read.key);
+            else {
+                cache_bytes_ += tile->rgb.size();
+                cache_.push_front({read.key, tile}); cache_map_[read.key] = cache_.begin();
+                while (cache_bytes_ > MAX_CACHE_BYTES) {
+                    auto last = std::prev(cache_.end());
+                    cache_bytes_ -= last->tile->rgb.size(); cache_map_.erase(last->key); cache_.erase(last);
+                }
+            }
+        }
+        if (tile->rgb.empty()) {
+            std::error_code ec;
+            fs::remove(fs::path(read.path).parent_path() / "ready.marker", ec);
+            fail(read.request, "A cached tile is missing or damaged. Use F5 to regenerate it.");
+        }
+        else publisher_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::TILE_AVAILABLE, ""), read.request.token);
+    }
+}
+void TileManager::generate_worker() {
+    while (!stop_) {
+        Request req;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            wake_.wait(lock, [this] { return stop_ || pending_; });
+            if (stop_) break;
+            req = active_; pending_ = false;
+        }
+        try {
+            const auto probe = probe_image(req.path);
+            if (!probe || !probe.supports_tiles) {
+                fail(req, "Full-resolution tiles are unavailable for this format. Showing the overview.");
                 continue;
             }
-            if (generate_tiles(req.image_index, req.filepath, req.hash, req.token)) {
-                std::lock_guard<std::mutex> lock(ready_mutex_);
-                ready_hashes_.insert(req.hash);
-                // We use empty rgb_data with w=0, h=0 to signal that tiles are ready
-                update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::TILES_READY, ""), req.token);
-            } else if (!stop_requested_) {
-                update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::FULL_RES_FAILED,
-                    "Could not generate image tiles. Check the source image and cache permissions."), req.token);
+            if (req.hash.empty()) { fail(req, "Image identity is unavailable. Use F5 to rescan."); continue; }
+            const auto dir = fs::path(cache_dir_) / req.hash / "v2";
+            int version = 0, w = 0, h = 0;
+            std::ifstream marker(dir / "ready.marker");
+            marker >> version >> w >> h;
+            bool valid = version == 2 && w == probe.width && h == probe.height;
+            // Validate all expected tiles so a retry repairs interrupted/manual cache damage.
+            if (valid) for (int y = 0; y < (h + TILE_SIZE - 1) / TILE_SIZE && valid; ++y)
+                for (int x = 0; x < (w + TILE_SIZE - 1) / TILE_SIZE && valid; ++x) {
+                    std::error_code ec;
+                    auto path = dir / ("z0_" + std::to_string(x) + "_" + std::to_string(y) + ".jpg");
+                    int tw = 0, th = 0, channels = 0;
+                    valid = fs::is_regular_file(path, ec) && stbi_info(path.c_str(), &tw, &th, &channels) &&
+                        tw == std::min(TILE_SIZE, w - x * TILE_SIZE) && th == std::min(TILE_SIZE, h - y * TILE_SIZE);
+                }
+            if (!current(req)) continue;
+            if (!valid && !generate_tiles(req)) {
+                fail(req, "Could not generate image tiles. Check the source image and cache permissions.");
+                continue;
             }
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (!current(req)) continue;
+                ready_.insert(req.hash);
+            }
+            publisher_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::TILES_READY, ""), req.token);
+        } catch (const std::exception& e) { fail(req, e.what()); }
     }
 }
 
-bool TileManager::generate_tiles(size_t image_index, const std::string& filepath, const std::string& hash, JobToken token) {
-    std::string eff_hash = resolve_tile_hash(hash, filepath);
-    std::string out_dir = cache_dir_ + "/" + eff_hash;
-    std::filesystem::create_directories(out_dir);
-
-    FILE *fp = fopen(filepath.c_str(), "rb");
-    if (!fp) return false;
-    
-    unsigned char header[8];
-    if (fread(header, 1, 8, fp) != 8 || png_sig_cmp(header, 0, 8)) {
-        fclose(fp);
-        return false;
-    }
-
-    png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+bool TileManager::generate_tiles(const Request& req) {
+    FileStamp before, after;
+    std::string hash;
+    if (!read_file_stamp(req.path, before) || !compute_file_hash(req.path, hash) || hash != req.hash) return false;
+    const fs::path parent = fs::path(cache_dir_) / req.hash;
+    const fs::path temporary = parent / ("building-" + std::to_string(getpid()) + "-" + std::to_string(req.sequence));
+    fs::create_directories(temporary);
+    struct Cleanup { fs::path path; ~Cleanup() { std::error_code ec; fs::remove_all(path, ec); } } cleanup{temporary};
+    FILE* file = fopen(req.path.c_str(), "rb");
+    if (!file) return false;
+    png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+    if (!png) { fclose(file); return false; }
     png_infop info = png_create_info_struct(png);
-    if (setjmp(png_jmpbuf(png))) {
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(fp);
-        return false;
-    }
-    png_init_io(png, fp);
-    png_set_sig_bytes(png, 8);
+    if (!info) { png_destroy_read_struct(&png, nullptr, nullptr); fclose(file); return false; }
+    std::vector<uint8_t> stripe, tile;
+    std::string tile_path;
+    auto close = [&] { png_destroy_read_struct(&png, &info, nullptr); fclose(file); };
+    if (setjmp(png_jmpbuf(png))) { close(); return false; }
+    png_init_io(png, file);
     png_read_info(png, info);
-
-    int width = png_get_image_width(png, info);
-    int height = png_get_image_height(png, info);
-    png_byte color_type = png_get_color_type(png, info);
-    png_byte bit_depth  = png_get_bit_depth(png, info);
-
-    if (bit_depth == 16) png_set_strip_16(png);
-    if (color_type == PNG_COLOR_TYPE_PALETTE) png_set_palette_to_rgb(png);
-    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) png_set_expand_gray_1_2_4_to_8(png);
+    const int width = png_get_image_width(png, info), height = png_get_image_height(png, info);
+    if (width <= 0 || height <= 0 || uint64_t(width) * TILE_SIZE * 3 > 128ULL * 1024 * 1024 ||
+        png_get_interlace_type(png, info) != PNG_INTERLACE_NONE) { close(); return false; }
+    const auto color = png_get_color_type(png, info);
+    if (png_get_bit_depth(png, info) == 16) png_set_strip_16(png);
+    if (color == PNG_COLOR_TYPE_PALETTE) png_set_palette_to_rgb(png);
+    if (color == PNG_COLOR_TYPE_GRAY && png_get_bit_depth(png, info) < 8) png_set_expand_gray_1_2_4_to_8(png);
     if (png_get_valid(png, info, PNG_INFO_tRNS)) png_set_tRNS_to_alpha(png);
-    if (color_type == PNG_COLOR_TYPE_RGB || color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_PALETTE)
-        png_set_filler(png, 0xFF, PNG_FILLER_AFTER);
-    if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
-        png_set_gray_to_rgb(png);
-
+    if (color == PNG_COLOR_TYPE_GRAY || color == PNG_COLOR_TYPE_GRAY_ALPHA) png_set_gray_to_rgb(png);
+    if ((color & PNG_COLOR_MASK_ALPHA) || png_get_valid(png, info, PNG_INFO_tRNS)) png_set_strip_alpha(png);
     png_read_update_info(png, info);
-
-    int cols = (width + TILE_SIZE - 1) / TILE_SIZE;
-    int rows = (height + TILE_SIZE - 1) / TILE_SIZE;
-
-    std::vector<uint8_t> stripe(width * TILE_SIZE * 3, 0);
-    int row_bytes = png_get_rowbytes(png, info);
-    std::vector<png_byte> row_buf(row_bytes);
-
-    for (int ty = 0; ty < rows; ty++) {
-        if (stop_requested_) break;
-        
-        // Report progress every row chunk
-        update_queue_.enqueue(UpdateEvent::make_tile_progress(image_index, filepath, ty, rows), token);
-        int current_tile_height = std::min(TILE_SIZE, height - ty * TILE_SIZE);
-        
-        for (int y = 0; y < current_tile_height; y++) {
-            png_read_row(png, row_buf.data(), NULL);
-            for (int x = 0; x < width; x++) {
-                stripe[(y * width + x) * 3 + 0] = row_buf[x * 4 + 0];
-                stripe[(y * width + x) * 3 + 1] = row_buf[x * 4 + 1];
-                stripe[(y * width + x) * 3 + 2] = row_buf[x * 4 + 2];
-            }
+    if (png_get_rowbytes(png, info) != size_t(width) * 3) { close(); return false; }
+    stripe.resize(size_t(width) * TILE_SIZE * 3);
+    const int rows = (height + TILE_SIZE - 1) / TILE_SIZE;
+    for (int ty = 0; ty < rows; ++ty) {
+        if (!current(req)) { close(); return false; }
+        const int th = std::min(TILE_SIZE, height - ty * TILE_SIZE);
+        for (int y = 0; y < th; ++y) png_read_row(png, stripe.data() + size_t(y) * width * 3, nullptr);
+        for (int tx = 0; tx < (width + TILE_SIZE - 1) / TILE_SIZE; ++tx) {
+            const int tw = std::min(TILE_SIZE, width - tx * TILE_SIZE);
+            tile.resize(size_t(tw) * th * 3);
+            for (int y = 0; y < th; ++y) std::copy_n(stripe.data() + (size_t(y) * width + tx * TILE_SIZE) * 3,
+                tw * 3, tile.data() + size_t(y) * tw * 3);
+            tile_path = (temporary / ("z0_" + std::to_string(tx) + "_" + std::to_string(ty) + ".jpg")).string();
+            if (!stbi_write_jpg(tile_path.c_str(), tw, th, 3, tile.data(), 85)) { close(); return false; }
         }
-        
-        for (int tx = 0; tx < cols; tx++) {
-            int current_tile_width = std::min(TILE_SIZE, width - tx * TILE_SIZE);
-            std::vector<uint8_t> tile_rgb(current_tile_width * current_tile_height * 3, 0);
-            
-            for (int y = 0; y < current_tile_height; y++) {
-                memcpy(tile_rgb.data() + y * current_tile_width * 3,
-                       stripe.data() + (y * width + tx * TILE_SIZE) * 3,
-                       current_tile_width * 3);
-            }
-            
-            // Generate z0 tile (full resolution)
-            std::string out_path = out_dir + "/z0_" + std::to_string(tx) + "_" + std::to_string(ty) + ".jpg";
-            stbi_write_jpg(out_path.c_str(), current_tile_width, current_tile_height, 3, tile_rgb.data(), 80);
-        }
+        publisher_.enqueue(UpdateEvent::make_tile_progress(req.token.image_id, req.path, ty + 1, rows), req.token);
     }
-
-    png_destroy_read_struct(&png, &info, NULL);
-    fclose(fp);
-    
-    if (!stop_requested_) {
-        // Create marker
-        FILE* marker = fopen((out_dir + "/ready.marker").c_str(), "w");
-        if (marker) {
-            fprintf(marker, "%d %d\n", width, height);
-            fclose(marker);
-        }
-        return true;
-    }
-    return false;
+    png_read_end(png, info);
+    close();
+    if (!current(req) || !read_file_stamp(req.path, after) || before != after) return false;
+    std::ofstream marker(temporary / "ready.marker");
+    marker << "2 " << width << ' ' << height << '\n'; marker.close();
+    if (!marker) return false;
+    std::error_code ec;
+    fs::remove_all(parent / "v2", ec);
+    if (ec) return false;
+    fs::rename(temporary, parent / "v2", ec);
+    return !ec;
 }

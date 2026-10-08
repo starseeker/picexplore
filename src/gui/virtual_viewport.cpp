@@ -1204,7 +1204,7 @@ void VirtualViewport::draw_single_image() {
 
     bool draw_tiles = (tile_manager_ && full_res_ready_ && zoom_ >= 0.14f);
 
-    if (img_data && img_w > 0 && img_h > 0 && (!draw_tiles || !tile_manager_)) {
+    if (img_data && img_w > 0 && img_h > 0) {
         fl_push_clip(x(), y(), w(), h());
 
         float target_orig_w = (orig_w > 0) ? (float)orig_w : (float)img_w;
@@ -1287,9 +1287,10 @@ void VirtualViewport::draw_single_image() {
 
         for (int ty = start_ty; ty <= end_ty; ty++) {
             for (int tx = start_tx; tx <= end_tx; tx++) {
-                int tw, th;
-                std::vector<uint8_t> rgb = tile_manager_->get_tile(tile_hash_, tx, ty, 0, tw, th);
-                if (!rgb.empty()) {
+                auto tile = tile_manager_->get_tile(tile_hash_, tx, ty, 0);
+                if (tile) {
+                    const auto& rgb = tile->rgb;
+                    const int tw = tile->width, th = tile->height;
                     int draw_x = x() + pan_x_ + tx * scaled_ts;
                     int draw_y = y() + pan_y_ + ty * scaled_ts;
                     int draw_w = tw * scale;

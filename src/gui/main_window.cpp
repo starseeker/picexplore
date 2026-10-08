@@ -408,6 +408,8 @@ void MainWindow::start() {
 void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& filepath) {
     if (!store_.contains(raw_idx)) return;
     ++viewer_request_;
+    if (tile_manager_) tile_manager_->cancel();
+    if (full_res_loader_) full_res_loader_->cancel();
     pre_viewer_filter_ = directory_filter_;
     viewport_->enter_single_image(raw_idx);
     
@@ -495,6 +497,7 @@ void MainWindow::navigate_single_image(int delta) {
 }
 
 void MainWindow::exit_single_image_mode() {
+    if (tile_manager_) tile_manager_->cancel();
     ++viewer_request_;
     viewport_->exit_single_image();
     info_panel_->set_single_image_mode(false);
@@ -1278,6 +1281,8 @@ void MainWindow::poll_events() {
             background_error_ = ev.message + "  (F5 to retry)";
             viewport_->set_load_error(background_error_);
             status_dirty = true;
+        } else if (ev.type == UpdateEvent::Type::TILE_AVAILABLE) {
+            viewport_->redraw();
         } else if (ev.type == UpdateEvent::Type::TILES_READY) {
             if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
                 viewport_->current_single_image() == ev.job.image_id) viewport_->mark_full_res_ready();
