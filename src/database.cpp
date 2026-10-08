@@ -23,6 +23,7 @@
  */
 
 #include "database.h"
+#include "work_budget.h"
 #include "sift_feature.h"
 #include <filesystem>
 #include <algorithm>
@@ -595,6 +596,8 @@ bool DatabaseManager::generate_thumbnails(const std::string& filepath, const std
 bool DatabaseManager::process_image_file(const std::string& filepath, 
 	std::vector<WriteTask>& write_tasks,
 	Timer& timer, bool& should_skip) {
+    WorkPermit work(&stop_processing_);
+    if (!work) return false;
     should_skip = false;
     FileStamp before, after;
     std::string hash_str, policy;
@@ -780,10 +783,11 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
     if (!is_open_) return -1;
 
     if (num_threads <= 0) {
-	num_threads = std::thread::hardware_concurrency();
+	num_threads = WorkPermit::limit();
 	if (num_threads == 0) num_threads = 4; // fallback
     }
 
+    num_threads = std::clamp(num_threads, 1, int(WorkPermit::limit()));
     timer.start("Directory Scanning");
     reporter.update_status("Scanning directory for images...");
 

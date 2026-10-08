@@ -94,6 +94,9 @@ private:
     // Database build progress tracking
     int db_build_total_ = 0;
     std::unordered_set<size_t> pending_db_build_;
+    std::unordered_set<size_t> background_to_queue_;
+    bool queue_thumbnail(size_t id, const std::string& path, const std::string& hash,
+        ThumbQuality quality, bool urgent, uint64_t generation = 0, int w = 0, int h = 0, uint64_t revision = 1);
     bool scan_complete_ = false;
 
     // Directory filter (empty string = no filter = show all)

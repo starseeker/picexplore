@@ -6,7 +6,7 @@ namespace fs = std::filesystem;
 
 ScanCoordinator::ScanCoordinator(const std::string& directory,
         moodycamel::ConcurrentQueue<UpdateEvent>& queue, const std::string& db_path, uint64_t session)
-    : directory_(normalize_path(directory)), db_path_(db_path), update_queue_(queue, session) {}
+    : directory_(normalize_path(directory)), db_path_(db_path), update_queue_(queue, session, &stop_requested_) {}
 ScanCoordinator::~ScanCoordinator() { stop(); }
 void ScanCoordinator::start() {
     if (worker_.joinable()) return;
@@ -100,6 +100,8 @@ bool ScanCoordinator::reconcile(DatabaseManager& db) {
                     }
                 }
                 if (known == known_.end() || known->second.stamp != before || known->second.width == 0) {
+                    WorkPermit work(&stop_requested_);
+                    if (!work) break;
                     Record record;
                     record.stamp = before;
                     bool identified = get_image_info(path, &record.width, &record.height);

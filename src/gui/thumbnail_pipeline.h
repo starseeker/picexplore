@@ -6,6 +6,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <string>
+#include <map>
 #include "../third_party/concurrentqueue/concurrentqueue.h"
 #include "update_events.h"
 #include "../database.h"
@@ -30,7 +31,7 @@ public:
     void start(int num_workers = 4);
     void stop();
 
-    void request_thumbnail(size_t image_index, const std::string& filepath, const std::string& hash, ThumbQuality quality, bool urgent, uint64_t generation = 0, int layout_w = 0, int layout_h = 0, uint64_t revision = 1);
+    bool request_thumbnail(size_t image_index, const std::string& filepath, const std::string& hash, ThumbQuality quality, bool urgent, uint64_t generation = 0, int layout_w = 0, int layout_h = 0, uint64_t revision = 1);
     
     bool decode_jpeg(const uint8_t* data, size_t size, std::vector<uint8_t>& rgb_data, int& width, int& height);
     bool load_jpeg_scaled_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_data, int& out_w, int& out_h, int* orig_w = nullptr, int* orig_h = nullptr);
@@ -48,16 +49,12 @@ private:
     std::vector<std::thread> workers_;
     std::atomic<bool> stop_requested_;
 
-    // Queues
-    moodycamel::ConcurrentQueue<ThumbRequest> urgent_queue_;
-    moodycamel::ConcurrentQueue<ThumbRequest> normal_queue_;
-    moodycamel::ConcurrentQueue<ThumbRequest> upgrade_queue_;
-
+    // One latest request per image and priority class, bounded across the session.
+    std::map<std::pair<size_t, bool>, ThumbRequest> requests_;
+    static constexpr size_t MAX_REQUESTS = 512;
     std::mutex wake_mutex_;
     std::condition_variable wake_cv_;
-    
     std::atomic<uint64_t> current_generation_{0};
-    std::atomic<int> pending_requests_{0};
 
     void worker_thread();
     bool process_request(const ThumbRequest& req, bool is_upgrade = false);

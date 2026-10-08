@@ -385,7 +385,7 @@ void MainWindow::start() {
     tile_manager_->init(cache_dir_);
     session_->pipeline = std::make_unique<ThumbnailPipeline>(update_queue_, db_path_, session_id_);
     pipeline_ = session_->pipeline.get();
-    pipeline_->start(std::max(2u, std::min(8u, std::thread::hardware_concurrency())));
+    pipeline_->start(WorkPermit::limit());
     session_->watcher = std::make_unique<InotifyWatcher>();
     watcher_ = session_->watcher.get();
     watcher_->start(directory_, update_queue_, session_id_);
@@ -426,7 +426,7 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     ThumbQuality target_quality = static_cast<ThumbQuality>(std::max(max_overview_size, screen_dim));
     if (static_cast<int>(entry.scaled.quality) < static_cast<int>(target_quality) || entry.scaled.rgb_data.empty()) {
         entry.last_requested_generation = current_generation_;
-        pipeline_->request_thumbnail(raw_idx, filepath, entry.content_hash, target_quality, true, current_generation_, 0, 0, store_.get(raw_idx).revision);
+        queue_thumbnail(raw_idx, filepath, entry.content_hash, target_quality, true, current_generation_, 0, 0, store_.get(raw_idx).revision);
     }
 
     if (pixels > 64000000 || entry.original_width > 8192 || entry.original_height > 8192) {
@@ -632,6 +632,7 @@ void MainWindow::switch_directory(const std::string& new_dir) {
 
     store_.clear();
     pending_db_build_.clear();
+    background_to_queue_.clear();
     db_build_total_ = 0;
     scan_complete_ = false;
     current_generation_++;
@@ -1218,10 +1219,7 @@ void MainWindow::poll_events() {
             if (ev.image.best_quality == ThumbQuality::NONE) {
                 if (pending_db_build_.insert(idx).second) db_build_total_++;
                 
-                // Queue a background task to generate the thumbnail so the DB fully populates.
-                // Generation 0 ensures it is not discarded when the user scrolls.
-                pipeline_->request_thumbnail(idx, ev.image.filepath, ev.image.content_hash, 
-                                             ThumbQuality::LARGE, false, 0, 0, 0, store_.get(idx).revision);
+                background_to_queue_.insert(idx);
             }
         } else if (ev.type == UpdateEvent::Type::SCAN_PROGRESS) {
             status_dirty = true;
@@ -1357,6 +1355,17 @@ void MainWindow::poll_events() {
         }
     }
 
+    // Admission control leaves excess background work as catalog IDs, not jobs
+    // holding buffers; foreground misses are retried after capacity becomes free.
+    for (int admitted = 0; pipeline_ && admitted < 16 && !background_to_queue_.empty(); ++admitted) {
+        auto it = background_to_queue_.begin();
+        const auto id = *it;
+        if (!store_.contains(id)) { background_to_queue_.erase(it); continue; }
+        const auto& entry = store_.get(id);
+        if (!pipeline_->request_thumbnail(id, entry.filepath, entry.content_hash, ThumbQuality::LARGE,
+                false, 0, 0, 0, entry.revision)) break;
+        background_to_queue_.erase(it);
+    }
     if (status_dirty) {
         update_statusbar();
     }
@@ -1673,7 +1682,7 @@ void MainWindow::reprioritize_thumbnails() {
                 if (missing && entry.last_requested_generation < current_generation_) {
                     store_.get(item.idx).last_requested_generation = current_generation_;
                     ThumbQuality sq_q = (max_dim <= 64.0) ? ThumbQuality::SQUARE_64 : ThumbQuality::SQUARE_128;
-                    pipeline_->request_thumbnail(item.idx, entry.filepath, entry.content_hash,
+                    queue_thumbnail(item.idx, entry.filepath, entry.content_hash,
                                                  sq_q, true, current_generation_,
                                                  static_cast<int>(item.w), static_cast<int>(item.h), store_.get(item.idx).revision);
                 }
@@ -1681,7 +1690,7 @@ void MainWindow::reprioritize_thumbnails() {
                 if ((needs_upgrade || missing) && entry.last_requested_generation < current_generation_) {
                     store_.get(item.idx).last_requested_generation = current_generation_;
                     ThumbQuality req_quality = std::max(needed, entry.best_quality);
-                    pipeline_->request_thumbnail(item.idx, entry.filepath, entry.content_hash,
+                    queue_thumbnail(item.idx, entry.filepath, entry.content_hash,
                                                  req_quality, true, current_generation_,
                                                  static_cast<int>(item.w), static_cast<int>(item.h), store_.get(item.idx).revision);
                 }
@@ -1760,7 +1769,7 @@ void MainWindow::reprioritize_thumbnails() {
         if (missing_or_mismatch) {
             store_.get(idx).last_requested_generation = current_generation_;
             ThumbQuality req_quality = std::max(needed, entry.best_quality);
-            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
+            queue_thumbnail(idx, entry.filepath, entry.content_hash,
                                          req_quality, true, current_generation_,
                                          static_cast<int>(layout_w), static_cast<int>(layout_h), store_.get(idx).revision);
         }
@@ -1786,7 +1795,7 @@ void MainWindow::reprioritize_thumbnails() {
         
         if (missing_or_mismatch && entry.last_requested_generation < current_generation_) {
             store_.get(idx).last_requested_generation = current_generation_;
-            pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
+            queue_thumbnail(idx, entry.filepath, entry.content_hash,
                                          needed, false, current_generation_,
                                          static_cast<int>(layout_w), static_cast<int>(layout_h), store_.get(idx).revision);
         }
@@ -2268,7 +2277,7 @@ void MainWindow::start_garbage_collection() {
     std::string db_p = db_path_;
     std::string cache_d = cache_dir_;
 
-    EventPublisher publisher(update_queue_, session_id_);
+    EventPublisher publisher(update_queue_, session_id_, &gc_stop_requested_);
     gc_thread_ = std::thread([this, db_p, cache_d, publisher]() {
         DatabaseManager db;
         int checked = 0, total = 0, pruned = 0;
@@ -2404,3 +2413,12 @@ void MainWindow::apply_sort_order_string(const std::string& order_str) {
 
 
 
+
+bool MainWindow::queue_thumbnail(size_t id, const std::string& path, const std::string& hash,
+        ThumbQuality quality, bool urgent, uint64_t generation, int w, int h, uint64_t revision) {
+    if (pipeline_ && pipeline_->request_thumbnail(id, path, hash, quality, urgent, generation, w, h, revision)) return true;
+    if (store_.contains(id)) store_.get(id).last_requested_generation = 0;
+    reprioritize_pending_ = true;
+    last_resize_time_ = std::chrono::steady_clock::now();
+    return false;
+}

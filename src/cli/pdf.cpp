@@ -548,12 +548,13 @@ bool PDFGenerator::generate_from_store(
 
     int page_w = options.page_width_px();
     int page_h = options.page_height_px();
+    if (page_w <= 0 || page_h <= 0 || uint64_t(page_w) * page_h > 64000000) return false;
     int margin_px = options.page_margin_px();
     int layout_w = options.layout_width_px();
     int layout_h = options.layout_height_px();
 
     unsigned int hw = std::thread::hardware_concurrency();
-    int num_threads = std::clamp(static_cast<int>(hw), 1, 16);
+    int num_threads = WorkPermit::limit();
 
     if (options.layout_type == LayoutEngine::LayoutType::JUSTIFIED) {
         if (progress_cb) {
@@ -606,6 +607,8 @@ bool PDFGenerator::generate_from_store(
                             return;
                         }
 
+                        WorkPermit work(stop_requested);
+                        if (!work) { thread_cancelled = true; return; }
                         const auto& box = p_boxes[i];
                         size_t store_idx = p_indices[i];
                         const auto& entry = store.get(store_idx);
@@ -737,6 +740,8 @@ bool PDFGenerator::generate_from_store(
                         return;
                     }
 
+                    WorkPermit work(stop_requested);
+                    if (!work) { thread_cancelled = true; return; }
                     const auto& box = layout.boxes[i];
                     int bx = margin_px + static_cast<int>(box.x);
                     int by = margin_px + static_cast<int>(box.y);

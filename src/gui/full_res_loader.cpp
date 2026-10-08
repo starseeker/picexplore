@@ -6,7 +6,7 @@
 #include <algorithm>
 
 FullResLoader::FullResLoader(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue, uint64_t session)
-    : update_queue_(update_queue, session) {
+    : update_queue_(update_queue, session, &stop_requested_) {
     worker_ = std::thread(&FullResLoader::worker_thread, this);
 }
 
@@ -57,6 +57,8 @@ void FullResLoader::worker_thread() {
             has_request_ = false;
         }
 
+        WorkPermit work(&stop_requested_, true);
+        if (!work) break;
         auto decoded = decode_image(filepath, 0, 0, &stop_requested_);
         {
             std::lock_guard<std::mutex> lock(mutex_);

@@ -9,7 +9,7 @@
 
 namespace fs = std::filesystem;
 TileManager::TileManager(moodycamel::ConcurrentQueue<UpdateEvent>& queue, uint64_t session)
-    : publisher_(queue, session) {
+    : publisher_(queue, session, &stop_) {
     generator_ = std::thread(&TileManager::generate_worker, this);
     reader_ = std::thread(&TileManager::read_worker, this);
 }
@@ -71,6 +71,8 @@ void TileManager::read_worker() {
             if (stop_) break;
             read = std::move(reads_.front()); reads_.pop_front();
         }
+        WorkPermit work(&stop_, true);
+        if (!work) break;
         auto tile = std::make_shared<Tile>();
         int channels = 0;
         // Check bounds before decoding a corrupt on-disk cache entry.
@@ -111,6 +113,8 @@ void TileManager::generate_worker() {
             req = active_; pending_ = false;
         }
         try {
+            WorkPermit work(&stop_, true);
+            if (!work) break;
             const auto probe = probe_image(req.path);
             if (!probe || !probe.supports_tiles) {
                 fail(req, "Full-resolution tiles are unavailable for this format. Showing the overview.");
@@ -160,6 +164,8 @@ bool TileManager::generate_tiles(const Request& req) {
     if (!png) { fclose(file); return false; }
     png_infop info = png_create_info_struct(png);
     if (!info) { png_destroy_read_struct(&png, nullptr, nullptr); fclose(file); return false; }
+    auto memory = ByteBudget::decode().acquire(132ULL * 1024 * 1024, &stop_);
+    if (!memory) { png_destroy_read_struct(&png, &info, nullptr); fclose(file); return false; }
     std::vector<uint8_t> stripe, tile;
     std::string tile_path;
     auto close = [&] { png_destroy_read_struct(&png, &info, nullptr); fclose(file); };

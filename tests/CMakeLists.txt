@@ -180,6 +180,7 @@ add_catalog_test(reconcile_test)
 add_catalog_test(watcher_test)
 add_catalog_test(decoder_test)
 add_catalog_test(tile_test)
+add_catalog_test(work_budget_test)
 
 find_program(XVFB_RUN xvfb-run)
 if(XVFB_RUN)

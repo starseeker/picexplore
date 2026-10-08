@@ -510,7 +510,7 @@ bool ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
     results[query_position].global_vec = query_sift.global_vector;
     results[query_position].loaded = true;
 
-    unsigned int num_threads = std::max(1u, std::thread::hardware_concurrency());
+    unsigned int num_threads = WorkPermit::limit();
     std::vector<std::thread> workers;
     size_t chunk_size = (total + num_threads - 1) / num_threads;
 
@@ -530,6 +530,8 @@ bool ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
                     continue;
                 }
 
+                WorkPermit work(stop_requested);
+                if (!work) break;
                 const auto& entry = at_position(i);
                 SiftFeatureData entry_sift;
                 bool has_sift = false;

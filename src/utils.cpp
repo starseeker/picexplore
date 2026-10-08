@@ -23,6 +23,7 @@
  */
 
 #include "utils.h"
+#include "work_budget.h"
 #include <thread>
 #include <mutex>
 #include <algorithm>
@@ -849,6 +850,24 @@ DecodeResult decode_image(const std::string& path, int max_w, int max_h, const s
         (source.format == ImageFormat::OTHER && pixels > 32000000)) {
         result.status = DecodeStatus::TOO_LARGE;
         result.error = "This image exceeds the decoder memory limit; a smaller copy is required.";
+        return result;
+    }
+    uint64_t estimate = pixels * 8 + 1024 * 1024;
+    if (source.format == ImageFormat::JPEG && scaled) {
+        unsigned scale = 1;
+        while (scale < 8 && source.width / (scale * 2) >= unsigned(max_w) && source.height / (scale * 2) >= unsigned(max_h)) scale *= 2;
+        estimate = pixels / (scale * scale) * 8 + 1024 * 1024;
+    } else if (source.format == ImageFormat::PNG && source.supports_tiles) {
+        const double scale = scaled ? std::min({1.0, double(max_w) / source.width, double(max_h) / source.height}) : 1;
+        estimate = uint64_t(std::max(1, int(source.width * scale))) * std::max(1, int(source.height * scale)) * 6 + uint64_t(source.width) * 40 + 1024 * 1024;
+    } else if (source.format == ImageFormat::TIFF) estimate = pixels * 40 + 1024 * 1024;
+    else if (source.format == ImageFormat::WEBP) estimate += before.size;
+    WorkPermit work(cancelled);
+    if (!work) { result.status = DecodeStatus::CANCELLED; return result; }
+    auto memory = ByteBudget::decode().acquire(estimate, cancelled);
+    if (!memory) {
+        result.status = stopped() ? DecodeStatus::CANCELLED : DecodeStatus::TOO_LARGE;
+        result.error = "Image decoding exceeds the shared memory budget.";
         return result;
     }
     try {

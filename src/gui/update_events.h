@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include "../utils.h"
+#include "../work_budget.h"
 #include "../third_party/concurrentqueue/concurrentqueue.h"
 
 // Thumbnail quality levels
@@ -34,6 +35,7 @@ struct JobToken {
 };
 
 struct UpdateEvent {
+    std::shared_ptr<ByteBudget::Lease> queue_reservation;
     uint64_t session = 0;
     JobToken job;
     enum class Type {
@@ -323,16 +325,21 @@ struct UpdateEvent {
 class EventPublisher {
 public:
     EventPublisher() = default;
-    EventPublisher(moodycamel::ConcurrentQueue<UpdateEvent>& queue, uint64_t session = 0)
-        : queue_(&queue), session_(session) {}
+    EventPublisher(moodycamel::ConcurrentQueue<UpdateEvent>& queue, uint64_t session = 0,
+                   const std::atomic<bool>* stop = nullptr)
+        : queue_(&queue), session_(session), stop_(stop) {}
     uint64_t session() const { return session_; }
     void enqueue(UpdateEvent event, JobToken job = {}) const {
         event.session = session_;
         event.job = job;
         event.job.session = session_;
-        queue_->enqueue(std::move(event));
+        const size_t bytes = 128 * 1024 + event.thumb_rgb.rgb_data.size() + event.full_res.rgb_data.size() +
+            event.thumb.jpeg_data.size() + event.image.jpeg_data.size();
+        event.queue_reservation = ByteBudget::events().acquire(bytes, stop_);
+        if (event.queue_reservation) queue_->enqueue(std::move(event));
     }
 private:
     moodycamel::ConcurrentQueue<UpdateEvent>* queue_ = nullptr;
     uint64_t session_ = 0;
+    const std::atomic<bool>* stop_ = nullptr;
 };

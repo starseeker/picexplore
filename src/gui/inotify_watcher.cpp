@@ -12,7 +12,7 @@ InotifyWatcher::~InotifyWatcher() { stop(); }
 void InotifyWatcher::start(const std::string& directory, moodycamel::ConcurrentQueue<UpdateEvent>& queue, uint64_t session) {
     if (watch_thread_.joinable()) return;
     directory_ = normalize_path(directory);
-    update_queue_ = EventPublisher(queue, session);
+    update_queue_ = EventPublisher(queue, session, &stop_requested_);
     stop_requested_ = false;
     inotify_fd_ = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (inotify_fd_ == -1) {

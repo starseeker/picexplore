@@ -11,7 +11,7 @@
 
 ThumbnailPipeline::ThumbnailPipeline(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue,
                                      const std::string& db_path, uint64_t session)
-    : update_queue_(update_queue, session), db_path_(db_path), stop_requested_(false) {
+    : update_queue_(update_queue, session, &stop_requested_), db_path_(db_path), stop_requested_(false) {
     if (!db_path_.empty()) {
         if (!db_.open(db_path_)) {
             update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::DATABASE_ERROR,
@@ -26,7 +26,7 @@ ThumbnailPipeline::~ThumbnailPipeline() {
 
 void ThumbnailPipeline::start(int num_workers) {
     stop_requested_ = false;
-    pending_requests_ = 0;
+    if (!workers_.empty()) return;
     for (int i = 0; i < num_workers; ++i) {
         workers_.emplace_back(&ThumbnailPipeline::worker_thread, this);
     }
@@ -45,59 +45,41 @@ void ThumbnailPipeline::stop() {
 
 void ThumbnailPipeline::set_generation(uint64_t gen) {
     current_generation_ = gen;
-    // When the UI increments the generation, it means all previous urgent requests are obsolete.
-    // Clear the queue to prevent memory leaks and queue spam during continuous resizing/zooming.
-    ThumbRequest req;
-    while (urgent_queue_.try_dequeue(req)) {
-        pending_requests_--;
+    std::lock_guard<std::mutex> lock(wake_mutex_);
+    for (auto it = requests_.begin(); it != requests_.end();) {
+        if (it->second.generation && it->second.generation < gen) it = requests_.erase(it);
+        else ++it;
     }
 }
+uint64_t ThumbnailPipeline::get_generation() const { return current_generation_; }
 
-uint64_t ThumbnailPipeline::get_generation() const {
-    return current_generation_;
+bool ThumbnailPipeline::request_thumbnail(size_t id, const std::string& path, const std::string& hash,
+        ThumbQuality quality, bool urgent, uint64_t generation, int w, int h, uint64_t revision) {
+    std::lock_guard<std::mutex> lock(wake_mutex_);
+    const auto key = std::make_pair(id, urgent);
+    if (stop_requested_ || (requests_.size() >= MAX_REQUESTS && !requests_.count(key))) return false;
+    requests_[key] = {id, path, quality, hash, generation, w, h, {update_queue_.session(), id, revision, 0}};
+    wake_cv_.notify_one();
+    return true;
 }
-
-void ThumbnailPipeline::request_thumbnail(size_t image_index, const std::string& filepath, const std::string& hash, ThumbQuality quality, bool urgent, uint64_t generation, int layout_w, int layout_h, uint64_t revision) {
-    ThumbRequest req{image_index, filepath, quality, hash, generation, layout_w, layout_h, {update_queue_.session(), image_index, revision, 0}};
-    if (urgent) {
-        urgent_queue_.enqueue(req);
-    } else {
-        normal_queue_.enqueue(req);
-    }
-    pending_requests_++;
-    wake_cv_.notify_all();
-}
-
 void ThumbnailPipeline::worker_thread() {
     while (!stop_requested_) {
         ThumbRequest req;
-        bool got_req = false;
-        bool is_upgrade = false;
-
-        if (urgent_queue_.try_dequeue(req)) {
-            got_req = true;
-            is_upgrade = false;
-        } else if (normal_queue_.try_dequeue(req)) {
-            got_req = true;
-            is_upgrade = false;
-        } else if (upgrade_queue_.try_dequeue(req)) {
-            got_req = true;
-            is_upgrade = true;
-        }
-
-        if (got_req) {
-            if (req.generation > 0 && current_generation_ > req.generation + 1) {
-                pending_requests_--;
-                continue;
-            }
-            pending_requests_--;
-            process_request(req, is_upgrade);
-        } else {
+        bool urgent = false;
+        {
             std::unique_lock<std::mutex> lock(wake_mutex_);
-            wake_cv_.wait_for(lock, std::chrono::milliseconds(50), [this]() {
-                return stop_requested_ || pending_requests_ > 0;
-            });
+            wake_cv_.wait(lock, [this] { return stop_requested_ || !requests_.empty(); });
+            if (stop_requested_) break;
+            auto next = std::find_if(requests_.begin(), requests_.end(), [](const auto& item) { return item.first.second; });
+            if (next == requests_.end()) next = requests_.begin();
+            urgent = next->first.second;
+            req = std::move(next->second);
+            requests_.erase(next);
         }
+        if (req.generation && req.generation < current_generation_) continue;
+        WorkPermit work(&stop_requested_, urgent);
+        if (!work) break;
+        process_request(req);
     }
 }
 
@@ -172,6 +154,13 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
         }
 
         if (target_found && !is_upgrade) {
+            int cache_w = 0, cache_h = 0, cache_channels = 0;
+            if (!stbi_info_from_memory(jpeg_data.data(), jpeg_data.size(), &cache_w, &cache_h, &cache_channels) ||
+                cache_w <= 0 || cache_h <= 0 || uint64_t(cache_w) * cache_h > 16000000) target_found = false;
+        }
+        if (target_found && !is_upgrade) {
+            auto memory = ByteBudget::decode().acquire(64ULL * 1024 * 1024, &stop_requested_);
+            if (!memory) return false;
             std::vector<uint8_t> rgb_decoded;
             int dec_w = 0, dec_h = 0;
             if (decode_jpeg(jpeg_data.data(), jpeg_data.size(), rgb_decoded, dec_w, dec_h)) {
@@ -191,11 +180,10 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
                     }
                 }
 
-                // Enqueue upgrade to background upgrade queue so other urgent fast-cache requests are never blocked
-                upgrade_queue_.enqueue(req);
-                pending_requests_++;
-                wake_cv_.notify_one();
-                return true;
+                // The fast placeholder is visible while this bounded worker upgrades it.
+                if (req.generation && req.generation < current_generation_) return true;
+                memory.reset();
+                return process_request(req, true);
             }
         }
         auto decoded = decode_image(req.filepath, target_w, target_h, &stop_requested_);
@@ -227,8 +215,8 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
             }
         }
 
-        target_h = std::max(1, target_h);
-        target_w = std::max(1, target_w);
+        target_h = std::clamp(target_h, 1, 4096);
+        target_w = std::clamp(target_w, 1, 4096);
 
         const uint8_t* source_data = fast_decoded ? rgb_decoded.data() : img;
         std::vector<uint8_t> resized;
@@ -330,7 +318,10 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
             req.image_index, req.filepath, hash, req.target_quality, std::move(resized), target_w, target_h, req.generation
         ), req.token);
         return true;
-    } catch (...) {
+    } catch (const std::exception& e) {
+        auto event = UpdateEvent::make_thumb_failed(req.image_index, req.filepath, req.target_quality);
+        event.message = e.what();
+        update_queue_.enqueue(std::move(event), req.token);
         return false;
     }
 }
