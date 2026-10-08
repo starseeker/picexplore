@@ -159,6 +159,8 @@ private:
     std::string current_selected_filepath_;
     std::string similarity_query_filepath_;
     std::string background_error_;
+    std::string watch_status_;
+    std::chrono::steady_clock::time_point watch_status_until_{};
 
     void sort_by_sift_similarity(const std::string& query_filepath, bool high_accuracy);
 

@@ -370,6 +370,8 @@ void MainWindow::stop_session() {
     db_ = nullptr;
     UpdateEvent obsolete;
     while (update_queue_.try_dequeue(obsolete)) {}
+    watch_status_.clear();
+    watch_status_until_ = {};
 }
 
 void MainWindow::start() {
@@ -985,9 +987,15 @@ std::vector<std::string> MainWindow::reconcile_and_get_duplicates(const std::str
 
 void MainWindow::update_statusbar() {
     update_navigation();
+    const auto& diagnostic = background_error_.empty() ? watch_status_ : background_error_;
+    statusbar_->copy_tooltip(diagnostic.empty() ? nullptr : diagnostic.c_str());
     if (!background_error_.empty()) {
         statusbar_->copy_label(background_error_.c_str());
-        statusbar_->copy_tooltip(background_error_.c_str());
+        statusbar_->redraw();
+        return;
+    }
+    if (!watch_status_.empty() && std::chrono::steady_clock::now() < watch_status_until_) {
+        statusbar_->copy_label(watch_status_.c_str());
         statusbar_->redraw();
         return;
     }
@@ -1242,8 +1250,14 @@ void MainWindow::poll_events() {
             layout_dirty_ = true;
             status_dirty = true;
             if (scanner_) scanner_->request_rename(ev.rename.old_filepath, ev.rename.new_filepath);
-        } else if (ev.type == UpdateEvent::Type::DATABASE_ERROR || ev.type == UpdateEvent::Type::SCAN_ERROR ||
-                   ev.type == UpdateEvent::Type::WATCH_STATUS) {
+        } else if (ev.type == UpdateEvent::Type::WATCH_STATUS) {
+            // Automatic watch retries must not keep interrupting image information.
+            if (ev.message != watch_status_) {
+                watch_status_ = ev.message;
+                watch_status_until_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                status_dirty = true;
+            }
+        } else if (ev.type == UpdateEvent::Type::DATABASE_ERROR || ev.type == UpdateEvent::Type::SCAN_ERROR) {
             background_error_ = ev.message;
             status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::IMAGE_DISCOVERED) {
@@ -1422,6 +1436,11 @@ void MainWindow::poll_events() {
         if (!pipeline_->request_thumbnail(id, entry.filepath, entry.content_hash, ThumbQuality::LARGE,
                 false, 0, 0, 0, entry.revision)) break;
         background_to_queue_.erase(it);
+    }
+    if (watch_status_until_ != std::chrono::steady_clock::time_point{} &&
+        std::chrono::steady_clock::now() >= watch_status_until_) {
+        watch_status_until_ = {};
+        status_dirty = true;
     }
     if (status_dirty) {
         update_statusbar();
@@ -2505,8 +2524,9 @@ void MainWindow::update_navigation() {
         breadcrumbs_->copy_tooltip(location.c_str());
     }
     layout_choice_->value(static_cast<int>(active_layout_));
-    retry_button_->copy_label(background_error_.empty() ? "Rescan (F5)" : "Retry (F5)");
-    retry_button_->copy_tooltip(background_error_.empty() ? "Rescan files and retry background services" : background_error_.c_str());
+    const auto& diagnostic = background_error_.empty() ? watch_status_ : background_error_;
+    retry_button_->copy_label(diagnostic.empty() ? "Rescan (F5)" : "Retry (F5)");
+    retry_button_->copy_tooltip(diagnostic.empty() ? "Rescan files and retry background services" : diagnostic.c_str());
     if (directory_filter_.empty() && viewport_->current_mode() != VirtualViewport::ViewMode::SINGLE_IMAGE) up_button_->deactivate();
     else up_button_->activate();
 }

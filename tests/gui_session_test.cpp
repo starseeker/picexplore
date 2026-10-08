@@ -11,6 +11,51 @@
 #include <unistd.h>
 
 struct MainWindowTestAccess {
+    static void watch_status(const std::string& base) {
+        MainWindow window(640, 480, "Watch status", base + "/a", base + "/cache.db");
+        const auto id = window.store_.add_image(base + "/a/photo.jpg", 1, 32, 32);
+        window.scan_complete_ = true;
+        window.layout_dirty_ = false;
+        window.update_statusbar();
+        const std::string gallery_status = window.statusbar_->label();
+        const std::string warning = "File watch limit reached. Periodic scans remain active.";
+        auto send = [&](UpdateEvent::Type type, const std::string& message) {
+            window.update_queue_.enqueue(UpdateEvent::make_message(type, message));
+            window.poll_events();
+        };
+        auto expire = [&] {
+            window.watch_status_until_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+            window.poll_events(); // Restore image information even without a new event.
+        };
+        send(UpdateEvent::Type::WATCH_STATUS, warning);
+        assert(window.statusbar_->label() == warning);
+        const auto deadline = window.watch_status_until_;
+        send(UpdateEvent::Type::WATCH_STATUS, warning);
+        assert(window.watch_status_until_ == deadline);
+        expire();
+        assert(window.statusbar_->label() == gallery_status);
+        assert(window.statusbar_->tooltip() == warning);
+        send(UpdateEvent::Type::WATCH_STATUS, warning);
+        assert(window.statusbar_->label() == gallery_status);
+
+        window.viewport_->enter_single_image(id);
+        window.update_statusbar();
+        const std::string image_status = window.statusbar_->label();
+        assert(image_status.find("photo.jpg") != std::string::npos);
+        send(UpdateEvent::Type::WATCH_STATUS, "Could not restart file watching");
+        expire();
+        assert(window.statusbar_->label() == image_status);
+
+        send(UpdateEvent::Type::DATABASE_ERROR, "Cache unavailable");
+        send(UpdateEvent::Type::WATCH_STATUS, warning);
+        expire();
+        assert(std::string(window.statusbar_->label()) == "Cache unavailable");
+        window.viewport_->exit_single_image();
+        window.switch_directory(base + "/b");
+        assert(window.watch_status_.empty());
+        assert(window.statusbar_->tooltip() == nullptr);
+    }
+
     static void controls(const std::string& base) {
         const auto path = base + "/controls";
         std::filesystem::create_directories(path + "/album");
@@ -126,6 +171,7 @@ int main() {
     std::filesystem::create_directories(base + "/a");
     std::filesystem::create_directories(base + "/b");
     setenv("PICEXPLORE_CACHE_DIR", (base + "/settings").c_str(), 1);
+    MainWindowTestAccess::watch_status(base);
     MainWindowTestAccess::run(base);
     MainWindowTestAccess::controls(base);
     std::filesystem::remove_all(base);
