@@ -2,6 +2,7 @@
 #include "utils.h"
 #include <FL/Fl.H>
 #include <FL/Fl_Choice.H>
+#include <FL/Fl_Image_Surface.H>
 #include <FL/Fl_Menu_Button.H>
 #include <FL/fl_draw.H>
 #include "stb_image_write.h"
@@ -11,6 +12,31 @@
 #include <unistd.h>
 
 struct MainWindowTestAccess {
+    static void dense_treemap(const std::string& base) {
+        MainWindow window(640, 480, "Dense treemap", base + "/a", base + "/cache.db");
+        window.active_layout_ = LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP;
+        window.viewport_->resize(0, 0, 40, 40);
+        for (int i = 0; i < 100; ++i) {
+            window.store_.add_image(base + "/a/folder" + std::to_string(i) + "/photo.jpg", 1, 32, 32);
+        }
+        window.scan_complete_ = true;
+        window.recompute_layout(false);
+        assert(window.layout_result_.boxes.empty());
+        assert(window.layout_result_.container_boxes.size() == 100);
+        Fl_Image_Surface surface(40, 40);
+        surface.set_current();
+        surface.draw(window.viewport_);
+        const auto& folder = window.layout_result_.container_boxes.front();
+        auto* pixel = fl_read_image(nullptr,
+            static_cast<int>(folder.x + folder.w / 2),
+            static_cast<int>(folder.y + folder.h / 2), 1, 1);
+        Fl_Display_Device::display_device()->set_current();
+        assert(pixel);
+        // Collapsed folders must still render instead of an empty-state message.
+        assert(pixel[0] == 32 && pixel[1] == 34 && pixel[2] == 38);
+        delete[] pixel;
+    }
+
     static void watch_status(const std::string& base) {
         MainWindow window(640, 480, "Watch status", base + "/a", base + "/cache.db");
         const auto id = window.store_.add_image(base + "/a/photo.jpg", 1, 32, 32);
@@ -184,5 +210,6 @@ int main() {
     MainWindowTestAccess::watch_status(base);
     MainWindowTestAccess::run(base);
     MainWindowTestAccess::controls(base);
+    MainWindowTestAccess::dense_treemap(base);
     std::filesystem::remove_all(base);
 }

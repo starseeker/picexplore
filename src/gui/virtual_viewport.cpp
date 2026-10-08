@@ -405,7 +405,8 @@ void VirtualViewport::draw_treemap() {
     fl_color(fl_rgb_color(28, 28, 28)); 
     fl_rectf(x(), y(), w(), h());
 
-    if (!layout_ || layout_->boxes.empty()) {
+    // Dense hierarchies can contain visible folders with all image leaves pruned.
+    if (!layout_ || (layout_->boxes.empty() && layout_->container_boxes.empty())) {
         fl_font(FL_HELVETICA, 14);
         fl_color(fl_rgb_color(150, 150, 150));
         fl_draw("No images to display", x(), y(), w(), h(), FL_ALIGN_CENTER, nullptr, 0);
