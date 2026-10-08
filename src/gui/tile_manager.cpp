@@ -41,7 +41,7 @@ void TileManager::request_tiles(size_t image_index, const std::string& filepath,
         std::lock_guard<std::mutex> lock(ready_mutex_);
         if (ready_hashes_.count(eff_hash)) {
             // Already generated!
-            update_queue_.enqueue(UpdateEvent::make_full_res_ready(image_index, filepath, {}, 0, 0), token); // Using empty rgb as tiled signal
+            update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::TILES_READY, ""), token); // Using empty rgb as tiled signal
             return;
         }
     }
@@ -51,7 +51,7 @@ void TileManager::request_tiles(size_t image_index, const std::string& filepath,
     if (std::filesystem::exists(marker_path)) {
         std::lock_guard<std::mutex> lock(ready_mutex_);
         ready_hashes_.insert(eff_hash);
-        update_queue_.enqueue(UpdateEvent::make_full_res_ready(image_index, filepath, {}, 0, 0), token);
+        update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::TILES_READY, ""), token);
         return;
     }
 
@@ -113,11 +113,20 @@ void TileManager::worker_thread() {
     while (!stop_requested_) {
         TileRequest req;
         if (request_queue_.try_dequeue(req)) {
+            const auto probe = probe_image(req.filepath);
+            if (probe && !probe.supports_tiles) {
+                update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::FULL_RES_FAILED,
+                    "Full-resolution tiles are unavailable for this format. Showing the overview."), req.token);
+                continue;
+            }
             if (generate_tiles(req.image_index, req.filepath, req.hash, req.token)) {
                 std::lock_guard<std::mutex> lock(ready_mutex_);
                 ready_hashes_.insert(req.hash);
                 // We use empty rgb_data with w=0, h=0 to signal that tiles are ready
-                update_queue_.enqueue(UpdateEvent::make_full_res_ready(req.image_index, req.filepath, {}, 0, 0), req.token);
+                update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::TILES_READY, ""), req.token);
+            } else if (!stop_requested_) {
+                update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::FULL_RES_FAILED,
+                    "Could not generate image tiles. Check the source image and cache permissions."), req.token);
             }
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));

@@ -412,24 +412,10 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     viewport_->enter_single_image(raw_idx);
     
     auto& entry = store_.get(raw_idx);
-    if (!entry.metadata_known || entry.original_width <= 2048 || entry.original_height <= 2048) {
-        int true_w = 0, true_h = 0;
-        if (get_image_info(filepath, &true_w, &true_h) && true_w > 0 && true_h > 0) {
-            if ((long long)true_w * true_h > (long long)entry.original_width * entry.original_height) {
-                entry.original_width = true_w;
-                entry.original_height = true_h;
-                entry.aspect_ratio = (double)true_w / true_h;
-                entry.metadata_known = true;
-            }
-        }
-    }
     long long pixels = (long long)entry.original_width * entry.original_height;
     
     int screen_dim = std::max(w(), h());
-    int max_overview_size = entry.original_width > 0 ? std::min((int)entry.original_width, 8192) : 8192;
-    if (entry.content_hash.empty()) {
-        compute_file_hash(filepath, entry.content_hash);
-    }
+    int max_overview_size = entry.original_width > 0 ? std::min((int)entry.original_width, 2048) : 2048;
 
     current_selected_filepath_ = filepath;
     auto dups = reconcile_and_get_duplicates(entry.content_hash, filepath);
@@ -441,7 +427,7 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
         pipeline_->request_thumbnail(raw_idx, filepath, entry.content_hash, target_quality, true, current_generation_, 0, 0, store_.get(raw_idx).revision);
     }
 
-    if (pixels > 8192LL * 8192LL || entry.original_width > 8192 || entry.original_height > 8192 || pixels <= 0) {
+    if (pixels > 64000000 || entry.original_width > 8192 || entry.original_height > 8192) {
         // For very large images, use tile manager
         std::string label = "  Viewing: " + std::filesystem::path(filepath).filename().string() + "  [Generating Map...]";
         statusbar_->copy_label(label.c_str());
@@ -1271,6 +1257,7 @@ void MainWindow::poll_events() {
         } else if (ev.type == UpdateEvent::Type::THUMB_FAILED) {
             // Mark the entry as FAILED in the ImageStore
             store_.set_thumbnail(ev.failed.image_index, ev.failed.filepath, ThumbQuality::FAILED, nullptr, 0, 0, 0);
+            if (!ev.message.empty()) { background_error_ = ev.message + "  (F5 to retry)"; status_dirty = true; }
             changed.push_back(ev.failed.image_index);
             need_redraw = true;
             if (pending_db_build_.erase(ev.failed.image_index) > 0) {
@@ -1279,17 +1266,22 @@ void MainWindow::poll_events() {
         } else if (ev.type == UpdateEvent::Type::FULL_RES_READY) {
             if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
                 viewport_->current_single_image() == ev.full_res.image_index) {
-                if (!ev.full_res.rgb_data.empty()) {
-                    viewport_->set_full_res_image(ev.full_res.rgb_data, ev.full_res.width, ev.full_res.height);
-                } else {
-                    viewport_->mark_full_res_ready();
-                }
+                if (ev.full_res.rgb_data.empty() || ev.full_res.width <= 0 || ev.full_res.height <= 0) continue;
+                viewport_->set_full_res_image(std::move(ev.full_res.rgb_data), ev.full_res.width, ev.full_res.height);
                 
                 std::string filename = std::filesystem::path(ev.full_res.filepath).filename().string();
                 std::string label = "  Viewing: " + filename;
                 statusbar_->copy_label(label.c_str());
                 statusbar_->redraw();
             }
+        } else if (ev.type == UpdateEvent::Type::FULL_RES_FAILED) {
+            background_error_ = ev.message + "  (F5 to retry)";
+            viewport_->set_load_error(background_error_);
+            status_dirty = true;
+        } else if (ev.type == UpdateEvent::Type::TILES_READY) {
+            if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
+                viewport_->current_single_image() == ev.job.image_id) viewport_->mark_full_res_ready();
+            status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::TILE_GENERATION_PROGRESS) {
             if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
                 viewport_->current_single_image() == ev.tile_progress.image_index) {
@@ -2000,7 +1992,10 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
             win->background_error_.clear();
             win->scan_complete_ = false;
             if (win->scanner_) win->scanner_->request_rescan();
-            win->reprioritize_thumbnails();
+            if (win->viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
+                const auto id = win->viewport_->current_single_image();
+                if (win->store_.contains(id)) win->enter_single_image_mode(id, win->store_.get(id).filepath);
+            } else win->reprioritize_thumbnails();
             win->update_statusbar();
             return;
         case 60:

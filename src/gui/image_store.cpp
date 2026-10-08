@@ -191,6 +191,8 @@ void ImageStore::set_thumbnail(size_t index, const std::string& filepath, ThumbQ
     
     auto& entry = entries_[index];
     
+    if (quality == ThumbQuality::FAILED) { entry.best_quality = quality; return; }
+
     // THUMB_READY is a generation=0 background task from ScanCoordinator or initial DB load.
     // If the UI has explicitly requested a layout-perfect thumbnail, DO NOT allow this
     // generic background task to overwrite it and clear the scaled layout buffer!
@@ -486,13 +488,11 @@ bool ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
                                                 entries_[query_index].decoded.height,
                                                 query_sift);
         } else {
-            // Load and extract directly from file
-            int w = 0, h = 0, c = 0;
-            unsigned char* raw = stbi_load(query_path.c_str(), &w, &h, &c, 3);
-            if (raw) {
-                SiftFeatureEngine::extract_from_rgb(raw, w, h, query_sift);
-                stbi_image_free(raw);
-            }
+            FileStamp current;
+            if (entries_[query_index].file_stamp.valid &&
+                (!read_file_stamp(query_path, current) || current != entries_[query_index].file_stamp)) return false;
+            auto decoded = decode_image(query_path, preferred_size, preferred_size, stop_requested);
+            if (decoded) SiftFeatureEngine::extract_from_rgb(decoded.rgb.data(), decoded.width, decoded.height, query_sift);
         }
     }
 

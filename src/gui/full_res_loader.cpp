@@ -57,58 +57,20 @@ void FullResLoader::worker_thread() {
             has_request_ = false;
         }
 
-        // Decode full resolution image
-        int width = 0, height = 0;
-        std::vector<uint8_t> rgb_data;
-        bool decoded = false;
-
-        std::string ext = std::filesystem::path(filepath).extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-        if (ext == ".webp") {
-            decoded = load_webp_file(filepath, 0, 0, rgb_data, width, height);
-        } else if (ext == ".tif" || ext == ".tiff") {
-            decoded = load_tiff_file(filepath, 0, 0, rgb_data, width, height);
-        } else if (ext == ".png") {
-            decoded = load_png_file(filepath, 0, 0, rgb_data, width, height);
-        } else {
-            int channels = 0;
-            unsigned char* data = stbi_load(filepath.c_str(), &width, &height, &channels, 3);
-            if (data) {
-                rgb_data.assign(data, data + (width * height * 3));
-                stbi_image_free(data);
-                decoded = true;
-            }
+        auto decoded = decode_image(filepath, 0, 0, &stop_requested_);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (stop_requested_ || cancellation != cancellation_) continue;
         }
-        
         if (decoded) {
-            // Re-check if cancelled during decode
-            bool cancelled = false;
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (stop_requested_ || cancellation != cancellation_) {
-                    // A new request came in, so discard this result
-                    cancelled = true;
-                }
-            }
-            
-            if (!cancelled) {
-                update_queue_.enqueue(UpdateEvent::make_full_res_ready(
-                    image_index, filepath, std::move(rgb_data), width, height), token);
-            }
+            update_queue_.enqueue(UpdateEvent::make_full_res_ready(image_index, filepath,
+                std::move(decoded.rgb), decoded.width, decoded.height), token);
         } else {
-            std::cerr << "FullResLoader failed to decode: " << filepath << std::endl;
-            bool cancelled = false;
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (stop_requested_ || cancellation != cancellation_) {
-                    cancelled = true;
-                }
-            }
-            if (!cancelled) {
-                update_queue_.enqueue(UpdateEvent::make_full_res_ready(
-                    image_index, filepath, {}, 0, 0), token);
-            }
+            auto event = UpdateEvent::make_message(decoded.status == DecodeStatus::CANCELLED ?
+                UpdateEvent::Type::JOB_CANCELLED : UpdateEvent::Type::FULL_RES_FAILED, decoded.error);
+            event.full_res.image_index = image_index;
+            event.full_res.filepath = filepath;
+            update_queue_.enqueue(std::move(event), token);
         }
     }
 }

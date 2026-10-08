@@ -45,6 +45,9 @@ struct UpdateEvent {
         THUMB_GENERATION_PROGRESS,
         THUMB_FAILED,
         FULL_RES_READY,
+        FULL_RES_FAILED,
+        JOB_CANCELLED,
+        TILES_READY,
         SCAN_PROGRESS,
         SCAN_COMPLETE,
         TILE_GENERATION_PROGRESS,
@@ -275,12 +278,12 @@ struct UpdateEvent {
 
     static UpdateEvent make_full_res_ready(
         size_t index, const std::string& filepath,
-        const std::vector<uint8_t>& rgb, int w, int h) {
+        std::vector<uint8_t> rgb, int w, int h) {
         UpdateEvent ev{};
         ev.type = Type::FULL_RES_READY;
         ev.full_res.image_index = index;
         ev.full_res.filepath = filepath;
-        ev.full_res.rgb_data = rgb;
+        ev.full_res.rgb_data = std::move(rgb);
         ev.full_res.width = w;
         ev.full_res.height = h;
         return ev;

@@ -40,7 +40,8 @@ public:
     void exit_single_image();
     size_t current_single_image() const { return single_idx_; }
     
-    void set_full_res_image(const std::vector<uint8_t>& rgb, int w, int h);
+    void set_full_res_image(std::vector<uint8_t> rgb, int w, int h);
+    void set_load_error(const std::string& message) { load_error_ = message; redraw(); }
     void mark_full_res_ready();
     void set_tile_manager(class TileManager* tm, const std::string& hash, int orig_w, int orig_h);
 
@@ -105,6 +106,7 @@ private:
     std::vector<uint8_t> full_res_rgb_;
     int      full_res_w_ = 0, full_res_h_ = 0;
     bool     full_res_ready_ = false;
+    std::string load_error_;
 
     // Used for panning
     int last_drag_x_ = 0;

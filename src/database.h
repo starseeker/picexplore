@@ -64,9 +64,11 @@ struct WriteTask {
     enum TaskType {
 	STORE_PATH,
 	STORE_THUMBNAIL,
-	ADD_PATH_FOR_HASH
+	ADD_PATH_FOR_HASH,
+    STORE_FILE_RECORD
     };
 
+    FileStamp stamp;
     TaskType type;
     std::string key;
     std::vector<uint8_t> data;

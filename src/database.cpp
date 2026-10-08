@@ -596,241 +596,32 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
 	std::vector<WriteTask>& write_tasks,
 	Timer& timer, bool& should_skip) {
     should_skip = false;
-
-    std::string hash_str;
-    if (!compute_file_hash(filepath, hash_str)) {
-        fprintf(stderr, "Error: Failed to compute hash for '%s'\n", filepath.c_str());
+    FileStamp before, after;
+    std::string hash_str, policy;
+    if (get_valid_hash_for_path(filepath, hash_str) &&
+        get_key_value_concurrent(hash_str + ":render-policy", policy) && policy == "2") {
         should_skip = true;
-        return false;
+        return true;
     }
-
-    // Check if this hash already exists (duplicate detection) using non-blocking read
-    bool has_existing = false;
-    std::string dummy_val;
-    if (get_key_value_concurrent(hash_str + ":paths", dummy_val) ||
-        get_key_value_concurrent(hash_str + ":path", dummy_val)) {
-        has_existing = true;
-    }
-
-    if (has_existing) {
-        write_tasks.emplace_back(WriteTask::ADD_PATH_FOR_HASH, hash_str, filepath);
-        write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, hash_str);
-        should_skip = true;
-        return true; // Not an error, just a duplicate
-    }
-
-    auto ext = fs::path(filepath).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-    int width = 0, height = 0, channels = 3;
-    unsigned char* image_data = nullptr;
-    std::vector<uint8_t> decoded_buf;
-    bool needs_free_stbi = false;
-    bool needs_free_malloc = false;
-
-    if (ext == ".tif" || ext == ".tiff") {
-        if (load_tiff_file(filepath, 0, 0, decoded_buf, width, height)) {
-            image_data = decoded_buf.data();
-        }
-    } else if (ext == ".webp") {
-        if (load_webp_file(filepath, 0, 0, decoded_buf, width, height)) {
-            image_data = decoded_buf.data();
-        }
-    } else if (ext == ".png") {
-        int info_w, info_h, info_c;
-        if (stbi_info(filepath.c_str(), &info_w, &info_h, &info_c) && (long long)info_w * info_h > 25000000LL) {
-            if (load_png_file(filepath, 0, 0, decoded_buf, width, height)) {
-                image_data = decoded_buf.data();
-            }
-        } else {
-            image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 3);
-            if (image_data) needs_free_stbi = true;
-        }
-    } else {
-        image_data = stbi_load(filepath.c_str(), &width, &height, &channels, 3);
-        if (image_data) needs_free_stbi = true;
-    }
-
-    if (!image_data || width <= 0 || height <= 0) {
-        fprintf(stderr, "Error: Failed to load image '%s'\n", filepath.c_str());
-        if (needs_free_stbi && image_data) stbi_image_free(image_data);
-        should_skip = true;
-        return false;
-    }
-    channels = 3;
-
-    // Read EXIF orientation and apply transformation if needed
-    int orientation = get_exif_orientation(filepath);
-    if (orientation > 1) {
-        unsigned char* rgb_data = (unsigned char*)malloc(width * height * 3);
-        memcpy(rgb_data, image_data, width * height * 3);
-        apply_orientation_transform(rgb_data, width, height, orientation);
-        if (needs_free_stbi) stbi_image_free(image_data);
-        image_data = rgb_data;
-        needs_free_stbi = false;
-        needs_free_malloc = true;
-    }
-
-    // Store file path as write task
-    write_tasks.emplace_back(WriteTask::ADD_PATH_FOR_HASH, hash_str, filepath);
-    write_tasks.emplace_back(WriteTask::STORE_PATH, "file:" + filepath, hash_str);
-
-    // Store metadata write task (file size, timestamp, orig dimensions)
-    uint64_t f_size = 0, f_time = 0;
-    try {
-        f_size = fs::file_size(filepath);
-        f_time = std::chrono::duration_cast<std::chrono::seconds>(
-            fs::last_write_time(filepath).time_since_epoch()).count();
-    } catch (...) {}
-
-    ImageMetadata meta{f_size, f_time, width, height};
-    std::vector<uint8_t> meta_bytes(sizeof(ImageMetadata));
-    std::memcpy(meta_bytes.data(), &meta, sizeof(ImageMetadata));
-    write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, std::string(hash_str) + ":meta", meta_bytes);
-
-    // Generate and store thumbnails
-    std::vector<int> thumb_sizes = {32, 64, 128, 256, 512, 1024, 2048};
+    if (!read_file_stamp(filepath, before) || !compute_file_hash(filepath, hash_str)) return false;
+    auto decoded = decode_image(filepath, 2048, 2048, &stop_processing_);
+    if (!decoded || !read_file_stamp(filepath, after) || before != after) return false;
+    const int width = decoded.width, height = decoded.height;
+    const auto* image_data = decoded.rgb.data();
+    ImageMetadata meta{before.size, static_cast<uint64_t>(before.modified_ns / 1000000000),
+        decoded.source.width, decoded.source.height};
+    std::vector<uint8_t> meta_bytes(sizeof(meta));
+    std::memcpy(meta_bytes.data(), &meta, sizeof(meta));
+    write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, hash_str + ":meta", meta_bytes);
     bool thumbnails_generated = true;
-
-    if (ext == ".jpg" || ext == ".jpeg") {
-	// For JPEG files, use libjpeg-turbo with optimized scale factor grouping
-	std::map<int, std::vector<int>> scale_groups; // scale_factor -> list of thumb_sizes
-
-	// Group thumbnail sizes by their optimal scale factor
-	for (int thumb_size : thumb_sizes) {
-	    // Calculate thumbnail dimensions maintaining aspect ratio
-	    double aspect_ratio = (double)width / height;
-	    int thumb_width, thumb_height;
-
-	    if (width > height) {
-		thumb_width = thumb_size;
-		thumb_height = (int)(thumb_size / aspect_ratio);  
-	    } else {
-		thumb_height = thumb_size;
-		thumb_width = (int)(thumb_size * aspect_ratio);
-	    }
-
-	    // Skip if image is already smaller than thumbnail size
-	    if (width <= thumb_width && height <= thumb_height) {
-		continue;
-	    }
-
-	    int scale_factor = calculate_scale_factor(width, height, thumb_width, thumb_height);
-	    scale_groups[scale_factor].push_back(thumb_size);
-	}
-
-	// Process each scale factor group
-	for (const auto& group : scale_groups) {
-	    int scale_factor = group.first;
-	    const std::vector<int>& sizes = group.second;
-
-	    // Decode once for this scale factor
-	    int actual_width, actual_height;
-	    std::vector<uint8_t> rgb_thumb = decode_jpeg_thumbnail_rgb(filepath, scale_factor, &actual_width, &actual_height);
-
-	    if (!rgb_thumb.empty()) {
-		// Use this RGB data for all thumbnail sizes in this group
-		for (int thumb_size : sizes) {
-		    std::vector<uint8_t> thumb_data = encode_jpeg(rgb_thumb.data(), actual_width, actual_height, 90);
-
-		    if (!thumb_data.empty()) {
-			std::string thumb_key = std::string(hash_str) + ":" + std::to_string(thumb_size);
-			write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, thumb_key, thumb_data);
-		    } else {
-			fprintf(stderr, "Error: Failed to encode JPEG thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
-			thumbnails_generated = false;
-		    }
-		}
-	    } else {
-		// Failed to decode with libjpeg-turbo, fall back to stb_image for these sizes  
-		fprintf(stderr, "Warning: JPEG decoding failed for '%s' (scale factor %d), falling back to STB\n", filepath.c_str(), scale_factor);
-		thumbnails_generated = false;
-		break;
-	    }
-	}
-    } else {
-	// For non-JPEG files, set flag to use fallback processing
-	thumbnails_generated = false;
-    }
-
-    // Fallback processing for non-JPEG files or if libjpeg-turbo failed
-    if (!thumbnails_generated) {
-	thumbnails_generated = true; // Reset the flag
-	for (int thumb_size : thumb_sizes) {
-	    // Calculate thumbnail dimensions maintaining aspect ratio
-	    double aspect_ratio = (double)width / height;
-	    int thumb_width, thumb_height;
-
-	    if (width > height) {
-		thumb_width = thumb_size;
-		thumb_height = (int)(thumb_size / aspect_ratio);
-	    } else {
-		thumb_height = thumb_size;
-		thumb_width = (int)(thumb_size * aspect_ratio);
-	    }
-
-	    // Skip if image is already smaller than thumbnail size
-	    if (width <= thumb_width && height <= thumb_height) {
-		continue;
-	    }
-
-	    // Use stb_image_resize for non-JPEG or fallback
-	    std::vector<uint8_t> thumb_data;
-	    bool thumb_success = false;
-
-	    // Convert to RGB if needed
-	    unsigned char* rgb_data = nullptr;
-	    bool need_free_rgb = false;
-
-	    if (channels == 3) {
-		rgb_data = image_data;
-	    } else {
-		rgb_data = (unsigned char*)malloc(width * height * 3);
-		need_free_rgb = true;
-
-		for (int i = 0; i < width * height; i++) {
-		    if (channels == 1) {
-			// Grayscale to RGB
-			rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i];
-		    } else if (channels == 2) {
-			// Grayscale + Alpha to RGB (ignore alpha)
-			rgb_data[i*3] = rgb_data[i*3+1] = rgb_data[i*3+2] = image_data[i*2];
-		    } else if (channels == 4) {
-			// RGBA to RGB (ignore alpha)
-			rgb_data[i*3] = image_data[i*4];
-			rgb_data[i*3+1] = image_data[i*4+1];
-			rgb_data[i*3+2] = image_data[i*4+2];
-		    }
-		}
-	    }
-
-	    // Resize image
-	    std::vector<uint8_t> resized_rgb(thumb_width * thumb_height * 3);
-	    if (stbir_resize_uint8_linear(rgb_data, width, height, 0,
-			resized_rgb.data(), thumb_width, thumb_height, 0, STBIR_RGB)) {
-
-		// Encode as JPEG
-		thumb_data = encode_jpeg(resized_rgb.data(), thumb_width, thumb_height, 90);
-		if (!thumb_data.empty()) {
-		    thumb_success = true;
-		} else {
-		    fprintf(stderr, "Error: Failed to encode JPEG thumbnail for '%s' (size %d)\n", filepath.c_str(), thumb_size);
-		}
-	    } else {
-		fprintf(stderr, "Error: Failed to resize image for '%s' (size %d)\n", filepath.c_str(), thumb_size);
-	    }
-
-	    if (need_free_rgb) {
-		free(rgb_data);
-	    }
-
-	    if (thumb_success && !thumb_data.empty()) {
-		std::string thumb_key = std::string(hash_str) + ":" + std::to_string(thumb_size);
-		write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, thumb_key, thumb_data);
-	    } else {
-		thumbnails_generated = false;
-	    }
-	}
+    for (int size : {32, 64, 128, 256, 512, 1024, 2048}) {
+        const double scale = std::min({1.0, double(size) / width, double(size) / height});
+        const int tw = std::max(1, int(width * scale)), th = std::max(1, int(height * scale));
+        std::vector<uint8_t> rgb(size_t(tw) * th * 3);
+        if (!stbir_resize_uint8_linear(image_data, width, height, 0, rgb.data(), tw, th, 0, STBIR_RGB)) return false;
+        auto jpeg = encode_jpeg(rgb.data(), tw, th, 90);
+        if (jpeg.empty()) return false;
+        write_tasks.emplace_back(WriteTask::STORE_THUMBNAIL, hash_str + ":" + std::to_string(size), jpeg);
     }
     // Generate and store center-cropped square thumbnails for Treemap / square mosaic modes
     if (image_data && width > 0 && height > 0) {
@@ -879,11 +670,10 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
         }
     }
 
-    if (needs_free_stbi && image_data) {
-        stbi_image_free(image_data);
-    } else if (needs_free_malloc && image_data) {
-        free(image_data);
-    }
+    write_tasks.emplace_back(WriteTask::STORE_PATH, hash_str + ":render-policy", "2");
+    WriteTask record(WriteTask::STORE_FILE_RECORD, filepath, hash_str);
+    record.stamp = before;
+    write_tasks.push_back(std::move(record));
     return thumbnails_generated;
 }
 
@@ -955,7 +745,12 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
 	    for (const auto& write_task : batch) {
 		bool success = false;
 
-		if (write_task.type == WriteTask::STORE_PATH) {
+        if (write_task.type == WriteTask::STORE_FILE_RECORD) {
+            FileStamp now;
+            // A queued write must not resurrect a deleted or replaced path.
+            success = !read_file_stamp(write_task.key, now) || now != write_task.stamp ||
+                store_file_record(write_task.key, write_task.string_value, write_task.stamp);
+        } else if (write_task.type == WriteTask::STORE_PATH) {
 		    success = store_key_value(write_task.key, write_task.string_value);
 		} else if (write_task.type == WriteTask::ADD_PATH_FOR_HASH) {
 		    success = add_path_for_hash(write_task.key, write_task.string_value);
@@ -1444,166 +1239,13 @@ bool DatabaseManager::get_hash_for_path(const std::string& filepath, std::string
 }
 
 int DatabaseManager::get_exif_orientation(const std::string& filepath) {
-    // Only process JPEG files
-    auto ext = fs::path(filepath).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    if (ext != ".jpg" && ext != ".jpeg") {
-	return 1; // Default orientation (no transform needed)
-    }
-
-    // Read file into memory
-    std::ifstream file(filepath, std::ios::binary);
-    if (!file.is_open()) {
-	return 1;
-    }
-
-    // Get file size
-    file.seekg(0, std::ios::end);
-    size_t fileSize = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    // Read entire file
-    std::vector<uint8_t> buffer(fileSize);
-    file.read(reinterpret_cast<char*>(buffer.data()), fileSize);
-    file.close();
-
-    if (buffer.empty()) {
-	return 1;
-    }
-
-    // Parse EXIF data using TinyEXIF
-    TinyEXIF::EXIFInfo exifInfo(buffer.data(), static_cast<unsigned>(buffer.size()));
-
-    if (exifInfo.Orientation == 0) {
-	return 1; // Default orientation if not specified in EXIF
-    }
-
-    return exifInfo.Orientation;
+    return probe_image(filepath).orientation;
 }
 
-// Apply orientation transform to image data (rotates/flips the RGB data in-place)
 void DatabaseManager::apply_orientation_transform(unsigned char* data, int& width, int& height, int orientation) {
-    if (orientation <= 1 || orientation > 8) {
-	return; // No transform needed or invalid orientation
-    }
-
-    int channels = 3; // Assuming RGB data
-
-    // Create a copy of the original data for transformations that need it
-    std::vector<unsigned char> original_data;
-    bool needs_copy = (orientation >= 2); // All orientations except 1 need transformations
-
-    if (needs_copy) {
-	original_data.assign(data, data + width * height * channels);
-    }
-
-    switch (orientation) {
-	case 1:
-	    // Normal - no transformation needed
-	    break;
-
-	case 2:
-	    // Horizontal flip
-	    for (int y = 0; y < height; y++) {
-		for (int x = 0; x < width / 2; x++) {
-		    int left_idx = (y * width + x) * channels;
-		    int right_idx = (y * width + (width - 1 - x)) * channels;
-
-		    // Swap pixels
-		    for (int c = 0; c < channels; c++) {
-			std::swap(data[left_idx + c], data[right_idx + c]);
-		    }
-		}
-	    }
-	    break;
-
-	case 3:
-	    // 180 degree rotation
-	    for (int i = 0; i < width * height / 2; i++) {
-		int src_idx = i * channels;
-		int dst_idx = (width * height - 1 - i) * channels;
-
-		for (int c = 0; c < channels; c++) {
-		    std::swap(data[src_idx + c], data[dst_idx + c]);
-		}
-	    }
-	    break;
-
-	case 4:
-	    // Vertical flip
-	    for (int y = 0; y < height / 2; y++) {
-		for (int x = 0; x < width; x++) {
-		    int top_idx = (y * width + x) * channels;
-		    int bottom_idx = ((height - 1 - y) * width + x) * channels;
-
-		    // Swap pixels
-		    for (int c = 0; c < channels; c++) {
-			std::swap(data[top_idx + c], data[bottom_idx + c]);
-		    }
-		}
-	    }
-	    break;
-
-	case 5:
-	case 6:
-	case 7:
-	case 8: {
-		    // These require 90-degree rotations, which change dimensions
-		    int new_width, new_height;
-
-		    if (orientation == 6 || orientation == 8) {
-			// 90-degree rotations swap dimensions
-			new_width = height;
-			new_height = width;
-		    } else {
-			// Transpose operations keep dimensions
-			new_width = height;
-			new_height = width;
-		    }
-
-		    std::vector<unsigned char> rotated_data(new_width * new_height * channels);
-
-		    for (int y = 0; y < height; y++) {
-			for (int x = 0; x < width; x++) {
-			    int src_idx = (y * width + x) * channels;
-			    int dst_x, dst_y;
-
-			    switch (orientation) {
-				case 5: // Transpose + horizontal flip
-				    dst_x = y;
-				    dst_y = width - 1 - x;
-				    break;
-				case 6: // 90 degree clockwise rotation
-				    dst_x = height - 1 - y;
-				    dst_y = x;
-				    break;
-				case 7: // Transpose + vertical flip
-				    dst_x = height - 1 - y;
-				    dst_y = width - 1 - x;
-				    break;
-				case 8: // 90 degree counter-clockwise rotation
-				    dst_x = y;
-				    dst_y = width - 1 - x;
-				    break;
-			    }
-
-			    int dst_idx = (dst_y * new_width + dst_x) * channels;
-
-			    for (int c = 0; c < channels; c++) {
-				rotated_data[dst_idx + c] = original_data[src_idx + c];
-			    }
-			}
-		    }
-
-		    // Copy rotated data back
-		    std::copy(rotated_data.begin(), rotated_data.end(), data);
-
-		    // Update dimensions
-		    width = new_width;
-		    height = new_height;
-		    break;
-		}
-    }
+    std::vector<uint8_t> rgb(data, data + size_t(width) * height * 3);
+    orient_rgb(rgb, width, height, orientation);
+    std::copy(rgb.begin(), rgb.end(), data);
 }
 
 int DatabaseManager::garbage_collect(const std::string& tile_cache_dir,

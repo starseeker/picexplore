@@ -118,6 +118,13 @@ bool ScanCoordinator::reconcile(DatabaseManager& db) {
                             known->second.width != record.width || known->second.hash != record.hash;
                         if (identified && db.is_open()) {
                             DatabaseManager::WriteTransaction tx(db);
+                            // Upgrade legacy thumbnails once to the shared orientation policy.
+                            std::string policy;
+                            if (tx && (!db.get_key_value(record.hash + ":render-policy", policy) || policy != "2")) {
+                                for (const auto* suffix : {"32", "64", "128", "256", "512", "1024", "2048", "4096", "8192", "sq64", "sq128", "sift"})
+                                    db.delete_key(record.hash + ":" + suffix);
+                                db.store_key_value(record.hash + ":render-policy", "2");
+                            }
                             ImageMetadata meta{before.size, static_cast<uint64_t>(before.modified_ns / 1000000000), record.width, record.height};
                             if (!tx || !db.store_file_record(path, record.hash, before) ||
                                 !db.store_image_metadata(record.hash, meta) || !tx.commit())

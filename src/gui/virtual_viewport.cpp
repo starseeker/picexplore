@@ -1032,6 +1032,7 @@ void VirtualViewport::enter_single_image(size_t raw_idx) {
     single_idx_ = raw_idx;
     zoom_ = 0.0f;
     full_res_ready_ = false;
+    load_error_.clear();
     full_res_rgb_.clear();
     full_res_w_ = 0;
     full_res_h_ = 0;
@@ -1139,9 +1140,9 @@ void VirtualViewport::zoom_actual_size() {
     redraw();
 }
 
-void VirtualViewport::set_full_res_image(const std::vector<uint8_t>& rgb, int w, int h) {
+void VirtualViewport::set_full_res_image(std::vector<uint8_t> rgb, int w, int h) {
     if (view_mode_ != ViewMode::SINGLE_IMAGE) return;
-    full_res_rgb_ = rgb;
+    full_res_rgb_ = std::move(rgb);
     full_res_w_ = w;
     full_res_h_ = h;
     full_res_ready_ = true;
@@ -1314,7 +1315,9 @@ void VirtualViewport::draw_single_image() {
     // Draw loading overlay or zoom percentage
     fl_font(FL_HELVETICA_BOLD, 14);
     fl_color(FL_WHITE);
-    if (!full_res_ready_ && !tile_manager_) {
+    if (!load_error_.empty()) {
+        fl_draw("Image unavailable at full resolution. F5 retries.", x() + 10, y() + h() - 10);
+    } else if (!full_res_ready_ && !tile_manager_) {
         fl_draw("Loading full resolution...", x() + 10, y() + h() - 10);
     } else {
         std::string text = "Zoom: ";

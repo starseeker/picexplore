@@ -639,6 +639,19 @@ bool PDFGenerator::generate_from_store(
                             }
                         }
 
+                        if (raw_rgb.empty()) {
+                            FileStamp current;
+                            if (entry.file_stamp.valid && (!read_file_stamp(entry.filepath, current) || current != entry.file_stamp)) {
+                                thread_cancelled = true;
+                                return;
+                            }
+                            auto decoded = decode_image(entry.filepath, std::clamp(bw, 1, 2048), std::clamp(bh, 1, 2048), stop_requested);
+                            if (decoded) {
+                                img_w = decoded.width; img_h = decoded.height;
+                                raw_rgb = std::move(decoded.rgb);
+                            }
+                        }
+
                         if (!raw_rgb.empty()) {
                             auto resized = resize_image_to_fit(raw_rgb.data(), img_w, img_h, bw, bh);
                             double scale = std::min(static_cast<double>(bw) / img_w, static_cast<double>(bh) / img_h);
@@ -754,6 +767,19 @@ bool PDFGenerator::generate_from_store(
                                         break;
                                     }
                                 }
+                            }
+                        }
+
+                        if (raw_rgb.empty()) {
+                            FileStamp current;
+                            if (entry.file_stamp.valid && (!read_file_stamp(entry.filepath, current) || current != entry.file_stamp)) {
+                                thread_cancelled = true;
+                                return;
+                            }
+                            auto decoded = decode_image(entry.filepath, std::clamp(bw, 1, 2048), std::clamp(bh, 1, 2048), stop_requested);
+                            if (decoded) {
+                                img_w = decoded.width; img_h = decoded.height;
+                                raw_rgb = std::move(decoded.rgb);
                             }
                         }
 

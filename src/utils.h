@@ -33,6 +33,7 @@
 #include <mutex>
 #include <vector>
 #include <cstdint>
+#include <atomic>
 
 // Filesystem identity and freshness belong to a path, not to shared image content.
 struct FileStamp {
@@ -92,7 +93,7 @@ bool is_cache_or_db_path(const std::string& path, const std::string& db_path = "
 bool get_image_info(const std::string& filepath, int* width, int* height);
 bool load_webp_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h, int* orig_w = nullptr, int* orig_h = nullptr);
 bool load_tiff_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h, int* orig_w = nullptr, int* orig_h = nullptr);
-bool load_png_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h, int* orig_w = nullptr, int* orig_h = nullptr);
+bool load_png_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h, int* orig_w = nullptr, int* orig_h = nullptr, const std::atomic<bool>* cancelled = nullptr);
 bool compute_file_hash(const std::string& filepath, std::string& hash_out);
 
 // Local Variables:
@@ -103,3 +104,28 @@ bool compute_file_hash(const std::string& filepath, std::string& hash_out);
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8 cino=N-s
+
+// All consumers share identification, orientation, and bounded decode policy.
+enum class ImageFormat { UNKNOWN, JPEG, PNG, WEBP, TIFF, OTHER };
+struct ImageProbe {
+    ImageFormat format = ImageFormat::UNKNOWN;
+    int width = 0, height = 0, orientation = 1;
+    bool supports_tiles = false;
+    std::string error;
+    explicit operator bool() const { return width > 0 && height > 0 && error.empty(); }
+};
+enum class DecodeStatus { READY, FAILED, CANCELLED, TOO_LARGE, SOURCE_CHANGED };
+struct DecodeResult {
+    DecodeStatus status = DecodeStatus::FAILED;
+    ImageProbe source;
+    std::vector<uint8_t> rgb;
+    int width = 0, height = 0;
+    std::string error;
+    explicit operator bool() const { return status == DecodeStatus::READY; }
+};
+ImageProbe probe_image(const std::string& path);
+DecodeResult decode_image(const std::string& path, int max_width = 0, int max_height = 0,
+                          const std::atomic<bool>* cancelled = nullptr);
+void orient_rgb(std::vector<uint8_t>& rgb, int& width, int& height, int orientation);
+bool load_jpeg_scaled(const std::string& path, int max_w, int max_h, std::vector<uint8_t>& rgb,
+                      int& width, int& height, int* orig_w = nullptr, int* orig_h = nullptr);
