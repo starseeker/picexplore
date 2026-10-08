@@ -224,7 +224,8 @@ bool is_cache_or_db_path(const std::string& path, const std::string& db_path) {
         xdg && *xdg ? (std::filesystem::path(xdg) / "picexplore").string() :
         home ? (std::filesystem::path(home) / ".cache/picexplore").string() : "/tmp/picexplore";
     if (path_is_within(path, cache) || path_is_within(path, "/tmp/picexplore")) return true;
-    if (!db_path.empty() && (path == db_path || path == db_path + "-lock")) return true;
+    if (!db_path.empty() && (normalize_path(path) == normalize_path(db_path) ||
+                            normalize_path(path) == normalize_path(db_path + "-lock"))) return true;
     std::string_view p = path;
 
     // Fast filename check without fs::path construction
@@ -235,7 +236,7 @@ bool is_cache_or_db_path(const std::string& path, const std::string& db_path) {
         filename == "cache.db" || filename == "cache.db-lock" ||
         filename == "thumbnails.db" || filename == "thumbnails.db-lock" ||
         filename == "data.mdb" || filename == "lock.mdb" ||
-        filename == ".picexplore" || filename == "picexplore") {
+        filename == ".picexplore") {
         return true;
     }
 
@@ -565,7 +566,8 @@ bool load_png_file(const std::string& filepath, int target_w, int target_h, std:
     return true;
 }
 
-bool compute_file_hash(const std::string& filepath, std::string& hash_out) {
+bool compute_file_hash(const std::string& filepath, std::string& hash_out, const std::atomic<bool>* cancelled) {
+    hash_out.clear();
     FILE* fp = fopen(filepath.c_str(), "rb");
     if (!fp) return false;
 
@@ -578,10 +580,12 @@ bool compute_file_hash(const std::string& filepath, std::string& hash_out) {
 
     char buf[65536];
     size_t bytes_read = 0;
-    while ((bytes_read = fread(buf, 1, sizeof(buf), fp)) > 0) {
+    while (!(cancelled && cancelled->load()) && (bytes_read = fread(buf, 1, sizeof(buf), fp)) > 0) {
         XXH3_128bits_update(state, buf, bytes_read);
     }
+    const bool complete = !ferror(fp) && !(cancelled && cancelled->load());
     fclose(fp);
+    if (!complete) { XXH3_freeState(state); return false; }
 
     XXH128_hash_t hash = XXH3_128bits_digest(state);
     XXH3_freeState(state);
@@ -633,8 +637,10 @@ bool path_is_within(const std::string& path, const std::string& directory) {
     const auto p = std::filesystem::path(path).lexically_normal();
     const auto root = std::filesystem::path(directory).lexically_normal();
     auto pi = p.begin();
-    for (auto ri = root.begin(); ri != root.end(); ++ri, ++pi) {
+    for (auto ri = root.begin(); ri != root.end(); ++ri) {
+        if (ri->empty()) continue; // trailing directory separators do not add a component
         if (pi == p.end() || *pi != *ri) return false;
+        ++pi;
     }
     return true;
 }

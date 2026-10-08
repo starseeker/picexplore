@@ -94,7 +94,7 @@ bool get_image_info(const std::string& filepath, int* width, int* height);
 bool load_webp_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h, int* orig_w = nullptr, int* orig_h = nullptr);
 bool load_tiff_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h, int* orig_w = nullptr, int* orig_h = nullptr);
 bool load_png_file(const std::string& filepath, int target_w, int target_h, std::vector<uint8_t>& rgb_out, int& out_w, int& out_h, int* orig_w = nullptr, int* orig_h = nullptr, const std::atomic<bool>* cancelled = nullptr);
-bool compute_file_hash(const std::string& filepath, std::string& hash_out);
+bool compute_file_hash(const std::string& filepath, std::string& hash_out, const std::atomic<bool>* cancelled = nullptr);
 
 // Local Variables:
 // tab-width: 8

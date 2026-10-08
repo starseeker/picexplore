@@ -89,7 +89,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
         if (!read_file_stamp(req.filepath, before)) return false;
         std::string hash;
         if (!db_.is_open() || !db_.get_valid_hash_for_path(req.filepath, hash)) {
-            if (!compute_file_hash(req.filepath, hash)) return false;
+            if (!compute_file_hash(req.filepath, hash, &stop_requested_)) return false;
         }
         // A request names a source version. Never decode new bytes under an old hash.
         if ((!req.hash.empty() && req.hash != hash) ||

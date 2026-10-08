@@ -93,6 +93,8 @@ int main() {
     reopened.stop();
     assert(path_is_within("/tmp/dir/file.jpg", "/tmp/dir"));
     assert(!path_is_within("/tmp/dir-other/file.jpg", "/tmp/dir"));
+    assert(path_is_within("/tmp/dir/file.jpg", "/tmp/dir/"));
+    assert(!is_cache_or_db_path("/photos/picexplore"));
     assert(!is_cache_or_db_path("/tmp/picexplore-photos/a.jpg"));
     fs::remove_all(base);
 }

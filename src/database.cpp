@@ -606,7 +606,7 @@ bool DatabaseManager::process_image_file(const std::string& filepath,
         should_skip = true;
         return true;
     }
-    if (!read_file_stamp(filepath, before) || !compute_file_hash(filepath, hash_str)) return false;
+    if (!read_file_stamp(filepath, before) || !compute_file_hash(filepath, hash_str, &stop_processing_)) return false;
     auto decoded = decode_image(filepath, 2048, 2048, &stop_processing_);
     if (!decoded || !read_file_stamp(filepath, after) || before != after) return false;
     const int width = decoded.width, height = decoded.height;

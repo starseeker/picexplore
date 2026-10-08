@@ -106,7 +106,7 @@ bool ScanCoordinator::reconcile(DatabaseManager& db) {
                     record.stamp = before;
                     bool identified = get_image_info(path, &record.width, &record.height);
                     if (!db.is_open() || !db.get_valid_hash_for_path(path, record.hash))
-                        identified = identified && compute_file_hash(path, record.hash);
+                        identified = identified && compute_file_hash(path, record.hash, &stop_requested_);
                     if (!read_file_stamp(path, after) || before != after) {
                         retry = true;
                     } else {

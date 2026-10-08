@@ -51,7 +51,10 @@ int main() {
     assert(!decode_image(root + "/broken.png", 20, 20));
     write(root + "/bad.jpg", {0xff,0xd8,0,1,2});
     assert(!probe_image(root + "/bad.jpg"));
+    std::string partial_hash = "old";
+    assert(!compute_file_hash(root, partial_hash) && partial_hash.empty());
     std::atomic<bool> cancelled{true};
+    assert(!compute_file_hash(root + "/pixels.jpg", partial_hash, &cancelled) && partial_hash.empty());
     assert(decode_image(root + "/pixels.jpg", 20, 20, &cancelled).status == DecodeStatus::CANCELLED);
     moodycamel::ConcurrentQueue<UpdateEvent> queue;
     {

@@ -153,7 +153,7 @@ void TileManager::generate_worker() {
 bool TileManager::generate_tiles(const Request& req) {
     FileStamp before, after;
     std::string hash;
-    if (!read_file_stamp(req.path, before) || !compute_file_hash(req.path, hash) || hash != req.hash) return false;
+    if (!read_file_stamp(req.path, before) || !compute_file_hash(req.path, hash, &stop_) || hash != req.hash) return false;
     const fs::path parent = fs::path(cache_dir_) / req.hash;
     const fs::path temporary = parent / ("building-" + std::to_string(getpid()) + "-" + std::to_string(req.sequence));
     fs::create_directories(temporary);
