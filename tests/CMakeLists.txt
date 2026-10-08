@@ -153,12 +153,46 @@ add_test(NAME pdf_test COMMAND pdf_test)
 # Catalog tests exercise the same implementation and dependencies as PDF export.
 get_target_property(CATALOG_TEST_SOURCES pdf_test SOURCES)
 list(REMOVE_ITEM CATALOG_TEST_SOURCES pdf_test.cpp)
-add_executable(catalog_test catalog_test.cpp ${CATALOG_TEST_SOURCES})
+add_library(catalog_test_support STATIC ${CATALOG_TEST_SOURCES}
+    ${CMAKE_SOURCE_DIR}/src/gui/thumbnail_pipeline.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/full_res_loader.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/tile_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/scan_coordinator.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/inotify_watcher.cpp
+)
 foreach(prop INCLUDE_DIRECTORIES LINK_LIBRARIES COMPILE_DEFINITIONS COMPILE_OPTIONS)
     get_target_property(value pdf_test ${prop})
-    set_property(TARGET catalog_test PROPERTY ${prop} ${value})
+    set_property(TARGET catalog_test_support PROPERTY ${prop} ${value})
 endforeach()
-add_test(NAME catalog_test COMMAND catalog_test)
+get_target_property(catalog_dependencies pdf_test LINK_LIBRARIES)
+set_property(TARGET catalog_test_support PROPERTY INTERFACE_LINK_LIBRARIES ${catalog_dependencies})
+function(add_catalog_test name)
+    add_executable(${name} ${name}.cpp ${ARGN})
+    target_link_libraries(${name} PRIVATE catalog_test_support)
+    get_target_property(includes pdf_test INCLUDE_DIRECTORIES)
+    target_include_directories(${name} PRIVATE ${includes})
+    # These tests use assert for invariants, including in release builds.
+    target_compile_options(${name} PRIVATE -UNDEBUG)
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+add_catalog_test(catalog_test)
+
+find_program(XVFB_RUN xvfb-run)
+if(XVFB_RUN)
+    add_executable(gui_session_test gui_session_test.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/main_window.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/virtual_viewport.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/info_panel.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/pdf_export_dialog.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/app_settings.cpp
+    )
+    get_target_property(includes pdf_test INCLUDE_DIRECTORIES)
+    target_include_directories(gui_session_test PRIVATE ${includes} ${FLTK_INCLUDE_DIR})
+    target_link_libraries(gui_session_test PRIVATE catalog_test_support ${FLTK_LIBRARIES})
+    target_compile_options(gui_session_test PRIVATE -UNDEBUG)
+    add_test(NAME gui_session_test COMMAND ${XVFB_RUN} -a $<TARGET_FILE:gui_session_test>)
+    set_tests_properties(gui_session_test PROPERTIES TIMEOUT 30)
+endif()
 
 
 # Local Variables:

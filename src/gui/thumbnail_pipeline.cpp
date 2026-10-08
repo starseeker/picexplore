@@ -10,8 +10,8 @@
 #include <xxhash.h>
 
 ThumbnailPipeline::ThumbnailPipeline(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue,
-                                     const std::string& db_path)
-    : update_queue_(update_queue), db_path_(db_path), stop_requested_(false) {
+                                     const std::string& db_path, uint64_t session)
+    : update_queue_(update_queue, session), db_path_(db_path), stop_requested_(false) {
     if (!db_path_.empty()) {
         db_.open(db_path_);
     }
@@ -54,8 +54,8 @@ uint64_t ThumbnailPipeline::get_generation() const {
     return current_generation_;
 }
 
-void ThumbnailPipeline::request_thumbnail(size_t image_index, const std::string& filepath, const std::string& hash, ThumbQuality quality, bool urgent, uint64_t generation, int layout_w, int layout_h) {
-    ThumbRequest req{image_index, filepath, quality, hash, generation, layout_w, layout_h};
+void ThumbnailPipeline::request_thumbnail(size_t image_index, const std::string& filepath, const std::string& hash, ThumbQuality quality, bool urgent, uint64_t generation, int layout_w, int layout_h, uint64_t revision) {
+    ThumbRequest req{image_index, filepath, quality, hash, generation, layout_w, layout_h, {update_queue_.session(), image_index, revision, 0}};
     if (urgent) {
         urgent_queue_.enqueue(req);
     } else {
@@ -171,7 +171,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
             if (decode_jpeg(jpeg_data.data(), jpeg_data.size(), rgb_decoded, dec_w, dec_h)) {
                 update_queue_.enqueue(UpdateEvent::make_thumb_rgb_ready(
                     req.image_index, req.filepath, hash, found_quality, std::vector<uint8_t>(rgb_decoded), dec_w, dec_h, req.generation
-                ));
+                ), req.token);
 
                 if (is_square_quality(req.target_quality)) {
                     if (static_cast<int>(found_quality) >= static_cast<int>(req.target_quality)) {
@@ -232,12 +232,12 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
 
             if (is_massive_png) {
                 // generate_png_streaming will emit progress as it decodes row by row
-                if (generate_png_streaming(req.image_index, req.filepath, target_w, target_h, rgb_decoded, w, h, &orig_w, &orig_h)) {
+                if (generate_png_streaming(req.image_index, req.filepath, target_w, target_h, rgb_decoded, w, h, &orig_w, &orig_h, req.token)) {
                     fast_decoded = true;
                 }
             } else {
                 if (static_cast<int>(req.target_quality) >= 2048) {
-                    update_queue_.enqueue(UpdateEvent::make_thumb_generation_progress(req.image_index, req.filepath, 0));
+                    update_queue_.enqueue(UpdateEvent::make_thumb_generation_progress(req.image_index, req.filepath, 0), req.token);
                 }
                 img = stbi_load(req.filepath.c_str(), &w, &h, &channels, 3);
                 if (img) {
@@ -246,10 +246,10 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
                 }
             }
             if (!img && !fast_decoded) {
-                if (ext == ".png" && generate_png_streaming(req.image_index, req.filepath, target_w, target_h, rgb_decoded, w, h, &orig_w, &orig_h)) {
+                if (ext == ".png" && generate_png_streaming(req.image_index, req.filepath, target_w, target_h, rgb_decoded, w, h, &orig_w, &orig_h, req.token)) {
                     fast_decoded = true;
                 } else {
-                    update_queue_.enqueue(UpdateEvent::make_thumb_failed(req.image_index, req.filepath, req.target_quality));
+                    update_queue_.enqueue(UpdateEvent::make_thumb_failed(req.image_index, req.filepath, req.target_quality), req.token);
                     return false;
                 }
             }
@@ -365,7 +365,7 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
 
         update_queue_.enqueue(UpdateEvent::make_thumb_rgb_ready(
             req.image_index, req.filepath, hash, req.target_quality, std::move(resized), target_w, target_h, req.generation
-        ));
+        ), req.token);
         return true;
     } catch (...) {
         return false;
@@ -547,7 +547,7 @@ bool ThumbnailPipeline::load_jpeg_scaled_file(const std::string& filepath, int t
     return true;
 }
 
-bool ThumbnailPipeline::generate_png_streaming(size_t image_index, const std::string& filepath, int max_w, int max_h, std::vector<uint8_t>& out_rgb, int& out_w, int& out_h, int* orig_w, int* orig_h) {
+bool ThumbnailPipeline::generate_png_streaming(size_t image_index, const std::string& filepath, int max_w, int max_h, std::vector<uint8_t>& out_rgb, int& out_w, int& out_h, int* orig_w, int* orig_h, JobToken token) {
     FILE *fp = fopen(filepath.c_str(), "rb");
     if (!fp) return false;
     
@@ -630,12 +630,12 @@ bool ThumbnailPipeline::generate_png_streaming(size_t image_index, const std::st
         
         int percent = (y * 100) / height;
         if (percent != last_percent && percent % 5 == 0) {
-            update_queue_.enqueue(UpdateEvent::make_thumb_generation_progress(image_index, filepath, percent));
+            update_queue_.enqueue(UpdateEvent::make_thumb_generation_progress(image_index, filepath, percent), token);
             last_percent = percent;
         }
     }
     
-    update_queue_.enqueue(UpdateEvent::make_thumb_generation_progress(image_index, filepath, 100));
+    update_queue_.enqueue(UpdateEvent::make_thumb_generation_progress(image_index, filepath, 100), token);
 
     png_destroy_read_struct(&png, &info, NULL);
     fclose(fp);

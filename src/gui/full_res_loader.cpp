@@ -5,8 +5,8 @@
 #include <filesystem>
 #include <algorithm>
 
-FullResLoader::FullResLoader(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue)
-    : update_queue_(update_queue) {
+FullResLoader::FullResLoader(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue, uint64_t session)
+    : update_queue_(update_queue, session) {
     worker_ = std::thread(&FullResLoader::worker_thread, this);
 }
 
@@ -21,8 +21,10 @@ FullResLoader::~FullResLoader() {
     }
 }
 
-void FullResLoader::request(size_t image_index, const std::string& filepath) {
+void FullResLoader::request(size_t image_index, const std::string& filepath, uint64_t revision, uint64_t request) {
     std::lock_guard<std::mutex> lock(mutex_);
+    ++cancellation_;
+    pending_token_ = {update_queue_.session(), image_index, revision, request};
     pending_index_ = image_index;
     pending_filepath_ = filepath;
     has_request_ = true;
@@ -31,6 +33,7 @@ void FullResLoader::request(size_t image_index, const std::string& filepath) {
 
 void FullResLoader::cancel() {
     std::lock_guard<std::mutex> lock(mutex_);
+    ++cancellation_;
     has_request_ = false;
 }
 
@@ -38,6 +41,8 @@ void FullResLoader::worker_thread() {
     while (!stop_requested_) {
         size_t image_index;
         std::string filepath;
+        JobToken token;
+        uint64_t cancellation;
         
         {
             std::unique_lock<std::mutex> lock(mutex_);
@@ -45,6 +50,8 @@ void FullResLoader::worker_thread() {
             
             if (stop_requested_) break;
             
+            token = pending_token_;
+            cancellation = cancellation_;
             image_index = pending_index_;
             filepath = pending_filepath_;
             has_request_ = false;
@@ -79,7 +86,7 @@ void FullResLoader::worker_thread() {
             bool cancelled = false;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                if (has_request_) {
+                if (stop_requested_ || cancellation != cancellation_) {
                     // A new request came in, so discard this result
                     cancelled = true;
                 }
@@ -87,20 +94,20 @@ void FullResLoader::worker_thread() {
             
             if (!cancelled) {
                 update_queue_.enqueue(UpdateEvent::make_full_res_ready(
-                    image_index, filepath, std::move(rgb_data), width, height));
+                    image_index, filepath, std::move(rgb_data), width, height), token);
             }
         } else {
             std::cerr << "FullResLoader failed to decode: " << filepath << std::endl;
             bool cancelled = false;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                if (has_request_) {
+                if (stop_requested_ || cancellation != cancellation_) {
                     cancelled = true;
                 }
             }
             if (!cancelled) {
                 update_queue_.enqueue(UpdateEvent::make_full_res_ready(
-                    image_index, filepath, {}, 0, 0));
+                    image_index, filepath, {}, 0, 0), token);
             }
         }
     }

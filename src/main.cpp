@@ -224,7 +224,7 @@ int main(int argc, char* argv[]) {
         int win_w = (settings.window_width >= 300) ? settings.window_width : 1024;
         int win_h = (settings.window_height >= 200) ? settings.window_height : 768;
 
-        MainWindow win(win_w, win_h, "PicExplore", directory, db_path);
+        MainWindow win(win_w, win_h, "PicExplore", directory, explicit_db);
         if (settings.save_window_size && settings.window_x >= 0 && settings.window_y >= 0) {
             win.position(settings.window_x, settings.window_y);
         }

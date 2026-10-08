@@ -88,6 +88,7 @@ protected:
     int handle(int event) override;
 
 private:
+    friend struct MainWindowTestAccess;
     ImageStore& store_;
     const LayoutEngine::LayoutResult* layout_ = nullptr;
     int scroll_offset_ = 0;

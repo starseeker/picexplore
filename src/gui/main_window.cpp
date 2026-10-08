@@ -14,6 +14,16 @@
 #include <set>
 #include <xxhash.h>
 
+// All directory producers are stopped before their database and queue disappear.
+struct DirectorySession {
+    std::unique_ptr<DatabaseManager> db;
+    std::unique_ptr<ScanCoordinator> scanner;
+    std::unique_ptr<ThumbnailPipeline> pipeline;
+    std::unique_ptr<FullResLoader> full_res;
+    std::unique_ptr<TileManager> tiles;
+    std::unique_ptr<FileWatcher> watcher;
+};
+
 static constexpr int MENU_H   = 25;
 static constexpr int STATUS_H = 20;
 static constexpr int SCROLL_W = 20;
@@ -70,7 +80,7 @@ void FileTypeLegendWidget::draw() {
 }
 
 MainWindow::MainWindow(int w, int h, const char* title, const std::string& directory, const std::string& db_path)
-    : Fl_Double_Window(w, h, title), directory_(directory), db_path_(db_path) {
+    : Fl_Double_Window(w, h, title), directory_(directory), db_path_(db_path), explicit_db_path_(db_path) {
 
     settings_.load();
     hierarchy_thumbnail_threshold_ = settings_.hierarchy_thumbnail_threshold;
@@ -116,8 +126,6 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
 
     // Create ~/.cache/picexplore for tiles
     cache_dir_ = AppSettings::get_cache_dir();
-    tile_manager_ = new TileManager(update_queue_);
-    tile_manager_->init(cache_dir_);
 
     int vp_h = h - MENU_H - STATUS_H;
 
@@ -313,21 +321,30 @@ MainWindow::~MainWindow() {
         settings_.window_y = y();
         settings_.save();
     }
-    if (gc_running_) {
-        gc_stop_requested_ = true;
-        if (gc_thread_.joinable()) gc_thread_.join();
-    }
-    cancel_similarity();
-    if (scanner_) { scanner_->stop(); delete scanner_; }
-    if (pipeline_) { pipeline_->stop(); delete pipeline_; }
-    if (full_res_loader_) { delete full_res_loader_; }
-    if (watcher_) { watcher_->stop(); delete watcher_; }
-    if (tile_manager_) { delete tile_manager_; }
-    if (db_) { delete db_; }
     Fl::remove_timeout(timer_cb, this);
+    stop_session();
+}
+
+void MainWindow::stop_session() {
+    gc_stop_requested_ = true;
+    if (gc_thread_.joinable()) gc_thread_.join();
+    gc_running_ = false;
+    cancel_similarity();
+    ++viewer_request_;
+    viewport_->set_tile_manager(nullptr, "", 0, 0);
+    session_.reset();
+    scanner_ = nullptr;
+    pipeline_ = nullptr;
+    full_res_loader_ = nullptr;
+    tile_manager_ = nullptr;
+    watcher_ = nullptr;
+    db_ = nullptr;
+    UpdateEvent obsolete;
+    while (update_queue_.try_dequeue(obsolete)) {}
 }
 
 void MainWindow::start() {
+    if (session_) return;
     namespace fs = std::filesystem;
     
     // Resolve database path
@@ -343,8 +360,7 @@ void MainWindow::start() {
         } else if (fs::exists("./images.db")) {
             db_path_ = "./images.db";
         } else {
-            const char* home = getenv("HOME");
-            fs::path cache_dir = home ? (fs::path(home) / ".cache" / "picexplore") : fs::path("/tmp/picexplore");
+            fs::path cache_dir = AppSettings::get_cache_dir();
             try {
                 fs::create_directories(cache_dir);
             } catch (...) {}
@@ -355,32 +371,41 @@ void MainWindow::start() {
 
     std::cout << "Using database: " << db_path_ << std::endl;
     
-    db_ = new DatabaseManager();
+    ++session_id_;
+    session_ = std::make_unique<DirectorySession>();
+    session_->db = std::make_unique<DatabaseManager>();
+    db_ = session_->db.get();
     db_->open(db_path_);
-
-    full_res_loader_ = new FullResLoader(update_queue_);
-
-    pipeline_ = new ThumbnailPipeline(update_queue_, db_path_);
-    int num_threads = std::thread::hardware_concurrency();
-    if (num_threads < 4) num_threads = 4;
-    pipeline_->start(num_threads);
-
-    scanner_ = new ScanCoordinator(directory_, update_queue_, db_path_);
+    session_->full_res = std::make_unique<FullResLoader>(update_queue_, session_id_);
+    full_res_loader_ = session_->full_res.get();
+    session_->tiles = std::make_unique<TileManager>(update_queue_, session_id_);
+    tile_manager_ = session_->tiles.get();
+    tile_manager_->init(cache_dir_);
+    session_->pipeline = std::make_unique<ThumbnailPipeline>(update_queue_, db_path_, session_id_);
+    pipeline_ = session_->pipeline.get();
+    pipeline_->start(std::max(2u, std::min(8u, std::thread::hardware_concurrency())));
+    session_->watcher = std::make_unique<InotifyWatcher>();
+    watcher_ = session_->watcher.get();
+    watcher_->start(directory_, update_queue_, session_id_);
+    session_->scanner = std::make_unique<ScanCoordinator>(directory_, update_queue_, db_path_, session_id_);
+    scanner_ = session_->scanner.get();
     scanner_->start();
-    
-    watcher_ = new InotifyWatcher();
-    watcher_->start(directory_, update_queue_);
 
     resize(x(), y(), w(), h());
     update_statusbar();
     rebuild_menu();
 
-    Fl::add_timeout(0.016, timer_cb, this);
+    if (!timer_started_) {
+        Fl::add_timeout(0.016, timer_cb, this);
+        timer_started_ = true;
+    }
 }
 
 // ── filter helpers ─────────────────────────────────────────────────────────
 
 void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& filepath) {
+    if (!store_.contains(raw_idx)) return;
+    ++viewer_request_;
     pre_viewer_filter_ = directory_filter_;
     viewport_->enter_single_image(raw_idx);
     
@@ -411,7 +436,7 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
     ThumbQuality target_quality = static_cast<ThumbQuality>(std::max(max_overview_size, screen_dim));
     if (static_cast<int>(entry.scaled.quality) < static_cast<int>(target_quality) || entry.scaled.rgb_data.empty()) {
         entry.last_requested_generation = current_generation_;
-        pipeline_->request_thumbnail(raw_idx, filepath, entry.content_hash, target_quality, true, current_generation_);
+        pipeline_->request_thumbnail(raw_idx, filepath, entry.content_hash, target_quality, true, current_generation_, 0, 0, store_.get(raw_idx).revision);
     }
 
     if (pixels > 8192LL * 8192LL || entry.original_width > 8192 || entry.original_height > 8192 || pixels <= 0) {
@@ -419,11 +444,11 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
         std::string label = "  Viewing: " + std::filesystem::path(filepath).filename().string() + "  [Generating Map...]";
         statusbar_->copy_label(label.c_str());
         viewport_->set_tile_manager(tile_manager_, entry.content_hash, entry.original_width, entry.original_height);
-        tile_manager_->request_tiles(raw_idx, filepath, entry.content_hash);
+        tile_manager_->request_tiles(raw_idx, filepath, entry.content_hash, entry.revision, viewer_request_);
     } else {
         // Normal image
         viewport_->set_tile_manager(nullptr, "", entry.original_width, entry.original_height);
-        full_res_loader_->request(raw_idx, filepath);
+        full_res_loader_->request(raw_idx, filepath, entry.revision, viewer_request_);
         std::string filename = std::filesystem::path(filepath).filename().string();
         std::string label = "  Viewing: " + filename + "  [Loading full resolution...]";
         statusbar_->copy_label(label.c_str());
@@ -482,6 +507,7 @@ void MainWindow::navigate_single_image(int delta) {
 }
 
 void MainWindow::exit_single_image_mode() {
+    ++viewer_request_;
     viewport_->exit_single_image();
     info_panel_->set_single_image_mode(false);
     directory_filter_ = pre_viewer_filter_;
@@ -604,21 +630,10 @@ void MainWindow::switch_directory(const std::string& new_dir) {
         exit_single_image_mode();
     }
 
-    if (gc_running_) {
-        gc_stop_requested_ = true;
-        if (gc_thread_.joinable()) gc_thread_.join();
-        gc_running_ = false;
-    }
-
-    if (scanner_) { scanner_->stop(); delete scanner_; scanner_ = nullptr; }
-    if (watcher_) { watcher_->stop(); delete watcher_; watcher_ = nullptr; }
-    if (pipeline_) { pipeline_->stop(); delete pipeline_; pipeline_ = nullptr; }
-    if (full_res_loader_) { delete full_res_loader_; full_res_loader_ = nullptr; }
-    cancel_similarity();
-    if (db_) { delete db_; db_ = nullptr; }
+    stop_session();
 
     directory_ = new_dir;
-    db_path_.clear();
+    db_path_ = explicit_db_path_;
     directory_filter_.clear();
     pre_viewer_filter_.clear();
     current_selected_filepath_.clear();
@@ -1192,8 +1207,13 @@ void MainWindow::poll_events() {
     
     UpdateEvent ev;
     int process_count = 0;
-    while (update_queue_.try_dequeue(ev) && process_count < 25000) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5);
+    while (process_count < 2048 && std::chrono::steady_clock::now() < deadline && update_queue_.try_dequeue(ev)) {
         process_count++;
+        if (ev.session != session_id_) continue;
+        if (ev.job.has_image() && (!store_.contains(ev.job.image_id) ||
+            store_.get(ev.job.image_id).revision != ev.job.revision)) continue;
+        if (ev.job.request && ev.job.request != viewer_request_) continue;
         if (ev.type == UpdateEvent::Type::IMAGE_DISCOVERED) {
             size_t idx = store_.add_image(ev.image.filepath, ev.image.aspect_ratio,
                                           ev.image.width, ev.image.height,
@@ -1211,7 +1231,7 @@ void MainWindow::poll_events() {
                 // Queue a background task to generate the thumbnail so the DB fully populates.
                 // Generation 0 ensures it is not discarded when the user scrolls.
                 pipeline_->request_thumbnail(idx, ev.image.filepath, ev.image.content_hash, 
-                                             ThumbQuality::LARGE, false, 0, 0, 0);
+                                             ThumbQuality::LARGE, false, 0, 0, 0, store_.get(idx).revision);
             }
         } else if (ev.type == UpdateEvent::Type::SCAN_PROGRESS) {
             status_dirty = true;
@@ -1681,7 +1701,7 @@ void MainWindow::reprioritize_thumbnails() {
                     ThumbQuality sq_q = (max_dim <= 64.0) ? ThumbQuality::SQUARE_64 : ThumbQuality::SQUARE_128;
                     pipeline_->request_thumbnail(item.idx, entry.filepath, entry.content_hash,
                                                  sq_q, true, current_generation_,
-                                                 static_cast<int>(item.w), static_cast<int>(item.h));
+                                                 static_cast<int>(item.w), static_cast<int>(item.h), store_.get(item.idx).revision);
                 }
             } else {
                 if ((needs_upgrade || missing) && entry.last_requested_generation < current_generation_) {
@@ -1689,7 +1709,7 @@ void MainWindow::reprioritize_thumbnails() {
                     ThumbQuality req_quality = std::max(needed, entry.best_quality);
                     pipeline_->request_thumbnail(item.idx, entry.filepath, entry.content_hash,
                                                  req_quality, true, current_generation_,
-                                                 static_cast<int>(item.w), static_cast<int>(item.h));
+                                                 static_cast<int>(item.w), static_cast<int>(item.h), store_.get(item.idx).revision);
                 }
             }
         }
@@ -1768,7 +1788,7 @@ void MainWindow::reprioritize_thumbnails() {
             ThumbQuality req_quality = std::max(needed, entry.best_quality);
             pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
                                          req_quality, true, current_generation_,
-                                         static_cast<int>(layout_w), static_cast<int>(layout_h));
+                                         static_cast<int>(layout_w), static_cast<int>(layout_h), store_.get(idx).revision);
         }
     }
     
@@ -1794,7 +1814,7 @@ void MainWindow::reprioritize_thumbnails() {
             store_.get(idx).last_requested_generation = current_generation_;
             pipeline_->request_thumbnail(idx, entry.filepath, entry.content_hash,
                                          needed, false, current_generation_,
-                                         static_cast<int>(layout_w), static_cast<int>(layout_h));
+                                         static_cast<int>(layout_w), static_cast<int>(layout_h), store_.get(idx).revision);
         }
     }
 }
@@ -2264,22 +2284,23 @@ void MainWindow::start_garbage_collection() {
     std::string db_p = db_path_;
     std::string cache_d = cache_dir_;
 
-    gc_thread_ = std::thread([this, db_p, cache_d]() {
+    EventPublisher publisher(update_queue_, session_id_);
+    gc_thread_ = std::thread([this, db_p, cache_d, publisher]() {
         DatabaseManager db;
         int checked = 0, total = 0, pruned = 0;
         if (db.open(db_p)) {
             pruned = db.garbage_collect(
                 cache_d,
-                [this, &checked, &total](int chk, int tot, int prn) {
+                [publisher, &checked, &total](int chk, int tot, int prn) {
                     checked = chk;
                     total = tot;
-                    update_queue_.enqueue(UpdateEvent::make_gc_progress(chk, tot, prn));
+                    publisher.enqueue(UpdateEvent::make_gc_progress(chk, tot, prn));
                 },
                 &gc_stop_requested_
             );
             db.close();
         }
-        update_queue_.enqueue(UpdateEvent::make_gc_complete(checked, total, pruned));
+        publisher.enqueue(UpdateEvent::make_gc_complete(checked, total, pruned));
     });
 }
 

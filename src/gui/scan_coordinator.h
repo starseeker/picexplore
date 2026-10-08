@@ -11,7 +11,7 @@ class ScanCoordinator {
 public:
     ScanCoordinator(const std::string& directory,
                     moodycamel::ConcurrentQueue<UpdateEvent>& update_queue,
-                    const std::string& db_path = "");
+                    const std::string& db_path = "", uint64_t session = 0);
     ~ScanCoordinator();
 
     void start();
@@ -20,7 +20,7 @@ public:
 private:
     std::string directory_;
     std::string db_path_;
-    moodycamel::ConcurrentQueue<UpdateEvent>& update_queue_;
+    EventPublisher update_queue_;
 
     std::vector<std::thread> workers_;
     std::atomic<bool> stop_requested_;

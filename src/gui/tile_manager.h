@@ -15,13 +15,13 @@
 
 class TileManager {
 public:
-    TileManager(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue);
+    TileManager(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue, uint64_t session = 0);
     ~TileManager();
 
     void init(const std::string& cache_dir);
     
     // Request background generation of tiles for an extreme image
-    void request_tiles(size_t image_index, const std::string& filepath, const std::string& hash);
+    void request_tiles(size_t image_index, const std::string& filepath, const std::string& hash, uint64_t revision = 1, uint64_t request = 0);
     
     // Check if tiles for an image are fully generated
     bool are_tiles_ready(const std::string& hash) const;
@@ -34,12 +34,13 @@ public:
 
 private:
     void worker_thread();
-    bool generate_tiles(size_t image_index, const std::string& filepath, const std::string& hash);
+    bool generate_tiles(size_t image_index, const std::string& filepath, const std::string& hash, JobToken token);
 
-    moodycamel::ConcurrentQueue<UpdateEvent>& update_queue_;
+    EventPublisher update_queue_;
     std::string cache_dir_;
     
     struct TileRequest {
+        JobToken token;
         size_t image_index;
         std::string filepath;
         std::string hash;

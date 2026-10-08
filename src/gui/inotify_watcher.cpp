@@ -15,11 +15,11 @@ InotifyWatcher::~InotifyWatcher() {
     stop();
 }
 
-void InotifyWatcher::start(const std::string& directory, moodycamel::ConcurrentQueue<UpdateEvent>& update_queue) {
+void InotifyWatcher::start(const std::string& directory, moodycamel::ConcurrentQueue<UpdateEvent>& update_queue, uint64_t session) {
     if (inotify_fd_ != -1) return;
     
     directory_ = directory;
-    update_queue_ = &update_queue;
+    update_queue_ = EventPublisher(update_queue, session);
     stop_requested_ = false;
     
     inotify_fd_ = inotify_init1(IN_NONBLOCK);
@@ -111,7 +111,7 @@ void InotifyWatcher::watch_thread_func() {
             // Clean up old pending renames that didn't get an IN_MOVED_TO (moved outside)
             if (!pending_renames_.empty()) {
                 for (const auto& pair : pending_renames_) {
-                    update_queue_->enqueue(UpdateEvent::make_image_deleted(pair.second));
+                    update_queue_.enqueue(UpdateEvent::make_image_deleted(pair.second));
                 }
                 pending_renames_.clear();
             }
@@ -150,22 +150,22 @@ void InotifyWatcher::watch_thread_func() {
                         fsize = fs::file_size(full_path);
                         ftime = std::chrono::duration_cast<std::chrono::seconds>(fs::last_write_time(full_path).time_since_epoch()).count();
                     } catch (...) {}
-                    update_queue_->enqueue(UpdateEvent::make_image_discovered(full_path, "", w, h, ar, fsize, ftime, ThumbQuality::NONE));
+                    update_queue_.enqueue(UpdateEvent::make_image_discovered(full_path, "", w, h, ar, fsize, ftime, ThumbQuality::NONE));
                 }
             } else if (event->mask & IN_DELETE) {
-                update_queue_->enqueue(UpdateEvent::make_image_deleted(full_path));
+                update_queue_.enqueue(UpdateEvent::make_image_deleted(full_path));
             } else if (event->mask & IN_MOVED_FROM) {
                 pending_renames_[event->cookie] = full_path;
             } else if (event->mask & IN_MOVED_TO) {
                 auto rit = pending_renames_.find(event->cookie);
                 if (rit != pending_renames_.end()) {
-                    update_queue_->enqueue(UpdateEvent::make_image_renamed(rit->second, full_path));
+                    update_queue_.enqueue(UpdateEvent::make_image_renamed(rit->second, full_path));
                     pending_renames_.erase(rit);
                 } else {
                     int w = 0, h = 0;
                     if (get_image_info(full_path, &w, &h) && w > 0 && h > 0) {
                         double ar = static_cast<double>(w) / h;
-                        update_queue_->enqueue(UpdateEvent::make_image_discovered(full_path, "", w, h, ar));
+                        update_queue_.enqueue(UpdateEvent::make_image_discovered(full_path, "", w, h, ar));
                     }
                 }
             }

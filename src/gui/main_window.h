@@ -26,6 +26,8 @@ public:
     void draw() override;
 };
 
+struct DirectorySession;
+
 class MainWindow : public Fl_Double_Window {
 public:
     MainWindow(int w, int h, const char* title, const std::string& directory, const std::string& db_path = "");
@@ -53,8 +55,15 @@ protected:
     void draw() override;
 
 private:
+    friend struct MainWindowTestAccess;
     std::string directory_;
     std::string db_path_;
+    std::string explicit_db_path_;
+    std::unique_ptr<DirectorySession> session_;
+    uint64_t session_id_ = 0;
+    uint64_t viewer_request_ = 0;
+    bool timer_started_ = false;
+    void stop_session();
     std::string cache_dir_;
     ImageStore store_;
     LayoutEngine layout_engine_;

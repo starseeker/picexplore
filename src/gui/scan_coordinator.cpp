@@ -10,8 +10,8 @@ namespace fs = std::filesystem;
 
 ScanCoordinator::ScanCoordinator(const std::string& directory,
                                  moodycamel::ConcurrentQueue<UpdateEvent>& update_queue,
-                                 const std::string& db_path)
-    : directory_(directory), db_path_(db_path), update_queue_(update_queue), stop_requested_(false) {
+                                 const std::string& db_path, uint64_t session)
+    : directory_(directory), db_path_(db_path), update_queue_(update_queue, session), stop_requested_(false) {
     if (db_path_.empty()) {
         const char* home = getenv("HOME");
         fs::path cache_dir = home ? (fs::path(home) / ".cache" / "picexplore") : fs::path("/tmp/picexplore");

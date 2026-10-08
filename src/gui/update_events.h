@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include "../third_party/concurrentqueue/concurrentqueue.h"
 
 // Thumbnail quality levels
 enum class ThumbQuality {
@@ -22,7 +23,18 @@ inline bool is_square_quality(ThumbQuality q) {
     return q == ThumbQuality::SQUARE_64 || q == ThumbQuality::SQUARE_128;
 }
 
+// Identity of the catalog version a background job was allowed to read.
+struct JobToken {
+    uint64_t session = 0;
+    size_t image_id = static_cast<size_t>(-1);
+    uint64_t revision = 0;
+    uint64_t request = 0;
+    bool has_image() const { return image_id != static_cast<size_t>(-1); }
+};
+
 struct UpdateEvent {
+    uint64_t session = 0;
+    JobToken job;
     enum class Type {
         IMAGE_DISCOVERED,
         IMAGE_DELETED,
@@ -134,7 +146,7 @@ struct UpdateEvent {
 
     // Helper constructors
     static UpdateEvent make_gc_progress(int checked, int total, int pruned) {
-        UpdateEvent ev;
+        UpdateEvent ev{};
         ev.type = Type::GC_PROGRESS;
         ev.gc.checked = checked;
         ev.gc.total = total;
@@ -143,7 +155,7 @@ struct UpdateEvent {
     }
 
     static UpdateEvent make_gc_complete(int checked, int total, int pruned) {
-        UpdateEvent ev;
+        UpdateEvent ev{};
         ev.type = Type::GC_COMPLETE;
         ev.gc.checked = checked;
         ev.gc.total = total;
@@ -152,7 +164,7 @@ struct UpdateEvent {
     }
 
     static UpdateEvent make_tile_progress(size_t index, const std::string& filepath, int current, int total) {
-        UpdateEvent ev;
+        UpdateEvent ev{};
         ev.type = Type::TILE_GENERATION_PROGRESS;
         ev.tile_progress.image_index = index;
         ev.tile_progress.filepath = filepath;
@@ -166,7 +178,7 @@ struct UpdateEvent {
         int w, int h, double ar, uintmax_t fsize = 0, uintmax_t ftime = 0,
         ThumbQuality bq = ThumbQuality::NONE, const std::vector<uint8_t>& jpeg_data = {},
         int thumb_w = 0, int thumb_h = 0) {
-        UpdateEvent ev;
+        UpdateEvent ev{};
         ev.type = Type::IMAGE_DISCOVERED;
         ev.image.filepath = path;
         ev.image.content_hash = hash;
@@ -183,7 +195,7 @@ struct UpdateEvent {
     }
 
     static UpdateEvent make_thumb_failed(size_t index, const std::string& filepath, ThumbQuality q) {
-        UpdateEvent ev;
+        UpdateEvent ev{};
         ev.type = Type::THUMB_FAILED;
         ev.failed.image_index = index;
         ev.failed.filepath = filepath;
@@ -194,7 +206,7 @@ struct UpdateEvent {
     static UpdateEvent make_thumb_ready(
         size_t index, const std::string& filepath, ThumbQuality q,
         const std::vector<uint8_t>& jpeg_data, int w, int h) {
-        UpdateEvent ev;
+        UpdateEvent ev{};
         ev.type = Type::THUMB_READY;
         ev.thumb.image_index = index;
         ev.thumb.filepath = filepath;
@@ -206,7 +218,7 @@ struct UpdateEvent {
     }
 
     static UpdateEvent make_thumb_generation_progress(size_t index, const std::string& filepath, int percent) {
-        UpdateEvent ev;
+        UpdateEvent ev{};
         ev.type = Type::THUMB_GENERATION_PROGRESS;
         ev.thumb_progress.image_index = index;
         ev.thumb_progress.filepath = filepath;
@@ -217,7 +229,7 @@ struct UpdateEvent {
     static UpdateEvent make_thumb_rgb_ready(
         size_t index, const std::string& filepath, const std::string& hash,
         ThumbQuality q, const std::vector<uint8_t>& rgb, int w, int h, uint64_t generation) {
-        UpdateEvent ev;
+        UpdateEvent ev{};
         ev.type = Type::THUMB_RGB_READY;
         ev.thumb_rgb.image_index = index;
         ev.thumb_rgb.filepath = filepath;
@@ -233,7 +245,7 @@ struct UpdateEvent {
     static UpdateEvent make_thumb_rgb_ready(
         size_t index, const std::string& filepath, const std::string& hash,
         ThumbQuality q, std::vector<uint8_t>&& rgb, int w, int h, uint64_t generation) {
-        UpdateEvent ev;
+        UpdateEvent ev{};
         ev.type = Type::THUMB_RGB_READY;
         ev.thumb_rgb.image_index = index;
         ev.thumb_rgb.filepath = filepath;
@@ -249,7 +261,7 @@ struct UpdateEvent {
     static UpdateEvent make_full_res_ready(
         size_t index, const std::string& filepath,
         const std::vector<uint8_t>& rgb, int w, int h) {
-        UpdateEvent ev;
+        UpdateEvent ev{};
         ev.type = Type::FULL_RES_READY;
         ev.full_res.image_index = index;
         ev.full_res.filepath = filepath;
@@ -260,30 +272,48 @@ struct UpdateEvent {
     }
 
     static UpdateEvent make_scan_progress(int found) {
-        UpdateEvent e;
+        UpdateEvent e{};
         e.type = Type::SCAN_PROGRESS;
         e.progress.found = found;
         return e;
     }
 
     static UpdateEvent make_scan_complete() {
-        UpdateEvent e;
+        UpdateEvent e{};
         e.type = Type::SCAN_COMPLETE;
         return e;
     }
 
     static UpdateEvent make_image_deleted(const std::string& path) {
-        UpdateEvent e;
+        UpdateEvent e{};
         e.type = Type::IMAGE_DELETED;
         e.deletion.filepath = path;
         return e;
     }
 
     static UpdateEvent make_image_renamed(const std::string& old_path, const std::string& new_path) {
-        UpdateEvent e;
+        UpdateEvent e{};
         e.type = Type::IMAGE_RENAMED;
         e.rename.old_filepath = old_path;
         e.rename.new_filepath = new_path;
         return e;
     }
+};
+
+// Each producer keeps its session even after the UI opens another directory.
+class EventPublisher {
+public:
+    EventPublisher() = default;
+    EventPublisher(moodycamel::ConcurrentQueue<UpdateEvent>& queue, uint64_t session = 0)
+        : queue_(&queue), session_(session) {}
+    uint64_t session() const { return session_; }
+    void enqueue(UpdateEvent event, JobToken job = {}) const {
+        event.session = session_;
+        event.job = job;
+        event.job.session = session_;
+        queue_->enqueue(std::move(event));
+    }
+private:
+    moodycamel::ConcurrentQueue<UpdateEvent>* queue_ = nullptr;
+    uint64_t session_ = 0;
 };

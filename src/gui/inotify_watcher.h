@@ -11,7 +11,7 @@ public:
     InotifyWatcher();
     ~InotifyWatcher() override;
 
-    void start(const std::string& directory, moodycamel::ConcurrentQueue<UpdateEvent>& update_queue) override;
+    void start(const std::string& directory, moodycamel::ConcurrentQueue<UpdateEvent>& update_queue, uint64_t session = 0) override;
     void stop() override;
 
 private:
@@ -19,7 +19,7 @@ private:
     void add_watch_recursive(const std::string& path);
 
     std::string directory_;
-    moodycamel::ConcurrentQueue<UpdateEvent>* update_queue_ = nullptr;
+    EventPublisher update_queue_;
     
     int inotify_fd_ = -1;
     std::atomic<bool> stop_requested_{false};

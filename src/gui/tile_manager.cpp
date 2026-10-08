@@ -16,8 +16,8 @@ static std::string resolve_tile_hash(const std::string& hash, const std::string&
     return "";
 }
 
-TileManager::TileManager(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue)
-    : update_queue_(update_queue) {
+TileManager::TileManager(moodycamel::ConcurrentQueue<UpdateEvent>& update_queue, uint64_t session)
+    : update_queue_(update_queue, session) {
     worker_ = std::thread(&TileManager::worker_thread, this);
 }
 
@@ -33,14 +33,15 @@ void TileManager::init(const std::string& cache_dir) {
     std::filesystem::create_directories(cache_dir_);
 }
 
-void TileManager::request_tiles(size_t image_index, const std::string& filepath, const std::string& hash) {
+void TileManager::request_tiles(size_t image_index, const std::string& filepath, const std::string& hash, uint64_t revision, uint64_t request) {
+    JobToken token{update_queue_.session(), image_index, revision, request};
     std::string eff_hash = resolve_tile_hash(hash, filepath);
 
     {
         std::lock_guard<std::mutex> lock(ready_mutex_);
         if (ready_hashes_.count(eff_hash)) {
             // Already generated!
-            update_queue_.enqueue(UpdateEvent::make_full_res_ready(image_index, filepath, {}, 0, 0)); // Using empty rgb as tiled signal
+            update_queue_.enqueue(UpdateEvent::make_full_res_ready(image_index, filepath, {}, 0, 0), token); // Using empty rgb as tiled signal
             return;
         }
     }
@@ -50,11 +51,12 @@ void TileManager::request_tiles(size_t image_index, const std::string& filepath,
     if (std::filesystem::exists(marker_path)) {
         std::lock_guard<std::mutex> lock(ready_mutex_);
         ready_hashes_.insert(eff_hash);
-        update_queue_.enqueue(UpdateEvent::make_full_res_ready(image_index, filepath, {}, 0, 0));
+        update_queue_.enqueue(UpdateEvent::make_full_res_ready(image_index, filepath, {}, 0, 0), token);
         return;
     }
 
     TileRequest req;
+    req.token = token;
     req.image_index = image_index;
     req.filepath = filepath;
     req.hash = eff_hash;
@@ -111,11 +113,11 @@ void TileManager::worker_thread() {
     while (!stop_requested_) {
         TileRequest req;
         if (request_queue_.try_dequeue(req)) {
-            if (generate_tiles(req.image_index, req.filepath, req.hash)) {
+            if (generate_tiles(req.image_index, req.filepath, req.hash, req.token)) {
                 std::lock_guard<std::mutex> lock(ready_mutex_);
                 ready_hashes_.insert(req.hash);
                 // We use empty rgb_data with w=0, h=0 to signal that tiles are ready
-                update_queue_.enqueue(UpdateEvent::make_full_res_ready(req.image_index, req.filepath, {}, 0, 0));
+                update_queue_.enqueue(UpdateEvent::make_full_res_ready(req.image_index, req.filepath, {}, 0, 0), req.token);
             }
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -123,7 +125,7 @@ void TileManager::worker_thread() {
     }
 }
 
-bool TileManager::generate_tiles(size_t image_index, const std::string& filepath, const std::string& hash) {
+bool TileManager::generate_tiles(size_t image_index, const std::string& filepath, const std::string& hash, JobToken token) {
     std::string eff_hash = resolve_tile_hash(hash, filepath);
     std::string out_dir = cache_dir_ + "/" + eff_hash;
     std::filesystem::create_directories(out_dir);
@@ -175,7 +177,7 @@ bool TileManager::generate_tiles(size_t image_index, const std::string& filepath
         if (stop_requested_) break;
         
         // Report progress every row chunk
-        update_queue_.enqueue(UpdateEvent::make_tile_progress(image_index, filepath, ty, rows));
+        update_queue_.enqueue(UpdateEvent::make_tile_progress(image_index, filepath, ty, rows), token);
         int current_tile_height = std::min(TILE_SIZE, height - ty * TILE_SIZE);
         
         for (int y = 0; y < current_tile_height; y++) {
