@@ -48,10 +48,12 @@ struct UpdateEvent {
         SCAN_COMPLETE,
         TILE_GENERATION_PROGRESS,
         GC_PROGRESS,
-        GC_COMPLETE
+        GC_COMPLETE,
+        DATABASE_ERROR
     };
 
     Type type;
+    std::string message;
 
     // Payload for GC_PROGRESS / GC_COMPLETE
     struct {
@@ -143,6 +145,13 @@ struct UpdateEvent {
         int current_row;
         int total_rows;
     } tile_progress;
+
+    static UpdateEvent make_message(Type type, const std::string& message) {
+        UpdateEvent event{};
+        event.type = type;
+        event.message = message;
+        return event;
+    }
 
     // Helper constructors
     static UpdateEvent make_gc_progress(int checked, int total, int pruned) {

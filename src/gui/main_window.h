@@ -146,6 +146,7 @@ private:
     std::string pre_viewer_filter_;
     std::string current_selected_filepath_;
     std::string similarity_query_filepath_;
+    std::string background_error_;
 
     void sort_by_sift_similarity(const std::string& query_filepath, bool high_accuracy);
 

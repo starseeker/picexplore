@@ -277,6 +277,16 @@ int main() {
     DatabaseManager db_reader;
     bool reader_opened = db_reader.open(conc_db_path);
     assert(reader_opened && "Second instance should open database immediately without blocking on writer");
+    assert(db_reader.get_env() == db_writer.get_env());
+
+    // Canonical aliases and hard links share ownership too; closing a peer
+    // must not close the environment still used by the active writer.
+    {
+        DatabaseManager alias;
+        assert(alias.open("/tmp/./test_concurrent_instance.db"));
+        assert(alias.get_env() == db_writer.get_env());
+        alias.close();
+    }
 
     std::string found_hash;
     assert(db_reader.get_hash_for_path("/photos/a.jpg", found_hash));
@@ -464,6 +474,39 @@ int main() {
     assert(dups_a.size() == 2);
     auto dups_b = hash_db.get_paths_for_hash(hash_b);
     assert(dups_b.size() == 1);
+
+    {
+        DatabaseManager::WriteTransaction transaction(hash_db);
+        assert(transaction);
+        assert(hash_db.store_key_value("rollback:good", "value"));
+        assert(!hash_db.store_key_value(std::string(1024, 'x'), "invalid key"));
+        assert(!transaction.commit());
+    }
+    std::string rolled_back;
+    assert(!hash_db.get_key_value("rollback:good", rolled_back));
+    {
+        DatabaseManager::WriteTransaction transaction(hash_db);
+        assert(transaction);
+        assert(hash_db.store_key_value("rollback:scope", "value"));
+        // Leaving an unfinished scope aborts it.
+    }
+    assert(!hash_db.get_key_value("rollback:scope", rolled_back));
+    std::vector<std::thread> writers;
+    for (int t = 0; t < 4; ++t) {
+        writers.emplace_back([&, t] {
+            DatabaseManager peer;
+            assert(peer.open(file_hash_db_path));
+            assert(peer.get_env() == hash_db.get_env());
+            for (int i = 0; i < 20; ++i) {
+                DatabaseManager::WriteTransaction transaction(peer);
+                assert(transaction);
+                assert(peer.add_path_for_hash("shared", "/photos/" + std::to_string(t) + "-" + std::to_string(i)));
+                assert(transaction.commit());
+            }
+        });
+    }
+    for (auto& writer : writers) writer.join();
+    assert(hash_db.get_paths_for_hash("shared").size() == 80);
 
     hash_db.close();
     fs::remove(file_hash_db_path);

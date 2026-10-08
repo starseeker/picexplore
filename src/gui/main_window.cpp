@@ -375,7 +375,9 @@ void MainWindow::start() {
     session_ = std::make_unique<DirectorySession>();
     session_->db = std::make_unique<DatabaseManager>();
     db_ = session_->db.get();
-    db_->open(db_path_);
+    if (!db_->open(db_path_)) {
+        background_error_ = "Could not open the image cache. Check its location and permissions, then rescan.";
+    }
     session_->full_res = std::make_unique<FullResLoader>(update_queue_, session_id_);
     full_res_loader_ = session_->full_res.get();
     session_->tiles = std::make_unique<TileManager>(update_queue_, session_id_);
@@ -632,6 +634,7 @@ void MainWindow::switch_directory(const std::string& new_dir) {
 
     stop_session();
 
+    background_error_.clear();
     directory_ = new_dir;
     db_path_ = explicit_db_path_;
     directory_filter_.clear();
@@ -976,6 +979,10 @@ std::vector<std::string> MainWindow::reconcile_and_get_duplicates(const std::str
 }
 
 void MainWindow::update_statusbar() {
+    if (!background_error_.empty()) {
+        statusbar_->copy_label(background_error_.c_str());
+        return;
+    }
     if (gc_running_) return;
     if (sift_running_) {
         const std::string label = "  Finding similar images: " + std::to_string(sift_done_count_.load()) +
@@ -1214,7 +1221,10 @@ void MainWindow::poll_events() {
         if (ev.job.has_image() && (!store_.contains(ev.job.image_id) ||
             store_.get(ev.job.image_id).revision != ev.job.revision)) continue;
         if (ev.job.request && ev.job.request != viewer_request_) continue;
-        if (ev.type == UpdateEvent::Type::IMAGE_DISCOVERED) {
+        if (ev.type == UpdateEvent::Type::DATABASE_ERROR) {
+            background_error_ = ev.message;
+            status_dirty = true;
+        } else if (ev.type == UpdateEvent::Type::IMAGE_DISCOVERED) {
             size_t idx = store_.add_image(ev.image.filepath, ev.image.aspect_ratio,
                                           ev.image.width, ev.image.height,
                                           ev.image.file_size, ev.image.file_timestamp);
@@ -1321,14 +1331,14 @@ void MainWindow::poll_events() {
                 exit_single_image_mode();
             }
             if (db_ && db_->is_open()) {
-                std::lock_guard<std::mutex> lock(db_->get_mutex());
-                if (db_->begin_transaction()) {
+                DatabaseManager::WriteTransaction transaction(*db_);
+                if (transaction) {
                     std::string hash;
                     if (db_->get_hash_for_path(ev.deletion.filepath, hash)) {
                         db_->remove_path_for_hash(hash, ev.deletion.filepath);
                     }
                     db_->delete_key("file:" + ev.deletion.filepath);
-                    db_->commit_transaction();
+                    if (!transaction.commit()) background_error_ = "Could not update the image cache. Check disk space, then rescan.";
                 }
             }
             layout_dirty_ = true;
@@ -1342,8 +1352,8 @@ void MainWindow::poll_events() {
             }
             layout_dirty_ = true;
             if (db_ && db_->is_open()) {
-                std::lock_guard<std::mutex> lock(db_->get_mutex());
-                if (db_->begin_transaction()) {
+                DatabaseManager::WriteTransaction transaction(*db_);
+                if (transaction) {
                     std::string hash;
                     if (db_->get_hash_for_path(ev.rename.old_filepath, hash)) {
                         db_->delete_key("file:" + ev.rename.old_filepath);
@@ -1351,7 +1361,7 @@ void MainWindow::poll_events() {
                         db_->add_path_for_hash(hash, ev.rename.new_filepath);
                         db_->store_key_value("file:" + ev.rename.new_filepath, hash);
                     }
-                    db_->commit_transaction();
+                    if (!transaction.commit()) background_error_ = "Could not update the image cache. Check disk space, then rescan.";
                 }
             }
             status_dirty = true;

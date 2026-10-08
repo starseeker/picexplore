@@ -13,7 +13,10 @@ ThumbnailPipeline::ThumbnailPipeline(moodycamel::ConcurrentQueue<UpdateEvent>& u
                                      const std::string& db_path, uint64_t session)
     : update_queue_(update_queue, session), db_path_(db_path), stop_requested_(false) {
     if (!db_path_.empty()) {
-        db_.open(db_path_);
+        if (!db_.open(db_path_)) {
+            update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::DATABASE_ERROR,
+                "Could not open the thumbnail cache. Check its location and permissions, then rescan."));
+        }
     }
 }
 
@@ -315,8 +318,9 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
         std::vector<uint8_t> jpeg_data_out = encode_jpeg(resized.data(), target_w, target_h, 85);
 
         if (db_.is_open() && !hash.empty()) {
-            std::lock_guard<std::mutex> lock(db_.get_mutex());
-            if (db_.begin_transaction()) {
+            DatabaseManager::WriteTransaction transaction(db_);
+            bool cached = false;
+            if (transaction) {
                 std::string key;
                 if (req.target_quality == ThumbQuality::SQUARE_128) key = hash + ":sq128";
                 else if (req.target_quality == ThumbQuality::SQUARE_64) key = hash + ":sq64";
@@ -356,10 +360,14 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
                         db_.store_image_metadata(hash, meta);
                     }
 
-                    db_.commit_transaction();
+                    cached = transaction.commit();
                 } else {
                     db_.abort_transaction();
                 }
+            }
+            if (!cached) {
+                update_queue_.enqueue(UpdateEvent::make_message(UpdateEvent::Type::DATABASE_ERROR,
+                    "Could not save thumbnails. Check free disk space and cache permissions, then rescan."));
             }
         }
 

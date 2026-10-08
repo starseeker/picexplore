@@ -31,6 +31,8 @@
 #include <map>
 #include <set>
 #include <unordered_set>
+#include <unordered_map>
+#include <sys/stat.h>
 
 // Third-party dependencies
 #include "xxhash.h"
@@ -44,6 +46,32 @@
 #define MAX_DB_SIZE 549755813888
 
 namespace fs = std::filesystem;
+
+struct DatabaseEnvironment {
+    MDB_env* env = nullptr;
+    MDB_dbi dbi = 0;
+    ~DatabaseEnvironment() { if (env) mdb_env_close(env); }
+};
+
+namespace {
+std::mutex environment_mutex;
+std::unordered_map<std::string, std::weak_ptr<DatabaseEnvironment>> environments;
+
+std::string database_identity(const std::string& path) {
+    struct stat status{};
+    if (stat(path.c_str(), &status) != 0) return "path:" + path;
+    return "inode:" + std::to_string(status.st_dev) + ":" + std::to_string(status.st_ino);
+}
+
+// Local read handles cannot accidentally replace a connection's write transaction.
+struct ReadTransaction {
+    MDB_txn* txn = nullptr;
+    explicit ReadTransaction(MDB_env* env) {
+        if (env) mdb_txn_begin(env, nullptr, MDB_RDONLY, &txn);
+    }
+    ~ReadTransaction() { if (txn) mdb_txn_abort(txn); }
+};
+}
 
 namespace {
 struct CustomJpegErrorMgr {
@@ -83,90 +111,60 @@ DatabaseManager::~DatabaseManager() {
 }
 
 bool DatabaseManager::open(const std::string& db_path) {
-    if (is_open_) {
-	close();
-    }
-
-    int rc = mdb_env_create(&env_);
-    if (rc != 0) {
-	return false;
-    }
-
-    // Set map size to handle large databases (1GB)
-    rc = mdb_env_set_mapsize(env_, MAX_DB_SIZE);
-    if (rc != 0) {
-	mdb_env_close(env_);
-	env_ = nullptr;
-	return false;
-    }
-
-    // Check if this is a new database for bulk insert optimization
-    bool is_new_db = !std::filesystem::exists(db_path);
-
-    unsigned int flags = MDB_NOSUBDIR | MDB_NOSYNC | MDB_NOMETASYNC | MDB_WRITEMAP;
-
-    rc = mdb_env_open(env_, db_path.c_str(), flags, 0664);
-    if (rc != 0) {
-	mdb_env_close(env_);
-	env_ = nullptr;
-	return false;
-    }
-
-    // Open the DBI handle once for all transactions.
-    // Try opening with MDB_RDONLY first so we never block waiting for exclusive write locks from another process.
-    MDB_txn* setup_txn = nullptr;
-    rc = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &setup_txn);
-    if (rc == 0) {
-        rc = mdb_dbi_open(setup_txn, nullptr, 0, &dbi_);
-        mdb_txn_abort(setup_txn);
-        if (rc == 0) {
-            is_open_ = true;
-            return true;
+    close();
+    std::error_code ec;
+    const auto canonical = fs::weakly_canonical(fs::absolute(db_path, ec), ec).string();
+    if (ec || canonical.empty()) return false;
+    std::lock_guard<std::mutex> lock(environment_mutex);
+    const std::string identity = database_identity(canonical);
+    auto existing = environments.find(identity);
+    if (existing != environments.end()) environment_ = existing->second.lock();
+    if (!environment_) {
+        auto owner = std::make_shared<DatabaseEnvironment>();
+        if (mdb_env_create(&owner->env) != 0 ||
+            mdb_env_set_mapsize(owner->env, MAX_DB_SIZE) != 0 ||
+            mdb_env_set_maxreaders(owner->env, 512) != 0) return false;
+        // MDB_NOTLS allows independent scoped reads on a shared environment,
+        // including a read while this thread has another connection's writer.
+        if (mdb_env_open(owner->env, canonical.c_str(), MDB_NOSUBDIR | MDB_NOTLS, 0664) != 0)
+            return false;
+        MDB_txn* setup = nullptr;
+        if (mdb_txn_begin(owner->env, nullptr, MDB_RDONLY, &setup) != 0) return false;
+        const int rc = mdb_dbi_open(setup, nullptr, 0, &owner->dbi);
+        mdb_txn_abort(setup);
+        if (rc != 0) return false;
+        environment_ = std::move(owner);
+        // Re-stat after creating a new file so aliases/hard links share the owner.
+        for (auto it = environments.begin(); it != environments.end();) {
+            if (it->second.expired()) it = environments.erase(it); else ++it;
         }
+        environments[database_identity(canonical)] = environment_;
     }
-
-    // Fallback: if database is newly created and DBI does not exist yet, use write transaction with MDB_CREATE
-    rc = mdb_txn_begin(env_, nullptr, 0, &setup_txn);
-    if (rc != 0) {
-	mdb_env_close(env_);
-	env_ = nullptr;
-	return false;
-    }
-
-    rc = mdb_dbi_open(setup_txn, nullptr, MDB_CREATE, &dbi_);
-    if (rc != 0) {
-	mdb_txn_abort(setup_txn);
-	mdb_env_close(env_);
-	env_ = nullptr;
-	return false;
-    }
-
-    rc = mdb_txn_commit(setup_txn);
-    if (rc != 0) {
-	mdb_env_close(env_);
-	env_ = nullptr;
-	return false;
-    }
-
+    env_ = environment_->env;
+    dbi_ = environment_->dbi;
     is_open_ = true;
     return true;
 }
 
 void DatabaseManager::close() {
-    if (txn_) {
-	mdb_txn_abort(txn_);
-	txn_ = nullptr;
-    }
-    if (env_) {
-	mdb_env_close(env_);
-	env_ = nullptr;
-    }
+    abort_transaction();
+    env_ = nullptr;
+    dbi_ = 0;
     is_open_ = false;
+    // Serialize the last close with a concurrent reopen of the same file.
+    std::lock_guard<std::mutex> lock(environment_mutex);
+    environment_.reset();
+}
+
+bool DatabaseManager::record_write_result(int error) {
+    if (error && !transaction_error_) transaction_error_ = error;
+    return error == 0;
 }
 
 bool DatabaseManager::begin_transaction() {
     if (!is_open_ || txn_) return false;
 
+    transaction_error_ = 0;
     int rc = mdb_txn_begin(env_, nullptr, 0, &txn_);
     if (rc != 0) {
 	return false;
@@ -179,6 +177,10 @@ bool DatabaseManager::begin_transaction() {
 bool DatabaseManager::commit_transaction() {
     if (!txn_) return false;
 
+    if (transaction_error_) {
+        abort_transaction();
+        return false;
+    }
     int rc = mdb_txn_commit(txn_);
     txn_ = nullptr;
     return (rc == 0);
@@ -200,7 +202,7 @@ bool DatabaseManager::store_key_value(const std::string& key, const std::string&
     v.mv_data = (void*)value.c_str();
     v.mv_size = value.length();
 
-    return mdb_put(txn_, dbi_, &k, &v, 0) == 0;
+    return record_write_result(mdb_put(txn_, dbi_, &k, &v, 0));
 }
 
 bool DatabaseManager::store_key_data(const std::string& key, const std::vector<uint8_t>& data) {
@@ -212,7 +214,7 @@ bool DatabaseManager::store_key_data(const std::string& key, const std::vector<u
     v.mv_data = (void*)data.data();
     v.mv_size = data.size();
 
-    return mdb_put(txn_, dbi_, &k, &v, 0) == 0;
+    return record_write_result(mdb_put(txn_, dbi_, &k, &v, 0));
 }
 
 bool DatabaseManager::delete_key(const std::string& key) {
@@ -222,7 +224,8 @@ bool DatabaseManager::delete_key(const std::string& key) {
     k.mv_data = (void*)key.c_str();
     k.mv_size = key.length();
 
-    return mdb_del(txn_, dbi_, &k, nullptr) == 0;
+    int rc = mdb_del(txn_, dbi_, &k, nullptr);
+    return record_write_result(rc == MDB_NOTFOUND ? 0 : rc);
 }
 
 bool DatabaseManager::get_key_value(const std::string& key, std::string& value) {
@@ -244,16 +247,10 @@ bool DatabaseManager::get_key_value(const std::string& key, std::string& value) 
 bool DatabaseManager::get_key_value_concurrent(const std::string& key, std::string& value) const {
     if (!is_open_ || !env_) return false;
 
-    MDB_txn* read_txn = nullptr;
-    if (mdb_txn_begin(env_, nullptr, MDB_RDONLY, &read_txn) != 0) {
-        return false;
-    }
-
-    MDB_dbi dbi;
-    if (mdb_dbi_open(read_txn, nullptr, 0, &dbi) != 0) {
-        mdb_txn_abort(read_txn);
-        return false;
-    }
+    ReadTransaction read(env_);
+    if (!read.txn) return false;
+    MDB_txn* read_txn = read.txn;
+    const MDB_dbi dbi = dbi_;
 
     MDB_val k, v;
     k.mv_data = (void*)key.c_str();
@@ -265,7 +262,6 @@ bool DatabaseManager::get_key_value_concurrent(const std::string& key, std::stri
         found = true;
     }
 
-    mdb_txn_abort(read_txn);
     return found;
 }
 
@@ -288,16 +284,10 @@ bool DatabaseManager::get_key_data(const std::string& key, std::vector<uint8_t>&
 bool DatabaseManager::get_key_data_concurrent(const std::string& key, std::vector<uint8_t>& data) const {
     if (!is_open_ || !env_) return false;
 
-    MDB_txn* read_txn = nullptr;
-    if (mdb_txn_begin(env_, nullptr, MDB_RDONLY, &read_txn) != 0) {
-        return false;
-    }
-
-    MDB_dbi dbi;
-    if (mdb_dbi_open(read_txn, nullptr, 0, &dbi) != 0) {
-        mdb_txn_abort(read_txn);
-        return false;
-    }
+    ReadTransaction read(env_);
+    if (!read.txn) return false;
+    MDB_txn* read_txn = read.txn;
+    const MDB_dbi dbi = dbi_;
 
     MDB_val k, v;
     k.mv_data = (void*)key.c_str();
@@ -309,7 +299,6 @@ bool DatabaseManager::get_key_data_concurrent(const std::string& key, std::vecto
         found = true;
     }
 
-    mdb_txn_abort(read_txn);
     return found;
 }
 
@@ -1171,7 +1160,7 @@ bool DatabaseManager::set_paths_for_hash(const std::string& hash, const std::vec
     }
 
     if (manage_txn) {
-	if (success) commit_transaction();
+	if (success) success = commit_transaction();
 	else abort_transaction();
     }
 
@@ -1202,7 +1191,7 @@ bool DatabaseManager::add_path_for_hash(const std::string& hash, const std::stri
     }
 
     if (manage_txn) {
-	if (success) commit_transaction();
+	if (success) success = commit_transaction();
 	else abort_transaction();
     }
 
@@ -1228,7 +1217,7 @@ bool DatabaseManager::remove_path_for_hash(const std::string& hash, const std::s
     bool success = set_paths_for_hash(hash, remaining);
 
     if (manage_txn) {
-	if (success) commit_transaction();
+	if (success) success = commit_transaction();
 	else abort_transaction();
     }
 
@@ -1346,10 +1335,6 @@ std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::stri
     key.mv_data = (void*)start_key.c_str();
     key.mv_size = start_key.length();
 
-    MDB_txn* temp_txn = txn_;
-    MDB_dbi temp_dbi = dbi_;
-    txn_ = read_txn;
-    dbi_ = read_dbi;
 
     std::unordered_set<std::string> seen_paths;
     int rc = mdb_cursor_get(cursor, &key, &data, MDB_SET_RANGE);
@@ -1436,8 +1421,6 @@ std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::stri
         }
     }
 
-    txn_ = temp_txn;
-    dbi_ = temp_dbi;
 
     mdb_cursor_close(cursor);
     mdb_txn_abort(read_txn);
@@ -1766,28 +1749,9 @@ bool DatabaseManager::store_sift_features(const std::string& hash, const SiftFea
     std::vector<uint8_t> bytes = data.serialize();
     if (bytes.empty()) return false;
 
-    std::lock_guard<std::mutex> lock(db_mutex_);
-    if (txn_) {
-        return store_key_data(key, bytes);
-    }
-
-    MDB_txn* write_txn = nullptr;
-    if (mdb_txn_begin(env_, nullptr, 0, &write_txn) != 0) return false;
-    MDB_dbi write_dbi;
-    if (mdb_dbi_open(write_txn, nullptr, 0, &write_dbi) != 0) {
-        mdb_txn_abort(write_txn);
-        return false;
-    }
-    MDB_val k, v;
-    k.mv_data = (void*)key.c_str();
-    k.mv_size = key.length();
-    v.mv_data = (void*)bytes.data();
-    v.mv_size = bytes.size();
-    if (mdb_put(write_txn, write_dbi, &k, &v, 0) == 0) {
-        return mdb_txn_commit(write_txn) == 0;
-    }
-    mdb_txn_abort(write_txn);
-    return false;
+    WriteTransaction transaction(*this);
+    if (!transaction) return false;
+    return store_key_data(key, bytes) && transaction.commit();
 }
 
 bool DatabaseManager::get_sift_features(const std::string& hash, SiftFeatureData& out_data) const {

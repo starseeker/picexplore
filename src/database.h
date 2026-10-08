@@ -80,13 +80,36 @@ struct WriteTask {
 	: type(t), key(k), data(d) {}
 };
 
+struct DatabaseEnvironment;
+
 // Database manager class
 class DatabaseManager {
     public:
 	DatabaseManager();
 	~DatabaseManager();
 
-	bool open(const std::string& db_path);
+        DatabaseManager(const DatabaseManager&) = delete;
+        DatabaseManager& operator=(const DatabaseManager&) = delete;
+        // A connection's explicit transaction belongs to its caller. Parallel
+        // readers use the *_concurrent methods; writers use this scoped guard.
+        class WriteTransaction {
+        public:
+            explicit WriteTransaction(DatabaseManager& db)
+                : db_(db), lock_(db.db_mutex_), active_(db.begin_transaction()) {}
+            ~WriteTransaction() { if (active_) db_.abort_transaction(); }
+            explicit operator bool() const { return active_; }
+            bool commit() {
+                if (!active_) return false;
+                active_ = false;
+                return db_.commit_transaction();
+            }
+        private:
+            DatabaseManager& db_;
+            std::unique_lock<std::mutex> lock_;
+            bool active_;
+        };
+
+        bool open(const std::string& db_path);
 	void close();
 
 	// Scanning and thumbnail generation
@@ -99,10 +122,13 @@ class DatabaseManager {
 	bool has_thumbnails(const std::string& hash);
 
     private:
+    std::shared_ptr<DatabaseEnvironment> environment_;
 	MDB_env* env_;
 	MDB_txn* txn_;
 	MDB_dbi dbi_;
 	bool is_open_;
+    int transaction_error_ = 0;
+    bool record_write_result(int error);
 
 	// Parallel processing
 	mutable std::mutex db_mutex_;
