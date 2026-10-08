@@ -317,10 +317,7 @@ MainWindow::~MainWindow() {
         gc_stop_requested_ = true;
         if (gc_thread_.joinable()) gc_thread_.join();
     }
-    if (sift_running_) {
-        sift_stop_requested_ = true;
-        if (sift_thread_.joinable()) sift_thread_.join();
-    }
+    cancel_similarity();
     if (scanner_) { scanner_->stop(); delete scanner_; }
     if (pipeline_) { pipeline_->stop(); delete pipeline_; }
     if (full_res_loader_) { delete full_res_loader_; }
@@ -617,6 +614,7 @@ void MainWindow::switch_directory(const std::string& new_dir) {
     if (watcher_) { watcher_->stop(); delete watcher_; watcher_ = nullptr; }
     if (pipeline_) { pipeline_->stop(); delete pipeline_; pipeline_ = nullptr; }
     if (full_res_loader_) { delete full_res_loader_; full_res_loader_ = nullptr; }
+    cancel_similarity();
     if (db_) { delete db_; db_ = nullptr; }
 
     directory_ = new_dir;
@@ -964,6 +962,12 @@ std::vector<std::string> MainWindow::reconcile_and_get_duplicates(const std::str
 
 void MainWindow::update_statusbar() {
     if (gc_running_) return;
+    if (sift_running_) {
+        const std::string label = "  Finding similar images: " + std::to_string(sift_done_count_.load()) +
+            " / " + std::to_string(sift_total_) + "  |  Esc: Cancel";
+        statusbar_->copy_label(label.c_str());
+        return;
+    }
     std::string label;
     
     if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
@@ -1181,6 +1185,7 @@ void MainWindow::timer_cb(void* data) {
 }
 
 void MainWindow::poll_events() {
+    poll_similarity();
     bool need_redraw = false;
     bool status_dirty = false;
     std::vector<size_t> changed;
@@ -2061,6 +2066,7 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
     if ((choice >= 1 && choice <= 6) || choice == 17 || choice == 18 || choice == 36 || choice == 37) {
         win->current_sort_criteria_ = criteria;
         win->sort_ascending_ = ascending;
+        win->cancel_similarity();
         win->store_.sort_entries(criteria, ascending);
         win->settings_.default_sort_order = win->get_sort_order_string();
         win->settings_.save();
@@ -2072,86 +2078,75 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
     }
 }
 
+void MainWindow::cancel_similarity() {
+    sift_stop_requested_ = true;
+    if (sift_thread_.joinable()) sift_thread_.join();
+    sift_running_ = false;
+    sift_complete_ = false;
+    sift_snapshot_.reset();
+}
+
 void MainWindow::sort_by_sift_similarity(const std::string& query_filepath, bool high_accuracy) {
-    if (query_filepath.empty() || store_.size() == 0) return;
-
-    size_t idx = store_.find_by_filepath(query_filepath);
-    if (idx == static_cast<size_t>(-1)) {
-        idx = 0;
-    }
-
+    const size_t id = store_.find_by_filepath(query_filepath);
+    if (!store_.contains(id)) return;
+    cancel_similarity();
     similarity_query_filepath_ = query_filepath;
+    sift_query_id_ = id;
     current_sort_criteria_ = high_accuracy ? ImageStore::SortCriteria::SIMILARITY_ACCURATE : ImageStore::SortCriteria::SIMILARITY_FAST;
     sort_ascending_ = false;
-
-    // Status update while calculating
-    std::string mode_str = high_accuracy ? "High Accuracy" : "Fast";
-    std::string q_name = std::filesystem::path(query_filepath).filename().string();
-    const size_t total = store_.size();
-    std::atomic<size_t> done_count{0};
-    std::atomic<bool> complete{false};
-    sift_stop_requested_.store(false);
-    sift_running_.store(true);
-
-    // Run sort computation on a background worker thread
-    sift_thread_ = std::thread([this, idx, high_accuracy, &done_count, &complete]() {
-        store_.sort_by_similarity(idx, high_accuracy, db_, &done_count, settings_.sift_thumbnail_size, &sift_stop_requested_);
-        complete.store(true);
+    sift_snapshot_ = std::make_unique<ImageStore>(store_.snapshot());
+    sift_stop_requested_ = false;
+    sift_total_ = store_.size();
+    sift_done_count_ = 0;
+    sift_complete_ = false;
+    sift_succeeded_ = false;
+    sift_running_ = true;
+    const auto db_path = db_path_;
+    const int resolution = settings_.sift_thumbnail_size;
+    ImageStore* snapshot = sift_snapshot_.get();
+    sift_thread_ = std::thread([this, snapshot, id, high_accuracy, db_path, resolution]() {
+        try {
+            DatabaseManager db;
+            db.open(db_path);
+            sift_succeeded_ = snapshot->sort_by_similarity(id, high_accuracy, &db,
+                &sift_done_count_, resolution, &sift_stop_requested_);
+        } catch (const std::exception& e) {
+            std::cerr << "Similarity analysis failed: " << e.what() << std::endl;
+        }
+        sift_complete_.store(true);
     });
+    update_statusbar();
+}
 
-    // Pumping GUI event loop on the MAIN thread to display progress and remain responsive
-    size_t last_reported = 0;
-    while (!complete.load()) {
-        if (!visible() || sift_stop_requested_.load()) {
-            sift_stop_requested_.store(true);
-            break;
-        }
-        size_t current = done_count.load();
-        if (current != last_reported || current == total) {
-            last_reported = current;
-            int pct = (total > 0) ? static_cast<int>((current * 100) / total) : 0;
-            std::string msg = "  Sorting by SIFT (" + mode_str + "): " + std::to_string(current) + " / " + std::to_string(total) + " (" + std::to_string(pct) + "%) [Esc to Cancel]";
-            statusbar_->copy_label(msg.c_str());
-            statusbar_->redraw();
-        }
-        Fl::wait(0.02);
-    }
-
-    if (sift_thread_.joinable()) {
-        sift_thread_.join();
-    }
-    sift_running_.store(false);
-
-    if (sift_stop_requested_.load()) {
-        if (visible()) {
-            current_sort_criteria_ = ImageStore::SortCriteria::ALPHABETICAL;
-            std::string msg = "  SIFT similarity analysis cancelled.";
-            statusbar_->copy_label(msg.c_str());
-            statusbar_->redraw();
-            update_statusbar();
-        }
+void MainWindow::poll_similarity() {
+    if (!sift_running_) return;
+    if (!sift_complete_) {
+        update_statusbar();
         return;
     }
-
-    current_selected_filepath_ = query_filepath;
-    viewport_->set_selected_image(store_.find_by_filepath(query_filepath));
-
-    if (info_panel_visible_) {
-        const auto& entry = store_.at_position(0);
-        auto dups = reconcile_and_get_duplicates(entry.content_hash, entry.filepath);
-        info_panel_->display_info(entry, dups);
+    if (sift_thread_.joinable()) sift_thread_.join();
+    sift_running_ = false;
+    const bool applied = !sift_stop_requested_ && sift_succeeded_ &&
+        store_.apply_similarity(*sift_snapshot_, sift_query_id_);
+    sift_snapshot_.reset();
+    if (applied) {
+        current_selected_filepath_ = store_.get(sift_query_id_).filepath;
+        viewport_->set_selected_image(sift_query_id_);
+        current_generation_++;
+        if (pipeline_) pipeline_->set_generation(current_generation_);
+        last_visible_.clear();
+        layout_dirty_ = true;
+        viewport_->set_scroll_offset(0);
+        recompute_layout(true);
+    } else {
+        current_sort_criteria_ = ImageStore::SortCriteria::ALPHABETICAL;
+        store_.sort_entries(current_sort_criteria_, true);
+        layout_dirty_ = true;
     }
-
-    current_generation_++;
-    if (pipeline_) {
-        pipeline_->set_generation(current_generation_);
-    }
-    last_visible_.clear();
-    layout_dirty_ = true;
-    viewport_->set_scroll_offset(0);
-    recompute_layout(true);
     rebuild_menu();
     update_statusbar();
+    if (!applied) statusbar_->copy_label(sift_stop_requested_ ?
+        "  Similarity analysis cancelled." : "  Similarity analysis could not finish. Select an image and retry.");
 }
 
 int MainWindow::handle(int event) {

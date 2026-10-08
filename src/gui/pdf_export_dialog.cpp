@@ -139,7 +139,7 @@ PDFExportDialog::PDFExportDialog(int w, int h, const char* title,
                                  const std::string& root_dir,
                                  const std::string& dir_filter)
     : Fl_Double_Window(w, h, title),
-      store_(store),
+      store_(store.snapshot()),
       db_path_(db_path)
 {
     if (!db_path_.empty()) {
@@ -578,7 +578,8 @@ void PDFExportDialog::start_export(const std::string& output_path) {
 
     std::string db_p = db_path_;
 
-    export_thread_ = std::thread([this, output_path, db_p]() {
+    const PDFOptions export_options = options_;
+    export_thread_ = std::thread([this, output_path, db_p, export_options]() {
         DatabaseManager export_db;
         DatabaseManager* db_ptr = nullptr;
         if (!db_p.empty() && export_db.open(db_p)) {
@@ -587,7 +588,7 @@ void PDFExportDialog::start_export(const std::string& output_path) {
 
         PDFGenerator generator;
         bool ok = generator.generate_from_store(
-            store_, output_path, options_, db_ptr,
+            store_, output_path, export_options, db_ptr,
             [this](int curr, int total, const std::string& msg) {
                 progress_.current.store(curr);
                 progress_.total.store(total);

@@ -99,7 +99,7 @@ private:
     static void on_export_clicked(Fl_Widget* w, void* data);
     static void on_cancel_clicked(Fl_Widget* w, void* data);
 
-    const ImageStore& store_;
+    const ImageStore store_;
     std::string db_path_;
     DatabaseManager preview_db_;
     PDFOptions options_;

@@ -478,11 +478,11 @@ struct SimilarityResult {
     bool loaded = false;
 };
 
-void ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, DatabaseManager* db,
+bool ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, DatabaseManager* db,
                                     std::atomic<size_t>* progress_counter,
                                     int preferred_size,
                                     std::atomic<bool>* stop_requested) {
-    if (!contains(query_index)) return;
+    if (!contains(query_index)) return false;
 
     std::string query_path = entries_[query_index].filepath;
     std::string query_hash = entries_[query_index].content_hash;
@@ -513,7 +513,7 @@ void ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
 
     if (!query_sift.valid) {
         std::cerr << "Warning: Failed to extract SIFT features for query image: " << query_path << std::endl;
-        return;
+        return false;
     }
 
     const size_t total = entries_.size();
@@ -594,7 +594,7 @@ void ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
     }
 
     if (stop_requested && stop_requested->load(std::memory_order_relaxed)) {
-        return;
+        return false;
     }
 
     // Apply computed scores to ImageStore entries
@@ -620,6 +620,7 @@ void ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
     });
 
     aspects_dirty_ = true;
+    return true;
 }
 
 size_t ImageStore::find_by_filepath(const std::string& filepath) const {
@@ -696,4 +697,58 @@ void ImageStore::evict_memory_if_needed() {
         }
         if (!found) break; // Everything is visible, can't evict
     }
+}
+
+ImageStore ImageStore::snapshot() const {
+    ImageStore copy;
+    copy.next_id_ = next_id_;
+    copy.order_ = order_;
+    copy.path_to_index_ = path_to_index_;
+    for (auto id : order_) {
+        const auto& source = get(id);
+        ImageEntry entry;
+        entry.index = id;
+        entry.revision = source.revision;
+        entry.filepath = source.filepath;
+        entry.content_hash = source.content_hash;
+        entry.original_width = source.original_width;
+        entry.original_height = source.original_height;
+        entry.aspect_ratio = source.aspect_ratio;
+        entry.metadata_known = source.metadata_known;
+        entry.file_size = source.file_size;
+        entry.file_timestamp = source.file_timestamp;
+        entry.duplicate_count = source.duplicate_count;
+        entry.sift_global_vector = source.sift_global_vector;
+        entry.sift_vector_loaded = source.sift_vector_loaded;
+        entry.similarity_score = source.similarity_score;
+        copy.entries_.emplace(id, std::move(entry));
+    }
+    return copy;
+}
+
+bool ImageStore::apply_similarity(const ImageStore& result, size_t query_id) {
+    if (!contains(query_id) || !result.contains(query_id) ||
+        get(query_id).revision != result.get(query_id).revision) return false;
+    for (auto id : order_) {
+        auto& entry = get(id);
+        entry.similarity_score = 0;
+        if (!result.contains(id)) continue;
+        const auto& source = result.get(id);
+        if (entry.revision != source.revision) continue;
+        entry.similarity_score = source.similarity_score;
+        entry.sift_global_vector = source.sift_global_vector;
+        entry.sift_vector_loaded = source.sift_vector_loaded;
+    }
+    std::sort(order_.begin(), order_.end(), [this, query_id](size_t a, size_t b) {
+        if (a == b) return false;
+        if (a == query_id) return true;
+        if (b == query_id) return false;
+        const auto& left = get(a);
+        const auto& right = get(b);
+        if (left.similarity_score != right.similarity_score)
+            return left.similarity_score > right.similarity_score;
+        return left.filepath < right.filepath;
+    });
+    aspects_dirty_ = true;
+    return true;
 }

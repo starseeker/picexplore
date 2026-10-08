@@ -16,6 +16,7 @@
 #include <string>
 #include <unordered_set>
 #include <chrono>
+#include <memory>
 
 class FileTypeLegendWidget : public Fl_Widget {
 public:
@@ -113,6 +114,14 @@ private:
     std::thread sift_thread_;
     std::atomic<bool> sift_running_{false};
     std::atomic<bool> sift_stop_requested_{false};
+    std::atomic<size_t> sift_done_count_{0};
+    std::atomic<bool> sift_complete_{false};
+    std::unique_ptr<ImageStore> sift_snapshot_;
+    size_t sift_query_id_ = static_cast<size_t>(-1);
+    bool sift_succeeded_ = false;
+    size_t sift_total_ = 0;
+    void cancel_similarity();
+    void poll_similarity();
 
     AppSettings settings_;
     double hierarchy_thumbnail_threshold_ = 8.0;

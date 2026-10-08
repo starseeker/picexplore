@@ -36,6 +36,21 @@ int main() {
     try { store.get(a); } catch (const std::out_of_range&) { rejected = true; }
     assert(rejected);
 
+    auto snapshot = store.snapshot();
+    snapshot.get(b).similarity_score = 0.9;
+    snapshot.get(replacement).similarity_score = 0.3;
+    store.remove_image("a.jpg");
+    const auto fresh = store.add_image("a.jpg", 1);
+    assert(snapshot.contains(replacement));
+    assert(!snapshot.contains(fresh));
+    assert(store.apply_similarity(snapshot, b));
+    assert(store.order().front() == b);
+    assert(store.get(fresh).similarity_score == 0);
+    ++store.get(b).revision;
+    assert(!store.apply_similarity(snapshot, b));
+    assert(snapshot.get(b).revision != store.get(b).revision);
+    assert(snapshot.get(b).scaled.rgb_data.empty());
+
     store.clear();
     assert(store.add_image("b.jpg", 1) != b);
 }

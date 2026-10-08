@@ -125,7 +125,7 @@ public:
         SIMILARITY_ACCURATE
     };
     void sort_entries(SortCriteria criteria, bool ascending);
-    void sort_by_similarity(size_t query_index, bool high_accuracy, DatabaseManager* db = nullptr,
+    bool sort_by_similarity(size_t query_index, bool high_accuracy, DatabaseManager* db = nullptr,
                             std::atomic<size_t>* progress_counter = nullptr,
                             int preferred_size = 512,
                             std::atomic<bool>* stop_requested = nullptr);
@@ -133,6 +133,10 @@ public:
     void ensure_pixel_dimensions();
     void ensure_duplicate_counts();
     size_t find_by_filepath(const std::string& filepath) const;
+
+    // Detached metadata snapshots are safe inputs for background analysis/export.
+    ImageStore snapshot() const;
+    bool apply_similarity(const ImageStore& result, size_t query_id);
 
     // Memory management: Evict unused RGB and scaled data
     void evict_memory_if_needed();
