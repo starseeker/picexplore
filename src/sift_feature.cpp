@@ -257,7 +257,7 @@ void SiftFeatureEngine::build_global_vector(const uint8_t* gray, int width, int 
 
     for (int y = 1; y < height - 1; ++y) {
         int qy = (y < hh) ? 0 : 1;
-        for (int x = 1; x < hw - 1; ++x) {
+        for (int x = 1; x < width - 1; ++x) {
             int qx = (x < hw) ? 0 : 1;
             int quad = qy * 2 + qx;
             int base_idx = quad * 16;

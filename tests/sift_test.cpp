@@ -156,6 +156,21 @@ void test_similarity_consistency() {
     assert(sim_a1_a2_fast > sim_a1_b_fast && "Fast similarity ranking violated");
     assert(sim_a1_a2_acc > sim_a1_b_acc && "High accuracy similarity ranking violated");
 
+    // Verify right-half pixel gradients populate quadrants 1 and 3
+    std::vector<uint8_t> right_grad(64 * 64, 0);
+    for (int y = 0; y < 64; ++y) {
+        for (int x = 32; x < 64; ++x) {
+            right_grad[y * 64 + x] = static_cast<uint8_t>((x - 32) * 8);
+        }
+    }
+    SiftFeatureData right_feat;
+    assert(SiftFeatureEngine::extract_from_gray(right_grad.data(), 64, 64, right_feat));
+    float q1_energy = 0.0f, q3_energy = 0.0f;
+    for (int i = 16; i < 24; ++i) q1_energy += right_feat.global_vector[i];
+    for (int i = 48; i < 56; ++i) q3_energy += right_feat.global_vector[i];
+    assert(q1_energy > 0.0f && "Top-right quadrant gradient energy missing");
+    assert(q3_energy > 0.0f && "Bottom-right quadrant gradient energy missing");
+
     std::cout << "  Similarity consistency tests: PASSED" << std::endl;
 }
 
