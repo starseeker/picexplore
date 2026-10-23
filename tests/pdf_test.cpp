@@ -221,6 +221,36 @@ void test_pdf_document_generation() {
         }
         assert(found_tm_green && "Treemap snapshot preview failed to render thumbnail from database");
 
+        options.treemap_render_style = PDFTreemapRenderStyle::CUSHION_TREEMAP;
+        auto cushion_preview = PDFGenerator::render_preview_page(store, options, 0, 300, 400);
+        auto layout = PDFGenerator::calculate_treemap_layout(store, options);
+        assert(layout.boxes.size() >= 2);
+        // Find a box with x > 0 or y > 0 to verify layout-coordinate cushion ridges and file-type tinting
+        bool checked_offset_box = false;
+        double scale = std::min(300.0 / options.page_width_px(), 400.0 / options.page_height_px());
+        int margin_px = static_cast<int>(options.page_margin_px() * scale);
+        for (const auto& box : layout.boxes) {
+            if (box.x > 10.0 || box.y > 10.0) {
+                int bx = margin_px + static_cast<int>(box.x * scale);
+                int by = margin_px + static_cast<int>(box.y * scale);
+                int bw = std::max(1, static_cast<int>(box.w * scale));
+                int bh = std::max(1, static_cast<int>(box.h * scale));
+                if (bw >= 10 && bh >= 10) {
+                    int tl_idx = ((by + 2) * 300 + (bx + 2)) * 3;
+                    int br_idx = ((by + bh - 3) * 300 + (bx + bw - 3)) * 3;
+                    int tl_lum = cushion_preview[tl_idx] + cushion_preview[tl_idx + 1] + cushion_preview[tl_idx + 2];
+                    int br_lum = cushion_preview[br_idx] + cushion_preview[br_idx + 1] + cushion_preview[br_idx + 2];
+                    assert(tl_lum > br_lum && "Cushion ridge should illuminate top-left brighter than bottom-right");
+                    assert((cushion_preview[tl_idx] != cushion_preview[tl_idx + 1] ||
+                            cushion_preview[tl_idx + 1] != cushion_preview[tl_idx + 2]) &&
+                           "Cushion shading should tint with file-type colors");
+                    checked_offset_box = true;
+                    break;
+                }
+            }
+        }
+        assert(checked_offset_box);
+
         db.close();
         std::cout << "  In-dialog preview buffer rendered successfully (300x400)." << std::endl;
     }

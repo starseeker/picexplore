@@ -140,34 +140,52 @@ void PDFGenerator::draw_rect(std::vector<uint8_t>& buffer, int buf_w, int buf_h,
 
 void PDFGenerator::draw_cushion(std::vector<uint8_t>& buffer, int buf_w, int buf_h,
                                 int x, int y, int w, int h,
-                                double ax, double bx, double ay, double by) {
+                                double layout_x, double layout_y,
+                                double layout_w, double layout_h,
+                                double ax, double bx, double ay, double by,
+                                uint8_t base_r, uint8_t base_g, uint8_t base_b) {
+    if (w <= 0 || h <= 0 || layout_w <= 0.0 || layout_h <= 0.0) return;
+
+    if (ax == 0.0 && ay == 0.0) {
+        double h_val = 0.5;
+        ax = -8.0 * h_val / (layout_w * layout_w);
+        bx = 4.0 * h_val * (2.0 * layout_x + layout_w) / (layout_w * layout_w);
+        ay = -8.0 * h_val / (layout_h * layout_h);
+        by = 4.0 * h_val * (2.0 * layout_y + layout_h) / (layout_h * layout_h);
+    }
+
     int x1 = std::clamp(x, 0, buf_w);
     int y1 = std::clamp(y, 0, buf_h);
     int x2 = std::clamp(x + w, 0, buf_w);
     int y2 = std::clamp(y + h, 0, buf_h);
 
-    constexpr double lx = 0.57735;
-    constexpr double ly = 0.57735;
-    constexpr double lz = 0.57735;
-    constexpr double Ia = 40.0;
-    constexpr double Is = 215.0;
+    constexpr double lx = -0.436739;
+    constexpr double ly = -0.436739;
+    constexpr double lz = 0.786130;
+    constexpr double Ia = 0.20;
+    constexpr double Id = 0.80;
+
+    const double sx = layout_w / static_cast<double>(w);
+    const double sy = layout_h / static_cast<double>(h);
 
     for (int cy = y1; cy < y2; ++cy) {
-        double py = cy - y;
-        double ny = -(2.0 * ay * py + by);
+        double py = layout_y + (static_cast<double>(cy - y) + 0.5) * sy;
+        double ny = ay * py + by;
+        double ny_term = -ny * ly + lz;
+        double ny2_plus1 = ny * ny + 1.0;
         uint8_t* ptr = buffer.data() + (cy * buf_w + x1) * 3;
 
         for (int cx = x1; cx < x2; ++cx) {
-            double px = cx - x;
-            double nx = -(2.0 * ax * px + bx);
-            double cosa = (nx * lx + ny * ly + lz) / std::sqrt(nx * nx + ny * ny + 1.0);
-            cosa = std::max(0.0, cosa);
-            double intensity = Ia + Is * cosa;
-            uint8_t val = static_cast<uint8_t>(std::clamp(intensity, 0.0, 255.0));
+            double px = layout_x + (static_cast<double>(cx - x) + 0.5) * sx;
+            double nx = ax * px + bx;
+            double num = -nx * lx + ny_term;
+            double den = std::sqrt(nx * nx + ny2_plus1);
+            double cos_theta = (num > 0.0) ? (num / den) : 0.0;
+            double intensity = Ia + Id * cos_theta;
 
-            *ptr++ = val;
-            *ptr++ = val;
-            *ptr++ = val;
+            *ptr++ = static_cast<uint8_t>(std::clamp(base_r * intensity + 0.5, 0.0, 255.0));
+            *ptr++ = static_cast<uint8_t>(std::clamp(base_g * intensity + 0.5, 0.0, 255.0));
+            *ptr++ = static_cast<uint8_t>(std::clamp(base_b * intensity + 0.5, 0.0, 255.0));
         }
     }
 }
@@ -570,8 +588,11 @@ std::vector<uint8_t> PDFGenerator::render_preview_page(
                     draw_filled_rect(preview_buf, preview_w, preview_h, bx, by, bw, bh, 200, 200, 200);
                 }
             } else if (options.treemap_render_style == PDFTreemapRenderStyle::CUSHION_TREEMAP) {
+                auto col = FileTypeColors::get_color_rgb(entry.filepath);
                 draw_cushion(preview_buf, preview_w, preview_h, bx, by, bw, bh,
-                             box.cushion_ax, box.cushion_bx, box.cushion_ay, box.cushion_by);
+                             box.x, box.y, box.w, box.h,
+                             box.cushion_ax, box.cushion_bx, box.cushion_ay, box.cushion_by,
+                             col.r, col.g, col.b);
             } else if (options.treemap_render_style == PDFTreemapRenderStyle::FILE_TYPE_COLORS) {
                 auto col = FileTypeColors::get_color_rgb(entry.filepath);
                 draw_filled_rect(preview_buf, preview_w, preview_h, bx, by, bw, bh,
@@ -808,8 +829,11 @@ bool PDFGenerator::generate_from_store(
                             draw_filled_rect(page_buffer, page_w, page_h, bx, by, bw, bh, 200, 200, 200);
                         }
                     } else if (options.treemap_render_style == PDFTreemapRenderStyle::CUSHION_TREEMAP) {
+                        auto col = FileTypeColors::get_color_rgb(entry.filepath);
                         draw_cushion(page_buffer, page_w, page_h, bx, by, bw, bh,
-                                     box.cushion_ax, box.cushion_bx, box.cushion_ay, box.cushion_by);
+                                     box.x, box.y, box.w, box.h,
+                                     box.cushion_ax, box.cushion_bx, box.cushion_ay, box.cushion_by,
+                                     col.r, col.g, col.b);
                     } else if (options.treemap_render_style == PDFTreemapRenderStyle::FILE_TYPE_COLORS) {
                         auto col = FileTypeColors::get_color_rgb(entry.filepath);
                         draw_filled_rect(page_buffer, page_w, page_h, bx, by, bw, bh,

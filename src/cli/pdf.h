@@ -176,7 +176,10 @@ private:
 
     static void draw_cushion(std::vector<uint8_t>& buffer, int buf_w, int buf_h,
                              int x, int y, int w, int h,
-                             double ax, double bx, double ay, double by);
+                             double layout_x, double layout_y,
+                             double layout_w, double layout_h,
+                             double ax, double bx, double ay, double by,
+                             uint8_t base_r, uint8_t base_g, uint8_t base_b);
 
     static void draw_text_simple(std::vector<uint8_t>& buffer, int buf_w, int buf_h,
                                  int x, int y, const std::string& text, uint8_t r, uint8_t g, uint8_t b, int scale = 1);

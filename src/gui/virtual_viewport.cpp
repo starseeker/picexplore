@@ -572,7 +572,7 @@ void VirtualViewport::draw_treemap() {
                 // 3D Cushion placeholder while thumbnail is decoding in background
                 cushion_rgb_buf_.resize(draw_w * draw_h * 3);
                 render_cushion_shading(cushion_rgb_buf_.data(), draw_w, draw_h,
-                                      draw_x, draw_y,
+                                      box.x, box.y,
                                       box.cushion_ax, box.cushion_bx,
                                       box.cushion_ay, box.cushion_by,
                                       rgb_col.r, rgb_col.g, rgb_col.b,
@@ -608,7 +608,7 @@ void VirtualViewport::draw_treemap() {
                 // 3D Lambertian diffuse cushion shading on accumulated parabolic surface
                 cushion_rgb_buf_.resize(draw_w * draw_h * 3);
                 render_cushion_shading(cushion_rgb_buf_.data(), draw_w, draw_h,
-                                      draw_x, draw_y,
+                                      box.x, box.y,
                                       box.cushion_ax, box.cushion_bx,
                                       box.cushion_ay, box.cushion_by,
                                       rgb_col.r, rgb_col.g, rgb_col.b,
