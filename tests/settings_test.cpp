@@ -78,10 +78,12 @@ int main() {
     setenv("PICEXPLORE_CACHE_DIR", test_cache.c_str(), 1);
     AppSettings special;
     special.last_directory = "/tmp/photos \"2026\"\\set's, archive: 1, ";
+    special.external_editor = "gimp --new-instance \"%f\"";
     special.save();
     AppSettings special_loaded;
     special_loaded.load();
     assert(special_loaded.last_directory == special.last_directory);
+    assert(special_loaded.external_editor == special.external_editor);
 
     std::cout << "[PASS] AppSettings save and load test passed!" << std::endl;
     std::filesystem::remove_all(test_cache);

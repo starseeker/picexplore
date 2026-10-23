@@ -720,6 +720,36 @@ void MainWindow::toggle_info_panel() {
     }
 }
 
+void MainWindow::open_in_external_editor(const std::string& command_str, const std::string& filepath) {
+    if (filepath.empty()) return;
+    std::string err;
+    if (!launch_external_editor(command_str, filepath, &err)) {
+        std::string msg = "Could not launch external editor \"" + command_str + "\": " + err;
+        fl_alert("%s", msg.c_str());
+        return;
+    }
+    std::string filename = std::filesystem::path(filepath).filename().string();
+    std::string label = "  Opened in external editor (" + command_str + "): " + filename;
+    statusbar_->copy_label(label.c_str());
+    statusbar_->redraw();
+}
+
+void MainWindow::prompt_custom_external_editor(const std::string& filepath) {
+    if (filepath.empty()) return;
+    const char* val = fl_input(
+        "Enter external image editor command (use %%f or {} for file path, or omit to append):",
+        settings_.external_editor.c_str());
+    if (!val) return;
+    std::string cmd(val);
+    size_t first = cmd.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return;
+    size_t last = cmd.find_last_not_of(" \t\r\n");
+    cmd = cmd.substr(first, last - first + 1);
+    settings_.external_editor = cmd;
+    settings_.save();
+    open_in_external_editor(cmd, filepath);
+}
+
 void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string& hit_image, const std::string& hit_dir) {
     namespace fs = std::filesystem;
 
@@ -728,12 +758,37 @@ void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string
         int shortcut = 0;
         int flags = 0;
         std::function<void()> callback;
+        bool is_submenu_end = false;
     };
 
     std::vector<ContextItem> items;
 
+    auto append_external_editor_menu = [&](const std::string& image_path, bool divider_after) {
+        if (image_path.empty()) return;
+        items.push_back({"Open in External Editor", 0, FL_SUBMENU | (divider_after ? FL_MENU_DIVIDER : 0), nullptr, false});
+        auto editors = detect_external_editors(settings_.external_editor);
+        for (const auto& ed : editors) {
+            std::string cmd = ed.command;
+            items.push_back({ed.label, 0, 0, [this, cmd, image_path]() {
+                open_in_external_editor(cmd, image_path);
+            }, false});
+        }
+        if (!editors.empty()) {
+            items.back().flags |= FL_MENU_DIVIDER;
+        }
+        items.push_back({"Custom Command...", 0, 0, [this, image_path]() {
+            prompt_custom_external_editor(image_path);
+        }, false});
+        items.push_back({"", 0, 0, nullptr, true});
+    };
+
     if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
         // Single Image Mode context menu
+        std::string single_path = !hit_image.empty() ? hit_image : viewport_->get_current_single_image_path();
+        if (!single_path.empty()) {
+            append_external_editor_menu(single_path, true);
+        }
+
         items.push_back({"Reset Zoom (Fit to Window)", 0, 0, [this]() {
             viewport_->reset_zoom();
         }});
@@ -784,6 +839,7 @@ void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string
                 items.push_back({"Open in Image Viewer", 0, 0, [this, idx, hit_image]() {
                     enter_single_image_mode(idx, hit_image);
                 }});
+                append_external_editor_menu(hit_image, false);
                 if (!info_panel_visible_) {
                     items.push_back({"Show in Information Panel", 0, 0, [this]() {
                         toggle_info_panel();
@@ -901,6 +957,10 @@ void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string
     memset(fl_items.data(), 0, sizeof(Fl_Menu_Item) * (items.size() + 1));
 
     for (size_t i = 0; i < items.size(); ++i) {
+        if (items[i].is_submenu_end) {
+            fl_items[i] = { nullptr };
+            continue;
+        }
         fl_items[i].text = items[i].text.c_str();
         fl_items[i].shortcut_ = items[i].shortcut;
         fl_items[i].flags = items[i].flags;

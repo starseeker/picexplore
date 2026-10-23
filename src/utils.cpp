@@ -969,3 +969,190 @@ DecodeResult decode_image(const std::string& path, int max_w, int max_h, const s
     } catch (const std::exception& e) { result.rgb.clear(); result.error = e.what(); }
     return result;
 }
+
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <cerrno>
+#include <cstring>
+
+bool find_executable_in_path(const std::string& exe_name) {
+    if (exe_name.empty()) return false;
+    namespace fs = std::filesystem;
+    auto is_exec_file = [](const fs::path& p) {
+        std::error_code ec;
+        return fs::exists(p, ec) && !fs::is_directory(p, ec) && access(p.c_str(), X_OK) == 0;
+    };
+    if (exe_name.find('/') != std::string::npos) {
+        return is_exec_file(exe_name);
+    }
+    const char* path_env = getenv("PATH");
+    if (!path_env) return false;
+    std::string_view sv(path_env);
+    size_t start = 0;
+    while (start <= sv.size()) {
+        size_t end = sv.find(':', start);
+        std::string_view dir = (end == std::string_view::npos) ? sv.substr(start) : sv.substr(start, end - start);
+        if (!dir.empty() && is_exec_file(fs::path(dir) / exe_name)) {
+            return true;
+        }
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return false;
+}
+
+std::vector<ExternalEditorInfo> detect_external_editors(const std::string& custom_editor) {
+    static const ExternalEditorInfo candidates[] = {
+        {"GIMP", "gimp"},
+        {"Krita", "krita"},
+        {"Darktable", "darktable"},
+        {"RawTherapee", "rawtherapee"},
+        {"Inkscape", "inkscape"},
+        {"Pinta", "pinta"},
+        {"MyPaint", "mypaint"},
+        {"LazPaint", "lazpaint"},
+        {"ImageMagick (display)", "display"},
+        {"System Default (xdg-open)", "xdg-open"},
+    };
+    std::vector<ExternalEditorInfo> found;
+    if (!custom_editor.empty()) {
+        found.push_back({"Custom (" + custom_editor + ")", custom_editor});
+    }
+    for (const auto& c : candidates) {
+        if (c.command == custom_editor) continue;
+        if (find_executable_in_path(c.command)) {
+            found.push_back(c);
+        }
+    }
+    return found;
+}
+
+std::vector<std::string> split_command_args(const std::string& command_str, const std::string& filepath) {
+    std::vector<std::string> tokens;
+    std::string cur;
+    bool in_token = false;
+    char quote = 0;
+
+    for (size_t i = 0; i < command_str.size(); ++i) {
+        char c = command_str[i];
+        if (quote != 0) {
+            if (c == '\\' && quote == '"' && i + 1 < command_str.size()) {
+                cur.push_back(command_str[++i]);
+            } else if (c == quote) {
+                quote = 0;
+            } else {
+                cur.push_back(c);
+            }
+            in_token = true;
+        } else if (c == '\'' || c == '"') {
+            quote = c;
+            in_token = true;
+        } else if (c == '\\' && i + 1 < command_str.size()) {
+            cur.push_back(command_str[++i]);
+            in_token = true;
+        } else if (std::isspace(static_cast<unsigned char>(c))) {
+            if (in_token) {
+                tokens.push_back(std::move(cur));
+                cur.clear();
+                in_token = false;
+            }
+        } else {
+            cur.push_back(c);
+            in_token = true;
+        }
+    }
+    if (in_token) {
+        tokens.push_back(std::move(cur));
+    }
+    if (tokens.empty()) return tokens;
+
+    bool replaced = false;
+    for (auto& tok : tokens) {
+        size_t pos = 0;
+        while ((pos = tok.find("%f", pos)) != std::string::npos) {
+            tok.replace(pos, 2, filepath);
+            pos += filepath.size();
+            replaced = true;
+        }
+        pos = 0;
+        while ((pos = tok.find("{}", pos)) != std::string::npos) {
+            tok.replace(pos, 2, filepath);
+            pos += filepath.size();
+            replaced = true;
+        }
+    }
+    if (!replaced && !filepath.empty()) {
+        tokens.push_back(filepath);
+    }
+    return tokens;
+}
+
+bool launch_external_editor(const std::string& command_str, const std::string& filepath, std::string* error_out) {
+    if (filepath.empty()) {
+        if (error_out) *error_out = "No image file path specified.";
+        return false;
+    }
+    auto args = split_command_args(command_str, filepath);
+    if (args.empty() || args[0].empty()) {
+        if (error_out) *error_out = "No editor command specified.";
+        return false;
+    }
+
+    int pfd[2] = {-1, -1};
+    if (pipe2(pfd, O_CLOEXEC) != 0) {
+        if (error_out) *error_out = std::strerror(errno);
+        return false;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        int err = errno;
+        close(pfd[0]);
+        close(pfd[1]);
+        if (error_out) *error_out = std::strerror(err);
+        return false;
+    }
+
+    if (pid == 0) {
+        close(pfd[0]);
+        setsid();
+        pid_t grandchild = fork();
+        if (grandchild < 0) {
+            int err = errno;
+            ssize_t wr = write(pfd[1], &err, sizeof(err));
+            (void)wr;
+            _exit(127);
+        }
+        if (grandchild > 0) {
+            _exit(0);
+        }
+        int devnull = open("/dev/null", O_RDONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            if (devnull > STDERR_FILENO) close(devnull);
+        }
+        std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
+        for (auto& a : args) argv.push_back(a.data());
+        argv.push_back(nullptr);
+        execvp(argv[0], argv.data());
+        int err = errno;
+        ssize_t wr = write(pfd[1], &err, sizeof(err));
+        (void)wr;
+        _exit(127);
+    }
+
+    close(pfd[1]);
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+
+    int child_err = 0;
+    ssize_t n = read(pfd[0], &child_err, sizeof(child_err));
+    close(pfd[0]);
+    if (n > 0) {
+        if (error_out) *error_out = std::strerror(child_err);
+        return false;
+    }
+    return true;
+}

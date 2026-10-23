@@ -119,6 +119,8 @@ private:
     void start_garbage_collection();
     void set_hierarchy_thumbnail_threshold(double threshold);
     void show_context_menu(int screen_x, int screen_y, const std::string& hit_image, const std::string& hit_dir);
+    void open_in_external_editor(const std::string& command_str, const std::string& filepath);
+    void prompt_custom_external_editor(const std::string& filepath);
     void handle_escape();
     void toggle_info_panel();
     void update_statusbar();

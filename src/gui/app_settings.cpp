@@ -160,6 +160,8 @@ void AppSettings::load() {
             try { double rh = std::stod(val); if (rh >= 50.0 && rh <= 800.0) default_row_height = rh; } catch (...) {}
         } else if (key == "default_sort_order" || key == "default_sort" || key == "sort_order") {
             if (!val.empty()) default_sort_order = val;
+        } else if (key == "external_editor") {
+            external_editor = val;
         }
     }
 }
@@ -183,6 +185,7 @@ void AppSettings::save() const {
     out << "  \"default_treemap_metric\": \"" << escape_json_string(default_treemap_metric) << "\",\n";
     out << "  \"default_treemap_style\": \"" << escape_json_string(default_treemap_style) << "\",\n";
     out << "  \"default_row_height\": " << default_row_height << ",\n";
-    out << "  \"default_sort_order\": \"" << escape_json_string(default_sort_order) << "\"\n";
+    out << "  \"default_sort_order\": \"" << escape_json_string(default_sort_order) << "\",\n";
+    out << "  \"external_editor\": \"" << escape_json_string(external_editor) << "\"\n";
     out << "}\n";
 }

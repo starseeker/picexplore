@@ -19,6 +19,7 @@ struct AppSettings {
     std::string default_treemap_style = "thumbnails";
     double default_row_height = 150.0;
     std::string default_sort_order = "alphabetical-asc";
+    std::string external_editor;
 
     static std::string get_cache_dir();
     static std::string get_settings_path();

@@ -9,6 +9,7 @@
 #include <cassert>
 #include <filesystem>
 #include <fstream>
+#include <sys/stat.h>
 #include <unistd.h>
 
 struct MainWindowTestAccess {
@@ -80,6 +81,45 @@ struct MainWindowTestAccess {
             assert(row[x * 3 + 0] > 200 && row[x * 3 + 1] > 200 && row[x * 3 + 2] > 200);
         }
         delete[] row;
+    }
+
+    static void external_editor(const std::string& base) {
+        auto args1 = split_command_args("gimp -n", "/tmp/my photo.jpg");
+        assert(args1.size() == 3 && args1[0] == "gimp" && args1[1] == "-n" && args1[2] == "/tmp/my photo.jpg");
+
+        auto args2 = split_command_args("my-editor --file \"%f\" --extra", "/tmp/a b.png");
+        assert(args2.size() == 4 && args2[0] == "my-editor" && args2[1] == "--file" &&
+               args2[2] == "/tmp/a b.png" && args2[3] == "--extra");
+
+        auto editors = detect_external_editors("custom-img-edit");
+        assert(!editors.empty() && editors.front().command == "custom-img-edit");
+
+        std::string err;
+        assert(!launch_external_editor("nonexistent_editor_binary_xyz123", "/tmp/test.jpg", &err));
+        assert(!err.empty());
+
+        const std::string marker = base + "/editor_out.txt";
+        const std::string script = base + "/mock_editor.sh";
+        {
+            std::ofstream out(script);
+            out << "#!/bin/sh\nprintf '%s' \"$1\" > \"" << marker << "\"\n";
+        }
+        chmod(script.c_str(), 0755);
+        assert(find_executable_in_path(script));
+
+        MainWindow window(640, 480, "External editor", base + "/a", base + "/cache.db");
+        const std::string target_img = base + "/a/space name.jpg";
+        window.open_in_external_editor(script, target_img);
+        assert(std::string(window.statusbar_->label()).find("Opened in external editor") != std::string::npos);
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!std::filesystem::exists(marker) || std::filesystem::file_size(marker) == 0) {
+            assert(std::chrono::steady_clock::now() < deadline);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        std::ifstream in(marker);
+        std::string recorded((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        assert(recorded == target_img);
     }
 
     static void watch_status(const std::string& base) {
@@ -257,5 +297,6 @@ int main() {
     MainWindowTestAccess::controls(base);
     MainWindowTestAccess::dense_treemap(base);
     MainWindowTestAccess::tile_seams(base);
+    MainWindowTestAccess::external_editor(base);
     std::filesystem::remove_all(base);
 }

@@ -131,3 +131,12 @@ DecodeResult decode_image(const std::string& path, int max_width = 0, int max_he
 void orient_rgb(std::vector<uint8_t>& rgb, int& width, int& height, int orientation);
 bool load_jpeg_scaled(const std::string& path, int max_w, int max_h, std::vector<uint8_t>& rgb,
                       int& width, int& height, int* orig_w = nullptr, int* orig_h = nullptr);
+
+struct ExternalEditorInfo {
+    std::string label;
+    std::string command;
+};
+bool find_executable_in_path(const std::string& exe_name);
+std::vector<ExternalEditorInfo> detect_external_editors(const std::string& custom_editor = "");
+std::vector<std::string> split_command_args(const std::string& command_str, const std::string& filepath);
+bool launch_external_editor(const std::string& command_str, const std::string& filepath, std::string* error_out = nullptr);
