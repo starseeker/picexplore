@@ -6,7 +6,7 @@
 
 namespace fs = std::filesystem;
 
-int run_headless_scan(const std::string& directory, const std::string& db_path, bool verbose) {
+int run_headless_scan(const std::string& directory, const std::string& db_path, bool verbose, bool recursive) {
     if (directory.empty()) {
         std::cerr << "Error: Directory path cannot be empty for scanning." << std::endl;
         return 1;
@@ -14,6 +14,19 @@ int run_headless_scan(const std::string& directory, const std::string& db_path, 
 
     if (!fs::exists(directory) || !fs::is_directory(directory)) {
         std::cerr << "Error: Directory does not exist: " << directory << std::endl;
+        return 1;
+    }
+
+    InputSelection sel;
+    sel.root_directory = directory;
+    sel.recursive = recursive;
+    sel.explicit_selection = false;
+    return run_headless_scan(sel, db_path, verbose);
+}
+
+int run_headless_scan(const InputSelection& selection, const std::string& db_path, bool verbose) {
+    if (!selection.error.empty()) {
+        std::cerr << "Error: " << selection.error << std::endl;
         return 1;
     }
 
@@ -33,11 +46,17 @@ int run_headless_scan(const std::string& directory, const std::string& db_path, 
         std::cout << "Using database: " << db_path << std::endl;
     }
 
-    std::cout << "Scanning directory: " << directory << std::endl;
-
-    int processed = db.scan_directory_parallel(directory, timer, reporter);
+    int processed = -1;
+    if (selection.explicit_selection) {
+        std::cout << "Scanning " << selection.files.size() << " selected image file(s)..." << std::endl;
+        processed = db.scan_files_parallel(selection.files, timer, reporter);
+    } else {
+        std::cout << "Scanning directory" << (selection.recursive ? ": " : " (non-recursive): ")
+                  << selection.root_directory << std::endl;
+        processed = db.scan_directory_parallel(selection.root_directory, timer, reporter, 0, selection.recursive);
+    }
     if (processed < 0) {
-        std::cerr << "Error: Failed to scan directory" << std::endl;
+        std::cerr << "Error: Failed to scan images" << std::endl;
         reporter.stop();
         return 1;
     }

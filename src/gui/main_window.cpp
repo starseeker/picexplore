@@ -374,6 +374,12 @@ void MainWindow::stop_session() {
     watch_status_until_ = {};
 }
 
+void MainWindow::set_scan_scope(bool recursive, std::vector<std::string> explicit_files) {
+    recursive_ = recursive;
+    has_explicit_files_ = !explicit_files.empty();
+    explicit_files_ = std::move(explicit_files);
+}
+
 void MainWindow::start() {
     if (session_) return;
     namespace fs = std::filesystem;
@@ -400,11 +406,24 @@ void MainWindow::start() {
     session_->pipeline = std::make_unique<ThumbnailPipeline>(update_queue_, db_path_, session_id_);
     pipeline_ = session_->pipeline.get();
     pipeline_->start(WorkPermit::limit());
-    session_->watcher = std::make_unique<InotifyWatcher>();
+    auto inotify = std::make_unique<InotifyWatcher>();
+    inotify->set_recursive(recursive_ && !has_explicit_files_);
+    if (has_explicit_files_) {
+        std::set<std::string> parent_dirs;
+        for (const auto& f : explicit_files_) {
+            parent_dirs.insert(fs::path(f).parent_path().lexically_normal().string());
+        }
+        inotify->set_watch_directories(std::vector<std::string>(parent_dirs.begin(), parent_dirs.end()));
+    }
+    session_->watcher = std::move(inotify);
     watcher_ = session_->watcher.get();
     watcher_->start(directory_, update_queue_, session_id_);
     session_->scanner = std::make_unique<ScanCoordinator>(directory_, update_queue_, db_path_, session_id_);
     scanner_ = session_->scanner.get();
+    scanner_->set_recursive(recursive_);
+    if (has_explicit_files_) {
+        scanner_->set_explicit_files(explicit_files_);
+    }
     for (auto id : store_.order()) scanner_->track_existing(store_.get(id).filepath);
     scanner_->start();
 
@@ -643,6 +662,9 @@ void MainWindow::switch_directory(const std::string& new_dir) {
 
     background_error_.clear();
     directory_ = normalize_path(new_dir);
+    recursive_ = true;
+    has_explicit_files_ = false;
+    explicit_files_.clear();
     db_path_ = explicit_db_path_;
     directory_filter_.clear();
     pre_viewer_filter_.clear();

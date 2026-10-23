@@ -46,6 +46,7 @@ void InotifyWatcher::add_watch_recursive(const std::string& path) {
         wd_to_path_[wd] = dir;
     };
     add(path);
+    if (!recursive_) return;
     std::error_code ec;
     fs::recursive_directory_iterator it(path, fs::directory_options::none, ec), end;
     if (ec) degraded("Cannot enumerate watched directories in " + path);
@@ -112,16 +113,23 @@ void InotifyWatcher::handle_event(const inotify_event& event) {
             update_queue_.enqueue(std::move(rename));
             pending_renames_.erase(from);
         }
-        if (directory) add_watch_recursive(path);
+        if (directory && recursive_) add_watch_recursive(path);
         changed();
     } else if (event.mask & (IN_CREATE | IN_CLOSE_WRITE | IN_DELETE | IN_ATTRIB)) {
-        if (directory && (event.mask & IN_CREATE)) add_watch_recursive(path);
+        if (directory && recursive_ && (event.mask & IN_CREATE)) add_watch_recursive(path);
         if (directory && (event.mask & IN_DELETE)) remove_subtree(path);
         changed();
     }
 }
 void InotifyWatcher::watch_thread_func() {
-    add_watch_recursive(directory_);
+    auto install_initial_watches = [this]() {
+        if (!watch_dirs_.empty()) {
+            for (const auto& d : watch_dirs_) add_watch_recursive(normalize_path(d));
+        } else {
+            add_watch_recursive(directory_);
+        }
+    };
+    install_initial_watches();
     // Rescan after watch installation closes the initial scan/registration race.
     changed();
     auto retry_at = Clock::now() + std::chrono::seconds(10);
@@ -155,7 +163,7 @@ void InotifyWatcher::watch_thread_func() {
             wd_to_path_.clear();
             pending_renames_.clear();
             if (inotify_fd_ < 0) { degraded("Could not restart file watching"); break; }
-            add_watch_recursive(directory_);
+            install_initial_watches();
             retry_at = Clock::now() + std::chrono::seconds(10);
             changed();
         }

@@ -908,6 +908,20 @@ bool PDFGenerator::generate_pdf(const std::vector<ImageInfo>& images, const std:
 
 int run_headless_pdf(const std::string& pdf_path, const std::string& directory,
                      const std::string& db_path, const PDFOptions& options, bool verbose) {
+    InputSelection sel;
+    sel.root_directory = directory;
+    sel.recursive = true;
+    sel.explicit_selection = false;
+    return run_headless_pdf(pdf_path, sel, db_path, options, verbose);
+}
+
+int run_headless_pdf(const std::string& pdf_path, const InputSelection& selection,
+                     const std::string& db_path, const PDFOptions& options, bool verbose) {
+    if (!selection.error.empty()) {
+        std::cerr << "Error: " << selection.error << std::endl;
+        return 1;
+    }
+
     Timer timer;
     StatusReporter reporter(10);
     reporter.start();
@@ -923,15 +937,24 @@ int run_headless_pdf(const std::string& pdf_path, const std::string& directory,
         std::cout << "Using database: " << db_path << std::endl;
     }
 
-    bool scan_needed = !directory.empty();
-    if (scan_needed) {
-        if (!fs::exists(directory) || !fs::is_directory(directory)) {
-            std::cerr << "Error: Directory does not exist: " << directory << std::endl;
+    if (selection.explicit_selection) {
+        std::cout << "Scanning " << selection.files.size() << " selected image file(s)..." << std::endl;
+        int processed = db.scan_files_parallel(selection.files, timer, reporter);
+        if (processed < 0) {
+            std::cerr << "Error: Failed to scan selected files" << std::endl;
             reporter.stop();
             return 1;
         }
-        std::cout << "Scanning directory: " << directory << std::endl;
-        int processed = db.scan_directory_parallel(directory, timer, reporter);
+        std::cout << "Processed " << processed << " images" << std::endl;
+    } else if (!selection.root_directory.empty()) {
+        if (!fs::exists(selection.root_directory) || !fs::is_directory(selection.root_directory)) {
+            std::cerr << "Error: Directory does not exist: " << selection.root_directory << std::endl;
+            reporter.stop();
+            return 1;
+        }
+        std::cout << "Scanning directory" << (selection.recursive ? ": " : " (non-recursive): ")
+                  << selection.root_directory << std::endl;
+        int processed = db.scan_directory_parallel(selection.root_directory, timer, reporter, 0, selection.recursive);
         if (processed < 0) {
             std::cerr << "Error: Failed to scan directory" << std::endl;
             reporter.stop();
@@ -943,8 +966,25 @@ int run_headless_pdf(const std::string& pdf_path, const std::string& directory,
     timer.start("Database Query");
     reporter.update_status("Loading images from database...");
     std::vector<ImageInfo> images;
-    if (!directory.empty()) {
-        images = db.get_images_for_directory(directory);
+    if (!selection.root_directory.empty()) {
+        auto all_dir = db.get_images_for_directory(selection.root_directory);
+        if (selection.explicit_selection) {
+            std::unordered_set<std::string> wanted(selection.files.begin(), selection.files.end());
+            for (auto& img : all_dir) {
+                if (wanted.count(normalize_path(img.path))) {
+                    images.push_back(std::move(img));
+                }
+            }
+        } else if (!selection.recursive) {
+            std::string norm_root = normalize_path(selection.root_directory);
+            for (auto& img : all_dir) {
+                if (fs::path(img.path).parent_path().lexically_normal().string() == norm_root) {
+                    images.push_back(std::move(img));
+                }
+            }
+        } else {
+            images = std::move(all_dir);
+        }
     } else {
         images = db.get_all_images();
     }

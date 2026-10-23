@@ -96,5 +96,69 @@ int main() {
     assert(path_is_within("/tmp/dir/file.jpg", "/tmp/dir/"));
     assert(!is_cache_or_db_path("/photos/picexplore"));
     assert(!is_cache_or_db_path("/tmp/picexplore-photos/a.jpg"));
+
+    // Verify non-recursive and explicit file/glob modes in resolve_input_targets and ScanCoordinator.
+    const std::string sub = root + "/sub";
+    fs::create_directories(sub);
+    const std::string top_b = root + "/b.jpg";
+    const std::string nested_c = sub + "/c.jpg";
+    write_jpeg(top_b, 16, 16, 80);
+    write_jpeg(nested_c, 24, 24, 120);
+
+    // 1. Recursive scan populates DB with a.jpg, b.jpg, and sub/c.jpg
+    catalog.clear();
+    {
+        ScanCoordinator full_scan(root, queue, base + "/cache.db");
+        full_scan.start();
+        scan();
+        full_scan.stop();
+    }
+    assert(catalog.size() == 3);
+    std::string nested_hash;
+    assert(db.get_hash_for_path(nested_c, nested_hash) && !nested_hash.empty());
+
+    // 2. Non-recursive scan discovers only top-level images and preserves sub/c.jpg in DB
+    catalog.clear();
+    {
+        InputSelection non_rec = resolve_input_targets({root}, true);
+        assert(non_rec.error.empty() && !non_rec.recursive && !non_rec.explicit_selection);
+        ScanCoordinator flat_scan(non_rec.root_directory, queue, base + "/cache.db");
+        flat_scan.set_recursive(false);
+        flat_scan.start();
+        scan();
+        flat_scan.stop();
+    }
+    assert(catalog.size() == 2);
+    assert(catalog.find_by_filepath(file) != static_cast<size_t>(-1));
+    assert(catalog.find_by_filepath(top_b) != static_cast<size_t>(-1));
+    assert(catalog.find_by_filepath(nested_c) == static_cast<size_t>(-1));
+    assert(db.get_hash_for_path(nested_c, hash) && hash == nested_hash);
+
+    // 3. Explicit glob / file selection discovers only matched files and preserves other DB records
+    catalog.clear();
+    {
+        InputSelection glob_sel = resolve_input_targets({root + "/b*.jpg", sub + "/*.jpg"}, false);
+        assert(glob_sel.error.empty() && glob_sel.explicit_selection);
+        assert(glob_sel.files.size() == 2);
+        assert(glob_sel.root_directory == normalize_path(root));
+        ScanCoordinator explicit_scan(glob_sel.root_directory, queue, base + "/cache.db");
+        explicit_scan.set_explicit_files(glob_sel.files);
+        explicit_scan.start();
+        scan();
+        explicit_scan.stop();
+    }
+    assert(catalog.size() == 2);
+    assert(catalog.find_by_filepath(file) == static_cast<size_t>(-1));
+    assert(catalog.find_by_filepath(top_b) != static_cast<size_t>(-1));
+    assert(catalog.find_by_filepath(nested_c) != static_cast<size_t>(-1));
+    assert(db.get_hash_for_path(file, hash));
+
+    // 4. Recursive ** glob pattern matches across root and subdirectories
+    {
+        InputSelection dstar = resolve_input_targets({root + "/**/*.jpg"}, false);
+        assert(dstar.error.empty() && dstar.explicit_selection);
+        assert(dstar.files.size() == 3);
+    }
+
     fs::remove_all(base);
 }

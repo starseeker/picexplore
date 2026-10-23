@@ -140,3 +140,14 @@ bool find_executable_in_path(const std::string& exe_name);
 std::vector<ExternalEditorInfo> detect_external_editors(const std::string& custom_editor = "");
 std::vector<std::string> split_command_args(const std::string& command_str, const std::string& filepath);
 bool launch_external_editor(const std::string& command_str, const std::string& filepath, std::string* error_out = nullptr);
+
+struct InputSelection {
+    std::string root_directory;
+    bool recursive = true;
+    bool explicit_selection = false;
+    std::vector<std::string> files;
+    std::string error;
+};
+InputSelection resolve_input_targets(const std::vector<std::string>& raw_inputs,
+                                     bool no_recurse,
+                                     const std::string& fallback_directory = "");

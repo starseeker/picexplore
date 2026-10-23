@@ -115,7 +115,8 @@ class DatabaseManager {
 	void close();
 
 	// Scanning and thumbnail generation
-	int scan_directory_parallel(const std::string& directory, Timer& timer, StatusReporter& reporter, int num_threads = 0);
+	int scan_directory_parallel(const std::string& directory, Timer& timer, StatusReporter& reporter, int num_threads = 0, bool recursive = true);
+	int scan_files_parallel(const std::vector<std::string>& image_files, Timer& timer, StatusReporter& reporter, int num_threads = 0);
 
 	// Database querying
 	std::vector<ImageInfo> get_all_images();

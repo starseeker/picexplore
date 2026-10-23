@@ -122,6 +122,57 @@ struct MainWindowTestAccess {
         assert(recorded == target_img);
     }
 
+    static void scan_scope_modes(const std::string& base) {
+        const std::string dir = base + "/scope";
+        std::filesystem::create_directories(dir + "/nested");
+        auto write_img = [](const std::string& p) {
+            auto jpeg = encode_jpeg(std::vector<uint8_t>(32 * 32 * 3, 128).data(), 32, 32);
+            std::ofstream f(p, std::ios::binary);
+            f.write(reinterpret_cast<const char*>(jpeg.data()), jpeg.size());
+        };
+        write_img(dir + "/top1.jpg");
+        write_img(dir + "/top2.jpg");
+        write_img(dir + "/nested/deep.jpg");
+
+        // Non-recursive GUI mode
+        {
+            MainWindow win(640, 480, "Non-recursive", dir, base + "/scope.db");
+            win.set_scan_scope(false);
+            win.show();
+            win.start();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!win.scan_complete_) {
+                assert(std::chrono::steady_clock::now() < deadline);
+                win.poll_events();
+                Fl::check();
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            assert(win.store_.size() == 2);
+            win.hide();
+        }
+
+        // Explicit file list GUI mode
+        {
+            auto sel = resolve_input_targets({dir + "/top1.jpg", dir + "/nested/*.jpg"}, false);
+            assert(sel.error.empty() && sel.files.size() == 2);
+            MainWindow win(640, 480, "Explicit files", sel.root_directory, base + "/scope.db");
+            win.set_scan_scope(sel.recursive, sel.files);
+            win.show();
+            win.start();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!win.scan_complete_) {
+                assert(std::chrono::steady_clock::now() < deadline);
+                win.poll_events();
+                Fl::check();
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            assert(win.store_.size() == 2);
+            assert(win.store_.find_by_filepath(normalize_path(dir + "/top1.jpg")) != static_cast<size_t>(-1));
+            assert(win.store_.find_by_filepath(normalize_path(dir + "/nested/deep.jpg")) != static_cast<size_t>(-1));
+            win.hide();
+        }
+    }
+
     static void watch_status(const std::string& base) {
         MainWindow window(640, 480, "Watch status", base + "/a", base + "/cache.db");
         const auto id = window.store_.add_image(base + "/a/photo.jpg", 1, 32, 32);
@@ -298,5 +349,6 @@ int main() {
     MainWindowTestAccess::dense_treemap(base);
     MainWindowTestAccess::tile_seams(base);
     MainWindowTestAccess::external_editor(base);
+    MainWindowTestAccess::scan_scope_modes(base);
     std::filesystem::remove_all(base);
 }

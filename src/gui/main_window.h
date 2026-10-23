@@ -33,6 +33,7 @@ public:
     MainWindow(int w, int h, const char* title, const std::string& directory, const std::string& db_path = "");
     ~MainWindow();
 
+    void set_scan_scope(bool recursive, std::vector<std::string> explicit_files = {});
     void start();
 
     void enter_single_image_mode(size_t raw_idx, const std::string& filepath);
@@ -57,6 +58,9 @@ protected:
 private:
     friend struct MainWindowTestAccess;
     std::string directory_;
+    bool recursive_ = true;
+    bool has_explicit_files_ = false;
+    std::vector<std::string> explicit_files_;
     std::string db_path_;
     std::string explicit_db_path_;
     std::unique_ptr<DirectorySession> session_;

@@ -187,3 +187,5 @@ private:
 
 int run_headless_pdf(const std::string& pdf_path, const std::string& directory,
                      const std::string& db_path, const PDFOptions& options, bool verbose);
+int run_headless_pdf(const std::string& pdf_path, const InputSelection& selection,
+                     const std::string& db_path, const PDFOptions& options, bool verbose);

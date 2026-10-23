@@ -11,6 +11,8 @@ class InotifyWatcher : public FileWatcher {
 public:
     InotifyWatcher() = default;
     ~InotifyWatcher() override;
+    void set_recursive(bool recursive) { recursive_ = recursive; }
+    void set_watch_directories(std::vector<std::string> dirs) { watch_dirs_ = std::move(dirs); }
     void start(const std::string& directory, moodycamel::ConcurrentQueue<UpdateEvent>& queue, uint64_t session = 0) override;
     void stop() override;
 private:
@@ -35,6 +37,8 @@ private:
     bool degraded_ = false;
     bool rebuild_ = false;
     bool changed_ = false;
+    bool recursive_ = true;
+    std::vector<std::string> watch_dirs_;
     std::unordered_map<int, std::string> wd_to_path_;
     std::unordered_map<uint32_t, PendingRename> pending_renames_;
 };

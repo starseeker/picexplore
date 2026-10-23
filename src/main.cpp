@@ -20,7 +20,10 @@ int main(int argc, char* argv[]) {
         options.add_options()
             ("h,help", "Print usage and options")
             ("d,directory", "Directory of images to view or scan", cxxopts::value<std::string>())
-            ("s,scan", "Run batch scanner on directory without launching GUI")
+            ("g,glob", "Glob pattern(s) of image files to view or scan", cxxopts::value<std::vector<std::string>>())
+            ("n,no-recurse", "Do not recurse into subdirectories when reading a directory")
+            ("inputs", "Directories, image files, or glob patterns to explore", cxxopts::value<std::vector<std::string>>())
+            ("s,scan", "Run batch scanner without launching GUI")
             ("pdf", "Generate PDF gallery from database without launching GUI", cxxopts::value<std::string>())
             ("db,database", "Path to LMDB database file", cxxopts::value<std::string>())
             ("l,layout", "PDF Layout: justified, treemap, hierarchical-treemap", cxxopts::value<std::string>()->default_value("justified"))
@@ -42,8 +45,8 @@ int main(int argc, char* argv[]) {
             ("v,verbose", "Enable verbose output")
             ;
 
-        options.parse_positional({"directory"});
-        options.positional_help("[directory]");
+        options.parse_positional({"inputs"});
+        options.positional_help("[directory|files|globs...]");
 
         auto result = options.parse(argc, argv);
 
@@ -52,6 +55,10 @@ int main(int argc, char* argv[]) {
             std::cout << "\nUsage Examples:\n";
             std::cout << "  # Launch interactive GUI viewer for a directory:\n";
             std::cout << "  picexplore /path/to/photos\n\n";
+            std::cout << "  # View only images in the current directory (non-recursive):\n";
+            std::cout << "  picexplore -n\n\n";
+            std::cout << "  # View specific files or glob patterns:\n";
+            std::cout << "  picexplore *.jpg \"subdir/*.png\"\n\n";
             std::cout << "  # Batch scan directory headlessly into database:\n";
             std::cout << "  picexplore --scan /path/to/photos\n\n";
             std::cout << "  # Generate PDF gallery (Justified Grid) from database:\n";
@@ -63,18 +70,35 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        std::string directory = result.count("directory") ? result["directory"].as<std::string>() : "";
+        std::vector<std::string> raw_inputs;
+        if (result.count("directory")) {
+            raw_inputs.push_back(result["directory"].as<std::string>());
+        }
+        if (result.count("glob")) {
+            const auto& globs = result["glob"].as<std::vector<std::string>>();
+            raw_inputs.insert(raw_inputs.end(), globs.begin(), globs.end());
+        }
+        if (result.count("inputs")) {
+            const auto& pos = result["inputs"].as<std::vector<std::string>>();
+            raw_inputs.insert(raw_inputs.end(), pos.begin(), pos.end());
+        }
+        bool no_recurse = result.count("no-recurse") > 0;
         std::string explicit_db = result.count("database") ? result["database"].as<std::string>() : "";
-        std::string db_path = AppSettings::resolve_db_path(explicit_db, directory);
         bool verbose = result.count("verbose") > 0;
 
-        // Mode 1: Headless Directory Scan
+        // Mode 1: Headless Directory / File Scan
         if (result.count("scan")) {
-            if (directory.empty()) {
-                std::cerr << "Error: Must specify a directory to scan (e.g. picexplore --scan /path/to/photos)" << std::endl;
+            if (raw_inputs.empty() && !no_recurse) {
+                std::cerr << "Error: Must specify a directory or files to scan (e.g. picexplore --scan /path/to/photos)" << std::endl;
                 return 1;
             }
-            return run_headless_scan(directory, db_path, verbose);
+            InputSelection selection = resolve_input_targets(raw_inputs, no_recurse);
+            if (!selection.error.empty()) {
+                std::cerr << "Error: " << selection.error << std::endl;
+                return 1;
+            }
+            std::string db_path = AppSettings::resolve_db_path(explicit_db, selection.root_directory);
+            return run_headless_scan(selection, db_path, verbose);
         }
 
         // Mode 2: Headless PDF Export
@@ -160,29 +184,36 @@ int main(int argc, char* argv[]) {
             }
 
             pdf_options.show_container_labels = (result.count("no-container-labels") == 0);
+            InputSelection pdf_sel;
+            if (!raw_inputs.empty() || no_recurse) {
+                pdf_sel = resolve_input_targets(raw_inputs, no_recurse);
+                if (!pdf_sel.error.empty()) {
+                    std::cerr << "Error: " << pdf_sel.error << std::endl;
+                    return 1;
+                }
+            }
             if (result.count("root-dir")) {
                 pdf_options.root_directory = result["root-dir"].as<std::string>();
             } else {
-                pdf_options.root_directory = directory;
+                pdf_options.root_directory = pdf_sel.root_directory;
             }
 
-            return run_headless_pdf(pdf_path, directory, db_path, pdf_options, verbose);
+            std::string db_path = AppSettings::resolve_db_path(explicit_db, pdf_sel.root_directory);
+            return run_headless_pdf(pdf_path, pdf_sel, db_path, pdf_options, verbose);
         }
 
         // Mode 3: Interactive GUI Viewer (Default)
         AppSettings settings;
         settings.load();
 
-        if (directory.empty()) {
-            if (!settings.last_directory.empty() && fs::exists(settings.last_directory) && fs::is_directory(settings.last_directory)) {
-                directory = settings.last_directory;
-            } else {
-                directory = ".";
-            }
+        std::string fallback_dir = ".";
+        if (!settings.last_directory.empty() && fs::exists(settings.last_directory) && fs::is_directory(settings.last_directory)) {
+            fallback_dir = settings.last_directory;
         }
 
-        if (!fs::exists(directory) || !fs::is_directory(directory)) {
-            std::cerr << "Error: Directory does not exist: " << directory << std::endl;
+        InputSelection selection = resolve_input_targets(raw_inputs, no_recurse, fallback_dir);
+        if (!selection.error.empty()) {
+            std::cerr << "Error: " << selection.error << std::endl;
             return 1;
         }
 
@@ -194,7 +225,8 @@ int main(int argc, char* argv[]) {
         int win_w = (settings.window_width >= 300) ? settings.window_width : 1024;
         int win_h = (settings.window_height >= 200) ? settings.window_height : 768;
 
-        MainWindow win(win_w, win_h, "PicExplore", directory, explicit_db);
+        MainWindow win(win_w, win_h, "PicExplore", selection.root_directory, explicit_db);
+        win.set_scan_scope(selection.recursive, selection.files);
         if (settings.save_window_size && settings.window_x >= 0 && settings.window_y >= 0) {
             win.position(settings.window_x, settings.window_y);
         }

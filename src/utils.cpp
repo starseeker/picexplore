@@ -1156,3 +1156,190 @@ bool launch_external_editor(const std::string& command_str, const std::string& f
     }
     return true;
 }
+
+#include <glob.h>
+#include <fnmatch.h>
+#include <unordered_set>
+
+namespace {
+bool has_glob_chars(const std::string& s) {
+    return s.find_first_of("*?[{") != std::string::npos;
+}
+
+void collect_directory_images(const std::string& dir, bool recursive,
+                              std::vector<std::string>& out,
+                              std::unordered_set<std::string>& seen) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (recursive) {
+        fs::recursive_directory_iterator it(dir, fs::directory_options::none, ec), end;
+        while (it != end && !ec) {
+            const auto& entry = *it;
+            std::string p = entry.path().lexically_normal().string();
+            std::error_code type_ec;
+            if (entry.is_directory(type_ec)) {
+                if (is_cache_or_db_path(p)) {
+                    it.disable_recursion_pending();
+                }
+            } else if (entry.is_regular_file(type_ec)) {
+                if (!is_cache_or_db_path(p) && is_image_file(p)) {
+                    std::string norm = normalize_path(p);
+                    if (seen.insert(norm).second) out.push_back(norm);
+                }
+            }
+            it.increment(ec);
+        }
+    } else {
+        fs::directory_iterator it(dir, fs::directory_options::none, ec), end;
+        while (it != end && !ec) {
+            const auto& entry = *it;
+            std::string p = entry.path().lexically_normal().string();
+            std::error_code type_ec;
+            if (entry.is_regular_file(type_ec) && !is_cache_or_db_path(p) && is_image_file(p)) {
+                std::string norm = normalize_path(p);
+                if (seen.insert(norm).second) out.push_back(norm);
+            }
+            it.increment(ec);
+        }
+    }
+}
+
+void expand_glob_pattern(const std::string& pattern, std::vector<std::string>& matches) {
+    namespace fs = std::filesystem;
+    size_t dstar = pattern.find("**");
+    if (dstar != std::string::npos) {
+        std::string prefix = pattern.substr(0, dstar);
+        size_t slash = prefix.find_last_of("/\\");
+        std::string base_dir = (slash == std::string::npos) ? "." : (slash == 0 ? "/" : prefix.substr(0, slash));
+        std::string rel_pat = (slash == std::string::npos) ? pattern : pattern.substr(slash + 1);
+        std::string zero_sub_pat = rel_pat;
+        size_t ds_pos = 0;
+        while ((ds_pos = zero_sub_pat.find("**/", ds_pos)) != std::string::npos) {
+            zero_sub_pat.erase(ds_pos, 3);
+        }
+
+        std::error_code ec;
+        fs::recursive_directory_iterator it(base_dir, fs::directory_options::none, ec), end;
+        while (it != end && !ec) {
+            std::string full = it->path().lexically_normal().string();
+            if (is_cache_or_db_path(full)) {
+                std::error_code tec;
+                if (it->is_directory(tec)) it.disable_recursion_pending();
+                it.increment(ec);
+                continue;
+            }
+            std::string rel = fs::path(full).lexically_relative(base_dir).string();
+            if (fnmatch(rel_pat.c_str(), rel.c_str(), 0) == 0 ||
+                fnmatch(zero_sub_pat.c_str(), rel.c_str(), 0) == 0) {
+                matches.push_back(full);
+            }
+            it.increment(ec);
+        }
+        return;
+    }
+
+    glob_t globbuf{};
+    int flags = GLOB_TILDE;
+#ifdef GLOB_BRACE
+    flags |= GLOB_BRACE;
+#endif
+    if (glob(pattern.c_str(), flags, nullptr, &globbuf) == 0) {
+        for (size_t i = 0; i < globbuf.gl_pathc; ++i) {
+            if (globbuf.gl_pathv[i]) {
+                matches.emplace_back(globbuf.gl_pathv[i]);
+            }
+        }
+    }
+    globfree(&globbuf);
+}
+
+std::string common_parent_directory(const std::vector<std::string>& files) {
+    namespace fs = std::filesystem;
+    if (files.empty()) return normalize_path(".");
+    fs::path common = fs::path(files[0]).parent_path();
+    for (size_t i = 1; i < files.size(); ++i) {
+        fs::path p = fs::path(files[i]).parent_path();
+        fs::path prefix;
+        auto it1 = common.begin();
+        auto it2 = p.begin();
+        while (it1 != common.end() && it2 != p.end() && *it1 == *it2) {
+            prefix /= *it1;
+            ++it1;
+            ++it2;
+        }
+        common = prefix;
+    }
+    return common.empty() ? normalize_path(".") : common.lexically_normal().string();
+}
+} // namespace
+
+InputSelection resolve_input_targets(const std::vector<std::string>& raw_inputs,
+                                     bool no_recurse,
+                                     const std::string& fallback_directory) {
+    namespace fs = std::filesystem;
+    InputSelection sel;
+    sel.recursive = !no_recurse;
+
+    if (raw_inputs.empty()) {
+        sel.explicit_selection = false;
+        std::string dir = (!no_recurse && !fallback_directory.empty()) ? fallback_directory : ".";
+        std::error_code ec;
+        if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) {
+            sel.error = "Directory does not exist: " + dir;
+            return sel;
+        }
+        sel.root_directory = normalize_path(dir);
+        return sel;
+    }
+
+    if (raw_inputs.size() == 1 && !has_glob_chars(raw_inputs[0])) {
+        std::error_code ec;
+        if (fs::exists(raw_inputs[0], ec) && fs::is_directory(raw_inputs[0], ec)) {
+            sel.root_directory = normalize_path(raw_inputs[0]);
+            sel.explicit_selection = false;
+            return sel;
+        }
+    }
+
+    sel.explicit_selection = true;
+    std::unordered_set<std::string> seen;
+
+    for (const auto& arg : raw_inputs) {
+        std::error_code ec;
+        if (!has_glob_chars(arg) && fs::exists(arg, ec)) {
+            if (fs::is_regular_file(arg, ec)) {
+                if (is_image_file(arg) && !is_cache_or_db_path(arg)) {
+                    std::string norm = normalize_path(arg);
+                    if (seen.insert(norm).second) sel.files.push_back(norm);
+                }
+            } else if (fs::is_directory(arg, ec)) {
+                collect_directory_images(normalize_path(arg), !no_recurse, sel.files, seen);
+            }
+        } else {
+            std::vector<std::string> matches;
+            expand_glob_pattern(arg, matches);
+            if (matches.empty() && !has_glob_chars(arg)) {
+                sel.error = "Path does not exist: " + arg;
+                return sel;
+            }
+            for (const auto& m : matches) {
+                if (fs::is_regular_file(m, ec)) {
+                    if (is_image_file(m) && !is_cache_or_db_path(m)) {
+                        std::string norm = normalize_path(m);
+                        if (seen.insert(norm).second) sel.files.push_back(norm);
+                    }
+                } else if (fs::is_directory(m, ec)) {
+                    collect_directory_images(normalize_path(m), !no_recurse, sel.files, seen);
+                }
+            }
+        }
+    }
+
+    std::sort(sel.files.begin(), sel.files.end());
+    if (sel.files.empty()) {
+        sel.error = "No matching image files found.";
+        return sel;
+    }
+    sel.root_directory = common_parent_directory(sel.files);
+    return sel;
+}

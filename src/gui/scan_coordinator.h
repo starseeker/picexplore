@@ -19,6 +19,13 @@ public:
     // Seed the UI's retained paths before restarting a session, including paths
     // that disappeared while the old session was stopping.
     void track_existing(const std::string& path) { if (!worker_.joinable()) known_.emplace(path, Record{}); }
+    void set_recursive(bool recursive) { if (!worker_.joinable()) recursive_ = recursive; }
+    void set_explicit_files(std::vector<std::string> files) {
+        if (!worker_.joinable()) {
+            has_explicit_files_ = true;
+            explicit_files_ = std::move(files);
+        }
+    }
     void start();
     void stop();
     void request_rescan();
@@ -37,6 +44,9 @@ private:
     std::mutex mutex_;
     std::condition_variable wake_;
     bool dirty_ = false;
+    bool recursive_ = true;
+    bool has_explicit_files_ = false;
+    std::vector<std::string> explicit_files_;
     std::vector<std::pair<std::string, std::string>> renames_;
     std::unordered_map<std::string, Record> known_;
     void run();

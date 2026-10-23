@@ -458,6 +458,51 @@ void DatabaseManager::writer_thread(moodycamel::ConcurrentQueue<WriteTask>& writ
 }
 
 int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer& timer, 
+	StatusReporter& reporter, int num_threads, bool recursive) {
+    if (!is_open_) return -1;
+
+    timer.start("Directory Scanning");
+    reporter.update_status("Scanning directory for images...");
+
+    // Count total image files first
+    std::vector<std::string> image_files;
+    try {
+	if (recursive) {
+	    fs::recursive_directory_iterator it(directory), end;
+	    while (it != end) {
+		const auto& entry = *it;
+		std::string path = fs::path(entry.path()).lexically_normal().string();
+		if (entry.is_directory()) {
+		    if (is_cache_or_db_path(path)) {
+			it.disable_recursion_pending();
+		    }
+		} else if (entry.is_regular_file()) {
+		    if (!is_cache_or_db_path(path) && is_image_file(path)) {
+			image_files.push_back(path);
+		    }
+		}
+		++it;
+	    }
+	} else {
+	    fs::directory_iterator it(directory), end;
+	    while (it != end) {
+		const auto& entry = *it;
+		std::string path = fs::path(entry.path()).lexically_normal().string();
+		if (entry.is_regular_file() && !is_cache_or_db_path(path) && is_image_file(path)) {
+		    image_files.push_back(path);
+		}
+		++it;
+	    }
+	}
+    } catch (const fs::filesystem_error& ex) {
+	return -1;
+    }
+
+    timer.stop("Directory Scanning");
+    return scan_files_parallel(image_files, timer, reporter, num_threads);
+}
+
+int DatabaseManager::scan_files_parallel(const std::vector<std::string>& image_files, Timer& timer,
 	StatusReporter& reporter, int num_threads) {
     if (!is_open_) return -1;
 
@@ -467,32 +512,6 @@ int DatabaseManager::scan_directory_parallel(const std::string& directory, Timer
     }
 
     num_threads = std::clamp(num_threads, 1, int(WorkPermit::limit()));
-    timer.start("Directory Scanning");
-    reporter.update_status("Scanning directory for images...");
-
-    // Count total image files first
-    std::vector<std::string> image_files;
-    try {
-	fs::recursive_directory_iterator it(directory), end;
-	while (it != end) {
-	    const auto& entry = *it;
-	    std::string path = fs::path(entry.path()).lexically_normal().string();
-	    if (entry.is_directory()) {
-		if (is_cache_or_db_path(path)) {
-		    it.disable_recursion_pending();
-		}
-	    } else if (entry.is_regular_file()) {
-		if (!is_cache_or_db_path(path) && is_image_file(path)) {
-		    image_files.push_back(path);
-		}
-	    }
-	    ++it;
-	}
-    } catch (const fs::filesystem_error& ex) {
-	return -1;
-    }
-
-    timer.stop("Directory Scanning");
 
     if (image_files.empty()) {
 	reporter.update_status("No image files found");
