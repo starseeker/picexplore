@@ -67,6 +67,14 @@ int main() {
         assert(loaded2.default_sort_order == so);
     }
 
+    // Verify resolve_db_path honors PICEXPLORE_CACHE_DIR and XDG_CACHE_HOME
+    assert(AppSettings::resolve_db_path("", "") == test_cache + "/cache.db");
+    assert(AppSettings::resolve_db_path("/custom/path.db", "") == "/custom/path.db");
+    unsetenv("PICEXPLORE_CACHE_DIR");
+    setenv("XDG_CACHE_HOME", (test_cache + "/xdg").c_str(), 1);
+    assert(AppSettings::resolve_db_path("", "") == test_cache + "/xdg/picexplore/cache.db");
+    unsetenv("XDG_CACHE_HOME");
+
     std::cout << "[PASS] AppSettings save and load test passed!" << std::endl;
     std::filesystem::remove_all(test_cache);
     return 0;

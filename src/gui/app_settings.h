@@ -22,6 +22,7 @@ struct AppSettings {
 
     static std::string get_cache_dir();
     static std::string get_settings_path();
+    static std::string resolve_db_path(const std::string& explicit_db, const std::string& directory);
 
     void load();
     void save() const;

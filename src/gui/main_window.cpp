@@ -380,24 +380,7 @@ void MainWindow::start() {
     
     // Resolve database path
     if (db_path_.empty()) {
-        std::string canon_dir = directory_;
-        try {
-            canon_dir = fs::canonical(directory_).string();
-        } catch (...) {}
-
-        fs::path local_db = fs::path(canon_dir) / "images.db";
-        if (fs::exists(local_db)) {
-            db_path_ = local_db.string();
-        } else if (fs::exists("./images.db")) {
-            db_path_ = "./images.db";
-        } else {
-            fs::path cache_dir = AppSettings::get_cache_dir();
-            try {
-                fs::create_directories(cache_dir);
-            } catch (...) {}
-
-            db_path_ = (cache_dir / "cache.db").string();
-        }
+        db_path_ = AppSettings::resolve_db_path(explicit_db_path_, directory_);
     }
 
     std::cout << "Using database: " << db_path_ << std::endl;

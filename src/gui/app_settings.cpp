@@ -28,6 +28,30 @@ std::string AppSettings::get_settings_path() {
     return (fs::path(get_cache_dir()) / "config.json").string();
 }
 
+std::string AppSettings::resolve_db_path(const std::string& explicit_db, const std::string& directory) {
+    if (!explicit_db.empty()) {
+        return explicit_db;
+    }
+
+    if (!directory.empty()) {
+        std::string canon_dir = directory;
+        try {
+            canon_dir = fs::canonical(directory).string();
+        } catch (...) {}
+
+        fs::path local_db = fs::path(canon_dir) / "images.db";
+        if (fs::exists(local_db)) {
+            return local_db.string();
+        }
+    }
+
+    if (fs::exists("./images.db")) {
+        return "./images.db";
+    }
+
+    return (fs::path(get_cache_dir()) / "cache.db").string();
+}
+
 void AppSettings::load() {
     std::string path = get_settings_path();
     std::ifstream in(path);

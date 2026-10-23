@@ -12,36 +12,6 @@
 
 namespace fs = std::filesystem;
 
-static std::string resolve_db_path(const std::string& explicit_db, const std::string& directory) {
-    if (!explicit_db.empty()) {
-        return explicit_db;
-    }
-
-    if (!directory.empty()) {
-        std::string canon_dir = directory;
-        try {
-            canon_dir = fs::canonical(directory).string();
-        } catch (...) {}
-
-        fs::path local_db = fs::path(canon_dir) / "images.db";
-        if (fs::exists(local_db)) {
-            return local_db.string();
-        }
-    }
-
-    if (fs::exists("./images.db")) {
-        return "./images.db";
-    }
-
-    const char* home = getenv("HOME");
-    fs::path cache_dir = home ? (fs::path(home) / ".cache" / "picexplore") : fs::path("/tmp/picexplore");
-    try {
-        fs::create_directories(cache_dir);
-    } catch (...) {}
-
-    return (cache_dir / "cache.db").string();
-}
-
 int main(int argc, char* argv[]) {
     Fl::lock();
     try {
@@ -95,7 +65,7 @@ int main(int argc, char* argv[]) {
 
         std::string directory = result.count("directory") ? result["directory"].as<std::string>() : "";
         std::string explicit_db = result.count("database") ? result["database"].as<std::string>() : "";
-        std::string db_path = resolve_db_path(explicit_db, directory);
+        std::string db_path = AppSettings::resolve_db_path(explicit_db, directory);
         bool verbose = result.count("verbose") > 0;
 
         // Mode 1: Headless Directory Scan
