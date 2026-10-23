@@ -1293,19 +1293,21 @@ void VirtualViewport::draw_single_image() {
                 if (tile) {
                     const auto& rgb = tile->rgb;
                     const int tw = tile->width, th = tile->height;
-                    int draw_x = x() + pan_x_ + tx * scaled_ts;
-                    int draw_y = y() + pan_y_ + ty * scaled_ts;
-                    int draw_w = tw * scale;
-                    int draw_h = th * scale;
+                    int draw_x = static_cast<int>(std::round(x() + pan_x_ + tx * scaled_ts));
+                    int draw_y = static_cast<int>(std::round(y() + pan_y_ + ty * scaled_ts));
+                    int next_x = static_cast<int>(std::round(x() + pan_x_ + (tx * ts + tw) * scale));
+                    int next_y = static_cast<int>(std::round(y() + pan_y_ + (ty * ts + th) * scale));
+                    int draw_w = next_x - draw_x;
+                    int draw_h = next_y - draw_y;
                     
-                    if (draw_w > 0 && draw_h > 0 && scale != 1.0f) {
-                        std::vector<uint8_t> scaled_data(draw_w * draw_h * 3);
+                    if (draw_w > 0 && draw_h > 0 && (draw_w != tw || draw_h != th)) {
+                        draw_tmp_buf_.resize(static_cast<size_t>(draw_w) * draw_h * 3);
                         stbir_resize_uint8_linear(
                             rgb.data(), tw, th, 0,
-                            scaled_data.data(), draw_w, draw_h, 0,
+                            draw_tmp_buf_.data(), draw_w, draw_h, 0,
                             (stbir_pixel_layout)3
                         );
-                        fl_draw_image(scaled_data.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
+                        fl_draw_image(draw_tmp_buf_.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
                     } else if (draw_w > 0 && draw_h > 0) {
                         fl_draw_image(rgb.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
                     }

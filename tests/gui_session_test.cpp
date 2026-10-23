@@ -37,6 +37,51 @@ struct MainWindowTestAccess {
         delete[] pixel;
     }
 
+    static void tile_seams(const std::string& base) {
+        MainWindow window(640, 480, "Tile seams", base + "/a", base + "/cache.db");
+        window.viewport_->resize(0, 0, 600, 200);
+        const std::string img_path = base + "/a/tiled.png";
+        std::vector<uint8_t> white_rgb(1024 * 512 * 3, 240);
+        assert(stbi_write_png(img_path.c_str(), 1024, 512, 3, white_rgb.data(), 1024 * 3));
+        std::string hash;
+        assert(compute_file_hash(img_path, hash));
+
+        const auto id = window.store_.add_image(img_path, 2.0, 1024, 512);
+        window.store_.get(id).content_hash = hash;
+        TileManager tile_mgr(window.update_queue_);
+        tile_mgr.init(base);
+        tile_mgr.request_tiles(id, img_path, hash);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!tile_mgr.are_tiles_ready(hash)) {
+            assert(std::chrono::steady_clock::now() < deadline);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        while (!tile_mgr.get_tile(hash, 0, 0, 0) ||
+               !tile_mgr.get_tile(hash, 1, 0, 0)) {
+            assert(std::chrono::steady_clock::now() < deadline);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+
+        window.viewport_->enter_single_image(id);
+        window.viewport_->set_tile_manager(&tile_mgr, hash, 1024, 512);
+        window.viewport_->mark_full_res_ready();
+        window.viewport_->zoom_ = 1.003f;
+        window.viewport_->pan_x_ = 0.6f;
+        window.viewport_->pan_y_ = 0.0f;
+        window.viewport_->show_minimap_ = false;
+
+        Fl_Image_Surface surface(600, 200);
+        surface.set_current();
+        surface.draw(window.viewport_);
+        auto* row = fl_read_image(nullptr, 510, 50, 10, 1);
+        Fl_Display_Device::display_device()->set_current();
+        assert(row);
+        for (int x = 0; x < 10; ++x) {
+            assert(row[x * 3 + 0] > 200 && row[x * 3 + 1] > 200 && row[x * 3 + 2] > 200);
+        }
+        delete[] row;
+    }
+
     static void watch_status(const std::string& base) {
         MainWindow window(640, 480, "Watch status", base + "/a", base + "/cache.db");
         const auto id = window.store_.add_image(base + "/a/photo.jpg", 1, 32, 32);
@@ -211,5 +256,6 @@ int main() {
     MainWindowTestAccess::run(base);
     MainWindowTestAccess::controls(base);
     MainWindowTestAccess::dense_treemap(base);
+    MainWindowTestAccess::tile_seams(base);
     std::filesystem::remove_all(base);
 }
