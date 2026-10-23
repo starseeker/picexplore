@@ -148,8 +148,6 @@ void AppSettings::load() {
             deduplicate_flat_views = (val == "true" || val == "1");
         } else if (key == "sift_thumbnail_size") {
             try { int s = std::stoi(val); if (s == 128 || s == 256 || s == 512 || s == 1024) sift_thumbnail_size = s; } catch (...) {}
-        } else if (key == "last_directory") {
-            last_directory = val;
         } else if (key == "default_layout") {
             default_layout = val;
         } else if (key == "default_treemap_metric") {
@@ -160,6 +158,14 @@ void AppSettings::load() {
             try { double rh = std::stod(val); if (rh >= 50.0 && rh <= 800.0) default_row_height = rh; } catch (...) {}
         } else if (key == "default_sort_order" || key == "default_sort" || key == "sort_order") {
             if (!val.empty()) default_sort_order = val;
+        } else if (key == "info_panel_visible") {
+            info_panel_visible = (val == "true" || val == "1");
+        } else if (key == "info_panel_width") {
+            try { int iw = std::stoi(val); if (iw >= 160 && iw <= 4096) info_panel_width = iw; } catch (...) {}
+        } else if (key == "info_panel_font_size") {
+            try { int fs = std::stoi(val); if (fs >= 8 && fs <= 48) info_panel_font_size = fs; } catch (...) {}
+        } else if (key == "show_minimap") {
+            show_minimap = (val == "true" || val == "1");
         } else if (key == "external_editor") {
             external_editor = val;
         }
@@ -180,12 +186,15 @@ void AppSettings::save() const {
     out << "  \"hierarchy_thumbnail_threshold\": " << hierarchy_thumbnail_threshold << ",\n";
     out << "  \"deduplicate_flat_views\": " << (deduplicate_flat_views ? "true" : "false") << ",\n";
     out << "  \"sift_thumbnail_size\": " << sift_thumbnail_size << ",\n";
-    out << "  \"last_directory\": \"" << escape_json_string(last_directory) << "\",\n";
     out << "  \"default_layout\": \"" << escape_json_string(default_layout) << "\",\n";
     out << "  \"default_treemap_metric\": \"" << escape_json_string(default_treemap_metric) << "\",\n";
     out << "  \"default_treemap_style\": \"" << escape_json_string(default_treemap_style) << "\",\n";
     out << "  \"default_row_height\": " << default_row_height << ",\n";
     out << "  \"default_sort_order\": \"" << escape_json_string(default_sort_order) << "\",\n";
+    out << "  \"info_panel_visible\": " << (info_panel_visible ? "true" : "false") << ",\n";
+    out << "  \"info_panel_width\": " << info_panel_width << ",\n";
+    out << "  \"info_panel_font_size\": " << info_panel_font_size << ",\n";
+    out << "  \"show_minimap\": " << (show_minimap ? "true" : "false") << ",\n";
     out << "  \"external_editor\": \"" << escape_json_string(external_editor) << "\"\n";
     out << "}\n";
 }

@@ -206,12 +206,7 @@ int main(int argc, char* argv[]) {
         AppSettings settings;
         settings.load();
 
-        std::string fallback_dir = ".";
-        if (!settings.last_directory.empty() && fs::exists(settings.last_directory) && fs::is_directory(settings.last_directory)) {
-            fallback_dir = settings.last_directory;
-        }
-
-        InputSelection selection = resolve_input_targets(raw_inputs, no_recurse, fallback_dir);
+        InputSelection selection = resolve_input_targets(raw_inputs, no_recurse, ".");
         if (!selection.error.empty()) {
             std::cerr << "Error: " << selection.error << std::endl;
             return 1;

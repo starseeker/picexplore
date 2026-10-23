@@ -153,6 +153,8 @@ private:
 
     AppSettings settings_;
     double hierarchy_thumbnail_threshold_ = 8.0;
+    bool deduplicate_flat_views_ = true;
+    int sift_thumbnail_size_ = 512;
 
     std::vector<std::string> reconcile_and_get_duplicates(const std::string& hash, const std::string& current_filepath);
 

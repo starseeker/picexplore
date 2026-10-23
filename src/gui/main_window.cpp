@@ -89,6 +89,12 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     settings_.load();
     hierarchy_thumbnail_threshold_ = settings_.hierarchy_thumbnail_threshold;
     if (hierarchy_thumbnail_threshold_ <= 0.0) hierarchy_thumbnail_threshold_ = 8.0;
+    deduplicate_flat_views_ = settings_.deduplicate_flat_views;
+    sift_thumbnail_size_ = settings_.sift_thumbnail_size;
+    info_panel_visible_ = settings_.info_panel_visible;
+    if (settings_.info_panel_width >= 160 && settings_.info_panel_width <= 4096) {
+        info_panel_width_ = settings_.info_panel_width;
+    }
 
     std::string l_lower = settings_.default_layout;
     for (char& c : l_lower) c = std::tolower(c);
@@ -177,6 +183,7 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     viewport_  = new VirtualViewport(0, TOP_H, w, vp_h, store_);
     viewport_->set_hierarchy_thumbnail_threshold(hierarchy_thumbnail_threshold_);
     viewport_->set_treemap_render_style(treemap_style_);
+    viewport_->set_show_minimap(settings_.show_minimap);
     scrollbar_ = new Fl_Scrollbar(w - SCROLL_W, TOP_H, SCROLL_W, vp_h);
     scrollbar_->type(FL_VERTICAL);
     scrollbar_->box(FL_FLAT_BOX);
@@ -187,7 +194,14 @@ MainWindow::MainWindow(int w, int h, const char* title, const std::string& direc
     scrollbar_->hide();
 
     info_panel_ = new InfoPanel(w - info_panel_width_, TOP_H, info_panel_width_, vp_h);
-    info_panel_->hide();
+    if (settings_.info_panel_font_size >= 8 && settings_.info_panel_font_size <= 48) {
+        info_panel_->set_font_size(settings_.info_panel_font_size);
+    }
+    if (info_panel_visible_) {
+        info_panel_->show();
+    } else {
+        info_panel_->hide();
+    }
     info_panel_->set_root_dir(directory_);
 
     // Status bar at the very bottom
@@ -615,7 +629,7 @@ void MainWindow::apply_directory_filter(const std::string& dir) {
     }
 
     current_generation_++;
-    pipeline_->set_generation(current_generation_);
+    if (pipeline_) pipeline_->set_generation(current_generation_);
     last_visible_.clear();
     layout_dirty_ = true;
     viewport_->set_scroll_offset(0);
@@ -627,7 +641,7 @@ void MainWindow::apply_directory_filter(const std::string& dir) {
 void MainWindow::reset_directory_filter() {
     directory_filter_.clear();
     current_generation_++;
-    pipeline_->set_generation(current_generation_);
+    if (pipeline_) pipeline_->set_generation(current_generation_);
     last_visible_.clear();
     layout_dirty_ = true;
     viewport_->set_scroll_offset(0);
@@ -709,9 +723,6 @@ void MainWindow::switch_directory(const std::string& new_dir) {
         info_panel_->clear_info();
     }
 
-    settings_.last_directory = directory_;
-    settings_.save();
-
     start();
 }
 
@@ -720,11 +731,9 @@ void MainWindow::set_hierarchy_thumbnail_threshold(double threshold) {
     if (threshold > 256.0) threshold = 256.0;
     hierarchy_thumbnail_threshold_ = threshold;
     viewport_->set_hierarchy_thumbnail_threshold(threshold);
-    settings_.hierarchy_thumbnail_threshold = threshold;
-    settings_.save();
 
     current_generation_++;
-    pipeline_->set_generation(current_generation_);
+    if (pipeline_) pipeline_->set_generation(current_generation_);
     last_visible_.clear();
     layout_dirty_ = true;
     rebuild_menu();
@@ -978,12 +987,11 @@ void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string
         items.push_back({"Information Panel", 0, info_flag, [this]() {
             toggle_info_panel();
         }});
-        int dedup_flag = FL_MENU_TOGGLE | (settings_.deduplicate_flat_views ? FL_MENU_VALUE : 0);
+        int dedup_flag = FL_MENU_TOGGLE | (deduplicate_flat_views_ ? FL_MENU_VALUE : 0);
         items.push_back({"Deduplicate Copies in Flat Views", 0, dedup_flag, [this]() {
-            settings_.deduplicate_flat_views = !settings_.deduplicate_flat_views;
-            settings_.save();
+            deduplicate_flat_views_ = !deduplicate_flat_views_;
             current_generation_++;
-            pipeline_->set_generation(current_generation_);
+            if (pipeline_) pipeline_->set_generation(current_generation_);
             last_visible_.clear();
             layout_dirty_ = true;
             rebuild_menu();
@@ -1105,7 +1113,7 @@ void MainWindow::update_statusbar() {
     size_t total_images = store_.size();
     size_t shown_count = layout_result_.boxes.size();
     bool is_flat = (active_layout_ == LayoutEngine::LayoutType::JUSTIFIED || active_layout_ == LayoutEngine::LayoutType::TREEMAP);
-    bool is_deduped = (is_flat && settings_.deduplicate_flat_views && shown_count > 0 && shown_count < total_images);
+    bool is_deduped = (is_flat && deduplicate_flat_views_ && shown_count > 0 && shown_count < total_images);
 
     if (!directory_filter_.empty()) {
         // Show the filter as a path relative to the launch root for brevity
@@ -1232,7 +1240,7 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Hierarchy Thumbnail Threshold/Very Large (32px)", 0, menu_cb, (void*)46, FL_MENU_RADIO | val_th32);
         menubar_->add("View/Hierarchy Thumbnail Threshold/Custom...",         0, menu_cb, (void*)47, 0);
 
-        menubar_->add("View/Deduplicate Copies in Flat Views", 0, menu_cb, (void*)35, FL_MENU_TOGGLE | (settings_.deduplicate_flat_views ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Deduplicate Copies in Flat Views", 0, menu_cb, (void*)35, FL_MENU_TOGGLE | (deduplicate_flat_views_ ? FL_MENU_VALUE : 0));
         menubar_->add("View/Information Panel", 0, menu_cb, (void*)10, FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0));
         menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO | (font_sz == 11 ? FL_MENU_VALUE : 0));
         menubar_->add("View/Info Panel Font Size/Medium (14pt)",  0, menu_cb, (void*)12, FL_MENU_RADIO | (font_sz == 14 ? FL_MENU_VALUE : 0));
@@ -1255,8 +1263,8 @@ void MainWindow::rebuild_menu() {
         int val_simf = (current_sort_criteria_ == ImageStore::SortCriteria::SIMILARITY_FAST)                    ? FL_MENU_VALUE : 0;
         int val_sima = (current_sort_criteria_ == ImageStore::SortCriteria::SIMILARITY_ACCURATE)                ? FL_MENU_VALUE : 0;
 
-        int val_s256 = (settings_.sift_thumbnail_size == 256) ? FL_MENU_VALUE : 0;
-        int val_s512 = (settings_.sift_thumbnail_size == 512) ? FL_MENU_VALUE : 0;
+        int val_s256 = (sift_thumbnail_size_ == 256) ? FL_MENU_VALUE : 0;
+        int val_s512 = (sift_thumbnail_size_ == 512) ? FL_MENU_VALUE : 0;
 
         menubar_->add("Sort/Alphabetical (A-Z)",            0, menu_cb, (void*)1,  FL_MENU_RADIO | val_az);
         menubar_->add("Sort/Alphabetical (Z-A)",            0, menu_cb, (void*)2,  FL_MENU_RADIO | val_za);
@@ -1282,7 +1290,7 @@ void MainWindow::rebuild_menu() {
         menubar_->add("View/Zoom Out (Ctrl+Wheel Down)", FL_CTRL | '-', menu_cb, (void*)8);
         menubar_->add("View/Reset Zoom",                 FL_CTRL | '0', menu_cb, (void*)9);
         menubar_->add("View/Navigator (Minimap)",        0,             menu_cb, (void*)19, FL_MENU_TOGGLE | (viewport_->show_minimap() ? FL_MENU_VALUE : 0));
-        menubar_->add("View/Deduplicate Copies in Flat Views", 0,       menu_cb, (void*)35, FL_MENU_TOGGLE | (settings_.deduplicate_flat_views ? FL_MENU_VALUE : 0));
+        menubar_->add("View/Deduplicate Copies in Flat Views", 0,       menu_cb, (void*)35, FL_MENU_TOGGLE | (deduplicate_flat_views_ ? FL_MENU_VALUE : 0));
         menubar_->add("View/Information Panel",          0,             menu_cb, (void*)10, FL_MENU_TOGGLE | (info_panel_visible_ ? FL_MENU_VALUE : 0));
 
         menubar_->add("View/Info Panel Font Size/Small (11pt)",   0, menu_cb, (void*)11, FL_MENU_RADIO | (font_sz == 11 ? FL_MENU_VALUE : 0));
@@ -1568,7 +1576,7 @@ void MainWindow::set_layout_mode(LayoutEngine::LayoutType type) {
     if (active_layout_ == type) return;
     active_layout_ = type;
     current_generation_++;
-    pipeline_->set_generation(current_generation_);
+    if (pipeline_) pipeline_->set_generation(current_generation_);
     last_visible_.clear();
     layout_dirty_ = true;
     viewport_->set_scroll_offset(0);
@@ -1584,7 +1592,7 @@ void MainWindow::set_treemap_metric(LayoutEngine::TreemapMetric metric) {
     treemap_metric_ = metric;
     if (active_layout_ == LayoutEngine::LayoutType::TREEMAP || active_layout_ == LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP) {
         current_generation_++;
-        pipeline_->set_generation(current_generation_);
+        if (pipeline_) pipeline_->set_generation(current_generation_);
         last_visible_.clear();
         layout_dirty_ = true;
         rebuild_menu();
@@ -1596,7 +1604,7 @@ void MainWindow::set_treemap_style(VirtualViewport::TreemapRenderStyle style) {
     if (treemap_style_ == style) return;
     treemap_style_ = style;
     current_generation_++;
-    pipeline_->set_generation(current_generation_);
+    if (pipeline_) pipeline_->set_generation(current_generation_);
     last_visible_.clear();
     viewport_->set_treemap_render_style(style);
     rebuild_menu();
@@ -1615,7 +1623,7 @@ void MainWindow::recompute_layout(bool reprioritize) {
     std::vector<std::pair<size_t, double>> flat_items;
     bool is_flat = (active_layout_ == LayoutEngine::LayoutType::JUSTIFIED || active_layout_ == LayoutEngine::LayoutType::TREEMAP);
 
-    if (is_flat && settings_.deduplicate_flat_views) {
+    if (is_flat && deduplicate_flat_views_) {
         std::unordered_set<std::string> seen_hashes;
         flat_items.reserve(indexed.size());
 
@@ -1771,7 +1779,7 @@ void MainWindow::reprioritize_thumbnails() {
 
         if (view_changed) {
             current_generation_++;
-            pipeline_->set_generation(current_generation_);
+            if (pipeline_) pipeline_->set_generation(current_generation_);
             last_visible_ = visible;
             last_target_height_ = 0.0;
             last_viewport_width_ = viewport_->w();
@@ -1887,7 +1895,7 @@ void MainWindow::reprioritize_thumbnails() {
     if (!view_changed) return;
     
     current_generation_++;
-    pipeline_->set_generation(current_generation_);
+    if (pipeline_) pipeline_->set_generation(current_generation_);
     last_visible_ = visible;
     last_target_height_ = target_height_;
     last_viewport_width_ = viewport_->w();
@@ -1960,6 +1968,15 @@ void MainWindow::hide() {
     if (gc_running_) {
         gc_stop_requested_ = true;
     }
+    if (settings_.save_window_size) {
+        settings_.window_width = w();
+        settings_.window_height = h();
+        if (x() >= 0 && y() >= 0) {
+            settings_.window_x = x();
+            settings_.window_y = y();
+        }
+        settings_.save();
+    }
     Fl_Double_Window::hide();
 }
 
@@ -1982,12 +1999,13 @@ void MainWindow::draw() {
 void MainWindow::resize(int X, int Y, int W, int H) {
     bool is_a_resize = (W != w() || H != h());
 
-    if (is_a_resize && settings_.save_window_size) {
+    if (settings_.save_window_size) {
         settings_.window_width = W;
         settings_.window_height = H;
-        settings_.window_x = X;
-        settings_.window_y = Y;
-        settings_.save();
+        if (X >= 0 && Y >= 0) {
+            settings_.window_x = X;
+            settings_.window_y = Y;
+        }
     }
 
     Fl_Double_Window::resize(X, Y, W, H);
@@ -2142,10 +2160,9 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
             win->exit_single_image_mode();
             return;
         case 35: {
-            win->settings_.deduplicate_flat_views = !win->settings_.deduplicate_flat_views;
-            win->settings_.save();
+            win->deduplicate_flat_views_ = !win->deduplicate_flat_views_;
             win->current_generation_++;
-            win->pipeline_->set_generation(win->current_generation_);
+            if (win->pipeline_) win->pipeline_->set_generation(win->current_generation_);
             win->last_visible_.clear();
             win->layout_dirty_ = true;
             win->rebuild_menu();
@@ -2166,6 +2183,14 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
             return;
         case 51:
             win->settings_.save_window_size = !win->settings_.save_window_size;
+            if (win->settings_.save_window_size) {
+                win->settings_.window_width = win->w();
+                win->settings_.window_height = win->h();
+                if (win->x() >= 0 && win->y() >= 0) {
+                    win->settings_.window_x = win->x();
+                    win->settings_.window_y = win->y();
+                }
+            }
             win->settings_.save();
             win->rebuild_menu();
             return;
@@ -2208,14 +2233,12 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
             return;
         }
         case 56: {
-            win->settings_.sift_thumbnail_size = 256;
-            win->settings_.save();
+            win->sift_thumbnail_size_ = 256;
             win->rebuild_menu();
             return;
         }
         case 57: {
-            win->settings_.sift_thumbnail_size = 512;
-            win->settings_.save();
+            win->sift_thumbnail_size_ = 512;
             win->rebuild_menu();
             return;
         }
@@ -2227,8 +2250,6 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         win->sort_ascending_ = ascending;
         win->cancel_similarity();
         win->store_.sort_entries(criteria, ascending);
-        win->settings_.default_sort_order = win->get_sort_order_string();
-        win->settings_.save();
         win->layout_dirty_ = true;
         win->viewport_->set_scroll_offset(0);
         win->recompute_layout(true);
@@ -2261,7 +2282,7 @@ void MainWindow::sort_by_sift_similarity(const std::string& query_filepath, bool
     sift_succeeded_ = false;
     sift_running_ = true;
     const auto db_path = db_path_;
-    const int resolution = settings_.sift_thumbnail_size;
+    const int resolution = sift_thumbnail_size_;
     ImageStore* snapshot = sift_snapshot_.get();
     sift_thread_ = std::thread([this, snapshot, id, high_accuracy, db_path, resolution]() {
         try {
@@ -2475,6 +2496,13 @@ void MainWindow::save_view_config() {
     }
 
     settings_.default_row_height = target_height_;
+    settings_.hierarchy_thumbnail_threshold = hierarchy_thumbnail_threshold_;
+    settings_.deduplicate_flat_views = deduplicate_flat_views_;
+    settings_.sift_thumbnail_size = sift_thumbnail_size_;
+    settings_.info_panel_visible = info_panel_visible_;
+    settings_.info_panel_width = info_panel_width_;
+    settings_.info_panel_font_size = info_panel_->get_font_size();
+    settings_.show_minimap = viewport_->show_minimap();
 
     if (current_sort_criteria_ != ImageStore::SortCriteria::SIMILARITY_FAST &&
         current_sort_criteria_ != ImageStore::SortCriteria::SIMILARITY_ACCURATE) {

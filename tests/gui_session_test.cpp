@@ -192,6 +192,41 @@ struct MainWindowTestAccess {
             assert(win.viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE);
             win.hide();
         }
+
+        // View config persistence vs session-only toggles
+        {
+            AppSettings initial;
+            initial.save();
+
+            MainWindow win(640, 480, "Settings test", dir, base + "/scope.db");
+            win.settings_.save_window_size = true;
+            win.set_hierarchy_thumbnail_threshold(24.0);
+            win.deduplicate_flat_views_ = false;
+            win.sift_thumbnail_size_ = 256;
+            win.toggle_info_panel();
+            win.info_panel_width_ = 330;
+            win.info_panel_->set_font_size(18);
+            win.viewport_->set_show_minimap(false);
+            win.hide(); // Saves window size, but must NOT persist unsaved view config toggles
+
+            AppSettings after_hide;
+            after_hide.load();
+            assert(after_hide.hierarchy_thumbnail_threshold == 8.0);
+            assert(after_hide.deduplicate_flat_views == true);
+            assert(after_hide.sift_thumbnail_size == 512);
+            assert(after_hide.info_panel_visible == false);
+            assert(after_hide.show_minimap == true);
+
+            win.save_view_config();
+            MainWindow restored(640, 480, "Restored settings", dir, base + "/scope.db");
+            assert(restored.hierarchy_thumbnail_threshold_ == 24.0);
+            assert(restored.deduplicate_flat_views_ == false);
+            assert(restored.sift_thumbnail_size_ == 256);
+            assert(restored.info_panel_visible_ == true);
+            assert(restored.info_panel_width_ == 330);
+            assert(restored.info_panel_->get_font_size() == 18);
+            assert(restored.viewport_->show_minimap() == false);
+        }
     }
 
     static void watch_status(const std::string& base) {

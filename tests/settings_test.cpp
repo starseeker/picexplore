@@ -18,12 +18,16 @@ int main() {
     s.window_y = 150;
     s.hierarchy_thumbnail_threshold = 12.0;
     s.deduplicate_flat_views = false;
-    s.last_directory = "/tmp/test_photos";
+    s.sift_thumbnail_size = 256;
     s.default_layout = "justified";
     s.default_treemap_metric = "pixel-area";
     s.default_treemap_style = "cushion";
     s.default_row_height = 180.0;
     s.default_sort_order = "file-size-desc";
+    s.info_panel_visible = true;
+    s.info_panel_width = 340;
+    s.info_panel_font_size = 18;
+    s.show_minimap = false;
 
     s.save();
 
@@ -37,16 +41,24 @@ int main() {
     assert(loaded.window_y == 150);
     assert(loaded.hierarchy_thumbnail_threshold == 12.0);
     assert(loaded.deduplicate_flat_views == false);
-    assert(loaded.last_directory == "/tmp/test_photos");
+    assert(loaded.sift_thumbnail_size == 256);
     assert(loaded.default_layout == "justified");
     assert(loaded.default_treemap_metric == "pixel-area");
     assert(loaded.default_treemap_style == "cushion");
     assert(loaded.default_row_height == 180.0);
     assert(loaded.default_sort_order == "file-size-desc");
+    assert(loaded.info_panel_visible == true);
+    assert(loaded.info_panel_width == 340);
+    assert(loaded.info_panel_font_size == 18);
+    assert(loaded.show_minimap == false);
 
     // Test fresh default settings
     AppSettings fresh;
     assert(fresh.default_sort_order == "alphabetical-asc");
+    assert(fresh.info_panel_visible == false);
+    assert(fresh.info_panel_width == 280);
+    assert(fresh.info_panel_font_size == 12);
+    assert(fresh.show_minimap == true);
 
     // Test different sort orders
     std::vector<std::string> sort_orders = {
@@ -77,12 +89,10 @@ int main() {
 
     setenv("PICEXPLORE_CACHE_DIR", test_cache.c_str(), 1);
     AppSettings special;
-    special.last_directory = "/tmp/photos \"2026\"\\set's, archive: 1, ";
-    special.external_editor = "gimp --new-instance \"%f\"";
+    special.external_editor = "/opt/my \"editor\"\\bin's/edit, --flag: 1 -- \"%f\"";
     special.save();
     AppSettings special_loaded;
     special_loaded.load();
-    assert(special_loaded.last_directory == special.last_directory);
     assert(special_loaded.external_editor == special.external_editor);
 
     std::cout << "[PASS] AppSettings save and load test passed!" << std::endl;
