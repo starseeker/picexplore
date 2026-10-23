@@ -410,14 +410,6 @@ void InfoPanel::clear_info() {
 
 // ── breadcrumb ─────────────────────────────────────────────────────────────
 
-// Per-button data bundle: stored as user_data so the non-capturing callback
-// has access to both the InfoPanel* and the directory path without relying
-// on a second user_data() write that would clobber the first.
-struct CrumbData {
-    InfoPanel*   panel;
-    std::string  path;
-};
-
 // Free heap-allocated CrumbData* from every child that has one, then clear
 // the group.  We collect the pointers first, then call clear() to destroy
 // the widgets (which kills FLTK's tooltip reference), then delete the data —

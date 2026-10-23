@@ -88,6 +88,8 @@ class StatusReporter {
 
 // Utility functions
 std::vector<uint8_t> encode_jpeg(const unsigned char* rgb_data, int width, int height, int quality = 90);
+bool decode_jpeg_memory(const uint8_t* jpeg_data, size_t jpeg_size, std::vector<uint8_t>& rgb_data,
+                        int& width, int& height, bool fast = false);
 bool is_image_file(const std::string& filepath);
 bool is_cache_or_db_path(const std::string& path, const std::string& db_path = "");
 bool get_image_info(const std::string& filepath, int* width, int* height);

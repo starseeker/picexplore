@@ -207,6 +207,58 @@ std::vector<uint8_t> encode_jpeg(const unsigned char* rgb_data, int width, int h
     return jpeg_data;
 }
 
+bool decode_jpeg_memory(const uint8_t* jpeg_data, size_t jpeg_size, std::vector<uint8_t>& rgb_data,
+                        int& width, int& height, bool fast) {
+    if (!jpeg_data || jpeg_size == 0) return false;
+
+    struct jpeg_decompress_struct cinfo;
+    struct my_jpeg_enc_error_mgr jerr;
+
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = my_jpeg_enc_error_exit;
+
+    if (setjmp(jerr.setjmp_buffer)) {
+        jpeg_destroy_decompress(&cinfo);
+        return false;
+    }
+
+    jpeg_create_decompress(&cinfo);
+    jpeg_mem_src(&cinfo, jpeg_data, jpeg_size);
+    if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
+        jpeg_destroy_decompress(&cinfo);
+        return false;
+    }
+
+    cinfo.out_color_space = JCS_RGB;
+    if (fast) {
+        cinfo.dct_method = JDCT_IFAST;
+        cinfo.do_fancy_upsampling = FALSE;
+    }
+
+    jpeg_start_decompress(&cinfo);
+
+    width = static_cast<int>(cinfo.output_width);
+    height = static_cast<int>(cinfo.output_height);
+    int channels = cinfo.output_components;
+
+    if (channels != 3 || width <= 0 || height <= 0) {
+        jpeg_destroy_decompress(&cinfo);
+        return false;
+    }
+
+    rgb_data.resize(static_cast<size_t>(width) * height * channels);
+    int row_stride = width * channels;
+
+    while (cinfo.output_scanline < cinfo.output_height) {
+        unsigned char* row = rgb_data.data() + static_cast<size_t>(cinfo.output_scanline) * row_stride;
+        jpeg_read_scanlines(&cinfo, &row, 1);
+    }
+
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
+    return true;
+}
+
 bool is_image_file(const std::string& filepath) {
     auto ext = std::filesystem::path(filepath).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);

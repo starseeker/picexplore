@@ -69,80 +69,8 @@ size_t ImageStore::add_image(std::string filepath, double aspect_ratio,
     return idx;
 }
 
-// Custom error handler for libjpeg
-struct my_error_mgr {
-    struct jpeg_error_mgr pub;
-    jmp_buf setjmp_buffer;
-    const char* filepath = nullptr;
-};
-
-static void my_error_exit(j_common_ptr cinfo) {
-    my_error_mgr* myerr = (my_error_mgr*)cinfo->err;
-    char buffer[JMSG_LENGTH_MAX];
-    (*cinfo->err->format_message)(cinfo, buffer);
-    if (myerr && myerr->filepath && myerr->filepath[0] != '\0') {
-        fprintf(stderr, "JPEG [%s]: %s\n", myerr->filepath, buffer);
-    } else {
-        fprintf(stderr, "JPEG error: %s\n", buffer);
-    }
-    longjmp(myerr->setjmp_buffer, 1);
-}
-
-static void my_output_message(j_common_ptr cinfo) {
-    my_error_mgr* myerr = (my_error_mgr*)cinfo->err;
-    char buffer[JMSG_LENGTH_MAX];
-    (*cinfo->err->format_message)(cinfo, buffer);
-    if (myerr && myerr->filepath && myerr->filepath[0] != '\0') {
-        fprintf(stderr, "JPEG [%s]: %s\n", myerr->filepath, buffer);
-    } else {
-        fprintf(stderr, "JPEG: %s\n", buffer);
-    }
-}
-
 bool ImageStore::decode_jpeg(const uint8_t* jpeg_data, size_t jpeg_size, std::vector<uint8_t>& rgb_data, int& width, int& height) {
-    if (!jpeg_data || jpeg_size == 0) return false;
-
-    struct jpeg_decompress_struct cinfo;
-    struct my_error_mgr jerr;
-    jerr.filepath = nullptr;
-
-    cinfo.err = jpeg_std_error(&jerr.pub);
-    jerr.pub.error_exit = my_error_exit;
-    jerr.pub.output_message = my_output_message;
-
-    if (setjmp(jerr.setjmp_buffer)) {
-        jpeg_destroy_decompress(&cinfo);
-        return false;
-    }
-
-    jpeg_create_decompress(&cinfo);
-    jpeg_mem_src(&cinfo, jpeg_data, jpeg_size);
-    jpeg_read_header(&cinfo, TRUE);
-    
-    // We want RGB output
-    cinfo.out_color_space = JCS_RGB;
-    jpeg_start_decompress(&cinfo);
-
-    width = cinfo.output_width;
-    height = cinfo.output_height;
-    int channels = cinfo.output_components;
-    
-    if (channels != 3) {
-        jpeg_destroy_decompress(&cinfo);
-        return false;
-    }
-
-    rgb_data.resize(width * height * channels);
-    int row_stride = width * channels;
-
-    while (cinfo.output_scanline < cinfo.output_height) {
-        unsigned char* row = rgb_data.data() + cinfo.output_scanline * row_stride;
-        jpeg_read_scanlines(&cinfo, &row, 1);
-    }
-
-    jpeg_finish_decompress(&cinfo);
-    jpeg_destroy_decompress(&cinfo);
-    return true;
+    return decode_jpeg_memory(jpeg_data, jpeg_size, rgb_data, width, height, false);
 }
 
 void ImageStore::remove_image(std::string filepath) {

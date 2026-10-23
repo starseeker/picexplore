@@ -115,13 +115,11 @@ class DatabaseManager {
 	void close();
 
 	// Scanning and thumbnail generation
-	int scan_directory(const std::string& directory, Timer& timer, StatusReporter& reporter);
 	int scan_directory_parallel(const std::string& directory, Timer& timer, StatusReporter& reporter, int num_threads = 0);
 
 	// Database querying
 	std::vector<ImageInfo> get_all_images();
 	std::vector<ImageInfo> get_images_for_directory(const std::string& directory);
-	bool has_thumbnails(const std::string& hash);
 
     private:
     std::shared_ptr<DatabaseEnvironment> environment_;
@@ -148,13 +146,6 @@ class DatabaseManager {
 		Timer& timer, StatusReporter& reporter,
 		std::atomic<int>& write_count);
 
-	// Thumbnail generation
-	bool generate_thumbnails(const std::string& filepath, const std::string& hash,
-		unsigned char* image_data, int width, int height, int channels);
-	std::vector<uint8_t> decode_jpeg_thumbnail_rgb(const std::string& filepath, int scale_factor,
-		int* actual_width, int* actual_height);
-	int calculate_scale_factor(int image_width, int image_height, int target_width, int target_height);
-
 	public:
 	// Database operations
 	bool begin_transaction();
@@ -178,7 +169,6 @@ class DatabaseManager {
 	bool set_paths_for_hash(const std::string& hash, const std::vector<std::string>& paths);
 	bool add_path_for_hash(const std::string& hash, const std::string& filepath);
 	bool remove_path_for_hash(const std::string& hash, const std::string& filepath);
-	std::string extract_hash_from_key(const char* key, size_t key_size);
 	bool load_image_info(const std::string& hash, ImageInfo& info);
 	bool store_image_metadata(const std::string& hash, const ImageMetadata& meta);
 	bool get_image_metadata(const std::string& hash, ImageMetadata& meta);
@@ -198,10 +188,6 @@ class DatabaseManager {
 	bool process_image_file(const std::string& filepath,
 		std::vector<WriteTask>& write_tasks,
 		Timer& timer, bool& should_skip);
-
-	// EXIF orientation helpers
-	int get_exif_orientation(const std::string& filepath);
-	void apply_orientation_transform(unsigned char* data, int& width, int& height, int orientation);
 };
 
 // Local Variables:
