@@ -75,6 +75,14 @@ int main() {
     assert(AppSettings::resolve_db_path("", "") == test_cache + "/xdg/picexplore/cache.db");
     unsetenv("XDG_CACHE_HOME");
 
+    setenv("PICEXPLORE_CACHE_DIR", test_cache.c_str(), 1);
+    AppSettings special;
+    special.last_directory = "/tmp/photos \"2026\"\\set's, archive: 1, ";
+    special.save();
+    AppSettings special_loaded;
+    special_loaded.load();
+    assert(special_loaded.last_directory == special.last_directory);
+
     std::cout << "[PASS] AppSettings save and load test passed!" << std::endl;
     std::filesystem::remove_all(test_cache);
     return 0;
