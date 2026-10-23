@@ -51,7 +51,7 @@ LayoutEngine::LayoutResult LayoutEngine::compute_justified(const std::vector<std
         // sees real store indices, never filtered-space indices.
         result.boxes.push_back({indexed_aspects[i].first, box.l, box.t, box.w, box.h});
     }
-    result.total_height = layout.height() + cfg_.pb;
+    result.total_height = layout.height();
 
     return result;
 }

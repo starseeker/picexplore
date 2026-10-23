@@ -1,5 +1,7 @@
 #include "gui/image_store.h"
+#include "gui/layout_engine.h"
 #include <cassert>
+#include <cmath>
 #include <stdexcept>
 
 struct CatalogTestAccess {
@@ -79,4 +81,10 @@ int main() {
 
     store.clear();
     assert(store.add_image("b.jpg", 1) != b);
+
+    LayoutEngine engine;
+    auto jres = engine.compute_justified({{0, 1.5}}, 800.0, 150.0);
+    assert(jres.boxes.size() == 1);
+    assert(std::abs(jres.boxes[0].y - 5.0) < 1e-4);
+    assert(std::abs(jres.total_height - (jres.boxes[0].y + jres.boxes[0].h + 5.0)) < 1e-4);
 }
