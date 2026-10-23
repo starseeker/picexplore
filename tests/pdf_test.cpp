@@ -71,6 +71,41 @@ void test_justified_pagination() {
     }
     assert(total_boxes == 50);
     std::cout << "  Pagination verified: 50/50 images accounted for across pages." << std::endl;
+
+    // Verify padding options constrain box placement within the layout region
+    options.pad_left = 25;
+    options.pad_right = 30;
+    options.pad_top = 20;
+    options.pad_bottom = 40;
+    std::vector<std::vector<Item>> padded_boxes;
+    PDFGenerator::calculate_justified_pagination(indexed_aspects, padded_boxes, options);
+    assert(!padded_boxes.empty());
+    for (const auto& page : padded_boxes) {
+        for (const auto& box : page) {
+            assert(box.l >= options.pad_left - 1e-3);
+            assert(box.l + box.w <= options.layout_width_px() - options.pad_right + 1e-3);
+            assert(box.t >= options.pad_top - 1e-3);
+        }
+        if (page.size() > 1) {
+            for (const auto& box : page) {
+                assert(box.t + box.h <= options.layout_height_px() - options.pad_bottom + 1e-3);
+            }
+        }
+    }
+
+    // Verify directory_filter restricts flat treemap and justified layouts
+    PDFOptions filtered_opts = options;
+    filtered_opts.layout_type = LayoutEngine::LayoutType::TREEMAP;
+    filtered_opts.directory_filter = "/tmp/test_dir/scans";
+    auto filtered_tm = PDFGenerator::calculate_treemap_layout(store, filtered_opts);
+    size_t expected_scans = 0;
+    for (size_t i = 0; i < store.size(); ++i) {
+        if (store.at_position(i).filepath.rfind("/tmp/test_dir/scans/", 0) == 0) {
+            expected_scans++;
+        }
+    }
+    assert(expected_scans > 0 && expected_scans < store.size());
+    assert(filtered_tm.boxes.size() == expected_scans);
 }
 
 void test_pdf_document_generation() {

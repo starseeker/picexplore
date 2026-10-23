@@ -225,7 +225,10 @@ std::vector<std::vector<size_t>> PDFGenerator::calculate_justified_pagination(
 
     LayoutCfg layout_cfg;
     layout_cfg.w = options.layout_width_px();
-    layout_cfg.pl = layout_cfg.pr = layout_cfg.pt = layout_cfg.pb = 0;
+    layout_cfg.pl = std::max(0, options.pad_left);
+    layout_cfg.pr = std::max(0, options.pad_right);
+    layout_cfg.pt = 0;
+    layout_cfg.pb = 0;
     layout_cfg.sh = layout_cfg.sv = options.margin;
     layout_cfg.rh = options.row_height;
     layout_cfg.tol = 0.25;
@@ -240,17 +243,22 @@ std::vector<std::vector<size_t>> PDFGenerator::calculate_justified_pagination(
         items.push_back(item);
     }
 
+    const double page_top = static_cast<double>(std::max(0, options.pad_top));
+    const double page_bottom = std::max(
+        page_top + 1.0,
+        static_cast<double>(options.layout_height_px() - std::max(0, options.pad_bottom)));
+
     size_t image_idx = 0;
     while (image_idx < items.size()) {
         std::vector<Item> page_boxes;
         std::vector<size_t> page_indices;
-        double current_y = 0;
+        double current_y = page_top;
 
-        while (current_y < options.layout_height_px() && image_idx < items.size()) {
+        while (current_y < page_bottom && image_idx < items.size()) {
             std::vector<Item> remaining_items(items.begin() + image_idx, items.end());
 
             LayoutCfg temp_cfg = layout_cfg;
-            temp_cfg.maxRows = std::max(1, static_cast<int>((options.layout_height_px() - current_y) / options.row_height));
+            temp_cfg.maxRows = std::max(1, static_cast<int>((page_bottom - current_y) / options.row_height));
             JustifiedLayout layout(remaining_items, temp_cfg);
 
             if (layout.boxes().empty()) break;
@@ -258,7 +266,7 @@ std::vector<std::vector<size_t>> PDFGenerator::calculate_justified_pagination(
             double layout_h = layout.height();
             size_t nboxes = layout.boxes().size();
 
-            if (current_y + layout_h <= options.layout_height_px()) {
+            if (current_y + layout_h <= page_bottom) {
                 for (size_t b = 0; b < nboxes; ++b) {
                     Item box = layout.boxes()[b];
                     box.t += current_y;
@@ -273,14 +281,14 @@ std::vector<std::vector<size_t>> PDFGenerator::calculate_justified_pagination(
                 std::vector<Item> fit_boxes;
                 std::vector<size_t> fit_indices;
 
-                while (test_y < options.layout_height_px() && (image_idx + local_idx) < items.size()) {
+                while (test_y < page_bottom && (image_idx + local_idx) < items.size()) {
                     LayoutCfg row_cfg = layout_cfg;
                     row_cfg.maxRows = 1;
                     std::vector<Item> row_items(items.begin() + image_idx + local_idx, items.end());
                     JustifiedLayout row_layout(row_items, row_cfg);
                     if (row_layout.boxes().empty()) break;
                     double row_h = row_layout.height();
-                    if (test_y + row_h > options.layout_height_px()) break;
+                    if (test_y + row_h > page_bottom) break;
 
                     for (size_t rb = 0; rb < row_layout.boxes().size(); ++rb) {
                         Item box = row_layout.boxes()[rb];
@@ -355,11 +363,12 @@ LayoutEngine::LayoutResult PDFGenerator::calculate_treemap_layout(
 
         return engine.compute_hierarchical_treemap(hitems, options.root_directory, options.directory_filter, target_w, target_h, 2.0);
     } else {
+        const auto& filtered = store.get_filtered_aspects(options.directory_filter);
         std::vector<TreemapItem> titems;
-        titems.reserve(store.size());
+        titems.reserve(filtered.size());
 
-        for (size_t i = 0; i < store.size(); ++i) {
-            const auto& entry = store.at_position(i);
+        for (const auto& [raw_idx, ar] : filtered) {
+            const auto& entry = store.get(raw_idx);
             double weight = 1.0;
             switch (options.treemap_metric) {
                 case LayoutEngine::TreemapMetric::FILE_SIZE:
@@ -375,7 +384,7 @@ LayoutEngine::LayoutResult PDFGenerator::calculate_treemap_layout(
                     weight = 1.0;
                     break;
             }
-            titems.push_back({entry.index, weight});
+            titems.push_back({entry.index, weight, ar > 0.0 ? ar : 1.0});
         }
 
         return engine.compute_treemap(titems, target_w, target_h, 2.0);
@@ -507,12 +516,12 @@ std::vector<uint8_t> PDFGenerator::render_preview_page(
     int layout_h = static_cast<int>(options.layout_height_px() * scale);
 
     if (options.layout_type == LayoutEngine::LayoutType::JUSTIFIED) {
+        const auto& filtered = store.get_filtered_aspects(options.directory_filter);
         std::vector<std::pair<size_t, double>> indexed_aspects;
-        indexed_aspects.reserve(store.size());
-        for (size_t i = 0; i < store.size(); ++i) {
-            const auto& entry = store.at_position(i);
-            double ar = (entry.aspect_ratio > 0.0) ? entry.aspect_ratio : 1.0;
-            indexed_aspects.push_back({entry.index, ar});
+        indexed_aspects.reserve(filtered.size());
+        for (const auto& [raw_idx, raw_ar] : filtered) {
+            double ar = (raw_ar > 0.0) ? raw_ar : 1.0;
+            indexed_aspects.push_back({raw_idx, ar});
         }
 
         std::vector<std::vector<Item>> boxes_per_page;
@@ -630,16 +639,16 @@ bool PDFGenerator::generate_from_store(
     int num_threads = WorkPermit::limit();
 
     if (options.layout_type == LayoutEngine::LayoutType::JUSTIFIED) {
+        const auto& filtered = store.get_filtered_aspects(options.directory_filter);
         if (progress_cb) {
-            progress_cb(0, static_cast<int>(store.size()), "Calculating page layout...");
+            progress_cb(0, static_cast<int>(filtered.size()), "Calculating page layout...");
         }
 
         std::vector<std::pair<size_t, double>> indexed_aspects;
-        indexed_aspects.reserve(store.size());
-        for (size_t i = 0; i < store.size(); ++i) {
-            const auto& entry = store.at_position(i);
-            double ar = (entry.aspect_ratio > 0.0) ? entry.aspect_ratio : 1.0;
-            indexed_aspects.push_back({entry.index, ar});
+        indexed_aspects.reserve(filtered.size());
+        for (const auto& [raw_idx, raw_ar] : filtered) {
+            double ar = (raw_ar > 0.0) ? raw_ar : 1.0;
+            indexed_aspects.push_back({raw_idx, ar});
         }
 
         std::vector<std::vector<Item>> boxes_per_page;
@@ -647,7 +656,7 @@ bool PDFGenerator::generate_from_store(
 
         if (boxes_per_page.empty()) return false;
         int total_pages = static_cast<int>(boxes_per_page.size());
-        size_t total_images = store.size();
+        size_t total_images = indexed_aspects.size();
         std::atomic<size_t> global_rendered_images{0};
         std::mutex progress_mutex;
 

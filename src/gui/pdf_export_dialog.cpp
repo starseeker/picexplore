@@ -45,12 +45,12 @@ void PDFPreviewWidget::update_preview(const ImageStore& store, const PDFOptions&
 
     // Calculate total pages
     if (options.layout_type == LayoutEngine::LayoutType::JUSTIFIED) {
+        const auto& filtered = store.get_filtered_aspects(options.directory_filter);
         std::vector<std::pair<size_t, double>> indexed_aspects;
-        indexed_aspects.reserve(store.size());
-        for (size_t i = 0; i < store.size(); ++i) {
-            const auto& entry = store.at_position(i);
-            double ar = (entry.aspect_ratio > 0.0) ? entry.aspect_ratio : 1.0;
-            indexed_aspects.push_back({entry.index, ar});
+        indexed_aspects.reserve(filtered.size());
+        for (const auto& [raw_idx, raw_ar] : filtered) {
+            double ar = (raw_ar > 0.0) ? raw_ar : 1.0;
+            indexed_aspects.push_back({raw_idx, ar});
         }
         std::vector<std::vector<Item>> boxes_per_page;
         PDFGenerator::calculate_justified_pagination(indexed_aspects, boxes_per_page, options);
