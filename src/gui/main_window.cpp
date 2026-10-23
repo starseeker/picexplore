@@ -790,14 +790,9 @@ void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string
                 current_selected_filepath_ = hit_image;
                 if (info_panel_visible_) {
                     auto& entry = store_.get(idx);
-                    if (entry.content_hash.empty()) {
-                        if (db_ && db_->is_open()) {
-                            std::string h;
-                            if (db_->get_hash_for_path(hit_image, h)) entry.content_hash = h;
-                        }
-                        if (entry.content_hash.empty()) {
-                            compute_file_hash(hit_image, entry.content_hash);
-                        }
+                    if (entry.content_hash.empty() && db_ && db_->is_open()) {
+                        std::string h;
+                        if (db_->get_hash_for_path(hit_image, h)) entry.content_hash = h;
                     }
                     auto dups = reconcile_and_get_duplicates(entry.content_hash, hit_image);
                     info_panel_->display_info(entry, dups);
@@ -832,11 +827,12 @@ void MainWindow::show_context_menu(int screen_x, int screen_y, const std::string
         }
 
         if (!target_drill_dir.empty()) {
-            std::string canon_drill, canon_current_filter;
-            try { canon_drill = fs::canonical(target_drill_dir).string(); } catch (...) {}
-            try { canon_current_filter = fs::canonical(directory_filter_.empty() ? directory_ : directory_filter_).string(); } catch (...) {}
+            std::string canon_drill = normalize_path(target_drill_dir);
+            std::string canon_current_filter = normalize_path(
+                directory_filter_.empty() ? directory_ : directory_filter_);
 
-            if (!canon_drill.empty() && canon_drill != canon_current_filter && canon_drill.find(canon_current_filter) == 0) {
+            if (!canon_drill.empty() && canon_drill != canon_current_filter &&
+                path_is_within(canon_drill, canon_current_filter)) {
                 std::string folder_name = fs::path(target_drill_dir).filename().string();
                 if (folder_name.empty()) folder_name = target_drill_dir;
                 items.push_back({"Zoom into Folder: \"" + folder_name + "\"", 0, 0, [this, target_drill_dir]() {
@@ -946,9 +942,8 @@ std::vector<std::string> MainWindow::reconcile_and_get_duplicates(const std::str
     namespace fs = std::filesystem;
     std::set<std::string> candidate_paths;
 
-    // 1. Query database for paths stored under this hash
+    // 1. Query database for paths stored under this hash (concurrent read transaction)
     if (db_ && db_->is_open()) {
-        std::lock_guard<std::mutex> lock(db_->get_mutex());
         std::vector<std::string> db_paths = db_->get_paths_for_hash(hash);
         for (const auto& p : db_paths) {
             candidate_paths.insert(p);
@@ -1535,15 +1530,10 @@ void MainWindow::recompute_layout(bool reprioritize) {
 
         for (const auto& [raw_idx, ar] : indexed) {
             auto& entry = store_.get(raw_idx);
-            if (entry.content_hash.empty()) {
-                if (db_ && db_->is_open()) {
-                    std::string h;
-                    if (db_->get_hash_for_path(entry.filepath, h) && !h.empty()) {
-                        entry.content_hash = h;
-                    }
-                }
-                if (entry.content_hash.empty()) {
-                    compute_file_hash(entry.filepath, entry.content_hash);
+            if (entry.content_hash.empty() && db_ && db_->is_open()) {
+                std::string h;
+                if (db_->get_hash_for_path(entry.filepath, h) && !h.empty()) {
+                    entry.content_hash = h;
                 }
             }
 
