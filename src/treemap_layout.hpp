@@ -259,6 +259,10 @@ public:
         }
 
         std::string effective_root = current_filter_dir.empty() ? base_root_dir : current_filter_dir;
+        while (effective_root.size() > 1 &&
+               (effective_root.back() == '/' || effective_root.back() == '\\')) {
+            effective_root.pop_back();
+        }
 
         // If we are drilled down into a subdirectory, add a top navigation parent bar
         if (!current_filter_dir.empty()) {
@@ -307,8 +311,16 @@ public:
                     continue;
                 }
                 rel_path.remove_prefix(effective_root.size());
+                if (effective_root.back() != '/' && effective_root.back() != '\\') {
+                    if (rel_path.empty() || (rel_path.front() != '/' && rel_path.front() != '\\')) {
+                        continue;
+                    }
+                }
                 while (!rel_path.empty() && (rel_path.front() == '/' || rel_path.front() == '\\')) {
                     rel_path.remove_prefix(1);
+                }
+                if (rel_path.empty()) {
+                    continue;
                 }
             }
 

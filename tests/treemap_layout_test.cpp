@@ -204,10 +204,14 @@ void test_hierarchical_lod_pruning() {
     // Leaf boxes should be pruned at LOD boundary
     assert(tiny_res.boxes.size() < 500);
 
-    // 2. Zoomed-in view: drill down to /root/sub_0 on 1000x800 canvas
+    // 2. Zoomed-in view: drill down to /root/sub_0 and /root/sub_1 on 1000x800 canvas
     auto zoom_res = HierarchicalTreemap::compute(items, "/root", "/root/sub_0", 0, 0, 1000, 800, 2.0, 4.0, 18.0);
     // All 10 images in /root/sub_0 should expand with full detail
     assert(zoom_res.boxes.size() == 10);
+    // Prefix boundary check: /root/sub_1 must not match /root/sub_10 .. /root/sub_19
+    auto zoom_sub1 = HierarchicalTreemap::compute(items, "/root", "/root/sub_1", 0, 0, 1000, 800, 2.0, 4.0, 18.0);
+    assert(zoom_sub1.boxes.size() == 10);
+    assert(zoom_sub1.container_boxes.size() == 1); // Only the top parent navigation bar
     std::cout << "[PASS] Hierarchical Level-of-Detail (LOD) pruning and drill-down expansion test\n";
 }
 
