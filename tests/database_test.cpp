@@ -138,6 +138,13 @@ int main() {
     assert(all_imgs[0].file_size == jpg_data.size());
     assert(all_imgs[0].file_timestamp > 0);
     assert(all_imgs[0].orig_width == 64);
+
+    // Verify get_images_for_directory with trailing separator and concurrent active write txn
+    assert(scan_db.begin_transaction());
+    auto sub1_imgs = scan_db.get_images_for_directory(test_dir + "/sub1/");
+    scan_db.abort_transaction();
+    assert(sub1_imgs.size() == 1);
+    assert(sub1_imgs[0].path == test_dir + "/sub1/a.jpg");
     assert(all_imgs[0].orig_height == 64);
 
     // Verify square thumbnail was generated and stored in DB

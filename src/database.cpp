@@ -1036,32 +1036,43 @@ bool DatabaseManager::get_image_metadata(const std::string& hash, ImageMetadata&
     return false;
 }
 
-bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) {
+namespace {
+bool load_image_info_in_txn(MDB_txn* txn, MDB_dbi dbi, const std::string& hash, ImageInfo& info) {
+    if (!txn) return false;
     info.hash = hash;
-    info.thumb_data.clear(); // Free memory, we don't need the jpeg data here
+    info.thumb_data.clear();
 
-    // Fast-path: Check metadata first! A 24-byte direct read without loading or decoding large JPEGs
-    ImageMetadata meta;
-    if (get_image_metadata(hash, meta) && meta.orig_width > 0 && meta.orig_height > 0) {
-        info.orig_width = meta.orig_width;
-        info.orig_height = meta.orig_height;
-        info.aspect_ratio = static_cast<double>(meta.orig_width) / meta.orig_height;
-        info.file_size = meta.file_size;
-        info.file_timestamp = meta.file_timestamp;
-        info.thumb_width = meta.orig_width;
-        info.thumb_height = meta.orig_height;
-        info.best_thumb_size = 128;
-        return true;
+    auto get_val = [&](const std::string& key_str, MDB_val& val) -> bool {
+        MDB_val key;
+        key.mv_data = const_cast<char*>(key_str.c_str());
+        key.mv_size = key_str.size();
+        return mdb_get(txn, dbi, &key, &val) == 0;
+    };
+
+    MDB_val val{};
+    if (get_val(hash + ":meta", val) && val.mv_size >= sizeof(ImageMetadata)) {
+        ImageMetadata meta{};
+        std::memcpy(&meta, val.mv_data, sizeof(ImageMetadata));
+        if (meta.orig_width > 0 && meta.orig_height > 0) {
+            info.orig_width = meta.orig_width;
+            info.orig_height = meta.orig_height;
+            info.aspect_ratio = static_cast<double>(meta.orig_width) / meta.orig_height;
+            info.file_size = meta.file_size;
+            info.file_timestamp = meta.file_timestamp;
+            info.thumb_width = meta.orig_width;
+            info.thumb_height = meta.orig_height;
+            info.best_thumb_size = 128;
+            return true;
+        }
     }
 
-    // Fallback for legacy DB entries without :meta: check smallest thumbnail first (32, 64)
-    std::vector<int> sizes = {32, 64, 128, 256, 512, 1024, 2048};
-    for (int size : sizes) {
-        std::string thumb_key = hash + ":" + std::to_string(size);
-        std::vector<uint8_t> data;
-        if (get_key_data(thumb_key, data) && !data.empty()) {
+    for (int size : {32, 64, 128, 256, 512, 1024, 2048}) {
+        if (get_val(hash + ":" + std::to_string(size), val) && val.mv_size > 0) {
             int width = 0, height = 0, channels = 0;
-            if (stbi_info_from_memory(data.data(), data.size(), &width, &height, &channels) && width > 0 && height > 0) {
+            if (stbi_info_from_memory(static_cast<const stbi_uc*>(val.mv_data),
+                                      static_cast<int>(val.mv_size),
+                                      &width, &height, &channels) &&
+                width > 0 && height > 0) {
                 info.best_thumb_size = size;
                 info.thumb_width = width;
                 info.thumb_height = height;
@@ -1075,9 +1086,7 @@ bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) 
         }
     }
 
-    // Check square thumbnails as last resort
-    std::vector<uint8_t> sq_data;
-    if (get_key_data(hash + ":sq128", sq_data) || get_key_data(hash + ":sq64", sq_data)) {
+    if (get_val(hash + ":sq128", val) || get_val(hash + ":sq64", val)) {
         info.best_thumb_size = 128;
         info.thumb_width = 128;
         info.thumb_height = 128;
@@ -1091,37 +1100,37 @@ bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) 
 
     return false;
 }
+} // namespace
+
+bool DatabaseManager::load_image_info(const std::string& hash, ImageInfo& info) {
+    if (!is_open_ || !env_) return false;
+    MDB_txn* active_txn = txn_;
+    ReadTransaction read(active_txn ? nullptr : env_);
+    if (!active_txn) active_txn = read.txn;
+    return load_image_info_in_txn(active_txn, dbi_, hash, info);
+}
 
 std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::string& directory) {
     std::vector<ImageInfo> images;
 
-    if (!is_open_) return images;
+    if (!is_open_ || !env_) return images;
 
+    std::string exact_dir;
     std::string prefix;
     if (!directory.empty()) {
-        prefix = fs::path(directory).lexically_normal().string();
+        exact_dir = normalize_path(directory);
+        prefix = exact_dir;
         if (!prefix.empty() && prefix.back() != '/' && prefix.back() != '\\') {
             prefix += '/';
         }
     }
-    std::string exact_dir = directory.empty() ? "" : fs::path(directory).lexically_normal().string();
 
-    MDB_txn* read_txn = nullptr;
-    MDB_dbi read_dbi;
+    ReadTransaction read(env_);
+    if (!read.txn) return images;
+
     MDB_cursor* cursor = nullptr;
-
-    if (mdb_txn_begin(env_, nullptr, MDB_RDONLY, &read_txn) != 0) {
-	return images;
-    }
-
-    if (mdb_dbi_open(read_txn, nullptr, 0, &read_dbi) != 0) {
-	mdb_txn_abort(read_txn);
-	return images;
-    }
-
-    if (mdb_cursor_open(read_txn, read_dbi, &cursor) != 0) {
-	mdb_txn_abort(read_txn);
-	return images;
+    if (mdb_cursor_open(read.txn, dbi_, &cursor) != 0) {
+        return images;
     }
 
     // Fast path: B-Tree prefix range seek on "file:" keys
@@ -1129,7 +1138,6 @@ std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::stri
     MDB_val key, data;
     key.mv_data = (void*)start_key.c_str();
     key.mv_size = start_key.length();
-
 
     std::unordered_set<std::string> seen_paths;
     int rc = mdb_cursor_get(cursor, &key, &data, MDB_SET_RANGE);
@@ -1155,25 +1163,7 @@ std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::stri
                 ImageInfo info;
                 info.path = std::move(norm_p);
                 info.hash = hash;
-
-                // Direct zero-copy metadata fetch from memory-mapped LMDB page
-                std::string meta_key_str = hash + ":meta";
-                MDB_val m_key, m_val;
-                m_key.mv_data = (void*)meta_key_str.c_str();
-                m_key.mv_size = meta_key_str.size();
-                if (mdb_get(read_txn, read_dbi, &m_key, &m_val) == 0 && m_val.mv_size >= sizeof(ImageMetadata)) {
-                    ImageMetadata meta;
-                    std::memcpy(&meta, m_val.mv_data, sizeof(ImageMetadata));
-                    info.orig_width = meta.orig_width;
-                    info.orig_height = meta.orig_height;
-                    info.aspect_ratio = (meta.orig_height > 0) ? (static_cast<double>(meta.orig_width) / meta.orig_height) : 1.0;
-                    info.file_size = meta.file_size;
-                    info.file_timestamp = meta.file_timestamp;
-                    info.thumb_width = meta.orig_width;
-                    info.thumb_height = meta.orig_height;
-                    info.best_thumb_size = 128;
-                    images.push_back(std::move(info));
-                } else if (load_image_info(hash, info)) {
+                if (load_image_info_in_txn(read.txn, dbi_, hash, info)) {
                     images.push_back(std::move(info));
                 }
             }
@@ -1199,13 +1189,13 @@ std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::stri
             if (!hash.empty()) {
                 std::vector<std::string> paths = parse_paths(std::string((char*)data.mv_data, data.mv_size));
                 for (const auto& p : paths) {
-                    std::string norm_p = fs::path(p).lexically_normal().string();
+                    std::string norm_p = normalize_path(p);
                     if (prefix.empty() || norm_p.rfind(prefix, 0) == 0 || norm_p == exact_dir) {
                         if (seen_paths.insert(norm_p).second) {
                             ImageInfo info;
                             info.path = norm_p;
                             info.hash = hash;
-                            if (load_image_info(hash, info)) {
+                            if (load_image_info_in_txn(read.txn, dbi_, hash, info)) {
                                 images.push_back(std::move(info));
                             }
                         }
@@ -1216,9 +1206,7 @@ std::vector<ImageInfo> DatabaseManager::get_images_for_directory(const std::stri
         }
     }
 
-
     mdb_cursor_close(cursor);
-    mdb_txn_abort(read_txn);
 
     if (!is_fast_path) {
         std::sort(images.begin(), images.end(),
