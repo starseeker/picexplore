@@ -630,7 +630,7 @@ bool PDFGenerator::generate_from_store(
 
     int page_w = options.page_width_px();
     int page_h = options.page_height_px();
-    if (page_w <= 0 || page_h <= 0 || uint64_t(page_w) * page_h > 64000000) return false;
+    if (page_w <= 0 || page_h <= 0 || uint64_t(page_w) * page_h > 75000000) return false;
     int margin_px = options.page_margin_px();
     int layout_w = options.layout_width_px();
     int layout_h = options.layout_height_px();
@@ -745,7 +745,7 @@ bool PDFGenerator::generate_from_store(
                 return false;
             }
 
-            pdf.add_image_page(page_buffer.data(), page_w, page_h, page_w * 3, true, pdfimg::CompressionType::None, options.page_dpi);
+            pdf.add_image_page(page_buffer.data(), page_w, page_h, page_w * 3, true, pdfimg::CompressionType::Flate, options.page_dpi);
         }
     } else {
         // Treemap View
@@ -868,7 +868,7 @@ bool PDFGenerator::generate_from_store(
             return false;
         }
 
-        pdf.add_image_page(page_buffer.data(), page_w, page_h, page_w * 3, true, pdfimg::CompressionType::None, options.page_dpi);
+        pdf.add_image_page(page_buffer.data(), page_w, page_h, page_w * 3, true, pdfimg::CompressionType::Flate, options.page_dpi);
     }
 
     if (progress_cb) {

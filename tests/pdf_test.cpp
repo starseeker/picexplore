@@ -131,11 +131,12 @@ void test_pdf_document_generation() {
         assert(fs::exists(pdf_path));
         assert(fs::file_size(pdf_path) > 1000);
 
-        // Verify PDF Magic header
+        // Verify PDF Magic header and FlateDecode stream filter
         std::ifstream f(pdf_path, std::ios::binary);
-        char header[5] = {0};
-        f.read(header, 4);
-        assert(std::string(header) == "%PDF");
+        std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        assert(content.rfind("%PDF", 0) == 0);
+        assert(content.find("/Filter /FlateDecode") != std::string::npos);
+        assert(fs::file_size(pdf_path) < 500000);
         std::cout << "  Justified PDF exported successfully (" << fs::file_size(pdf_path) << " bytes)." << std::endl;
     }
 

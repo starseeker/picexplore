@@ -53,15 +53,8 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
-
-// Optional compression library includes
-#ifdef ENABLE_MINIZ_COMPRESSION
-#include "miniz/miniz.h"
-#endif
-
-#ifdef ENABLE_TOOJPEG_COMPRESSION
-#include "toojpeg/toojpeg.h"
-#endif
+#include <zlib.h>
+#include "../utils.h"
 
 namespace pdfimg {
 
@@ -123,100 +116,79 @@ public:
                                                 int stride, bool is_rgb) = 0;
 };
 
-#ifdef ENABLE_MINIZ_COMPRESSION
-// Flate (zlib) compressor using miniz
+// Flate (zlib) compressor using zlib
 class FlateCompressor : public ImageCompressor {
 public:
     std::unique_ptr<ImageData> compress(const uint8_t* raw_data, int width, int height,
                                         int stride, bool is_rgb) override {
-        // Prepare uncompressed image data
         const int bytes_per_pixel = is_rgb ? 3 : 1;
-        const size_t raw_size = width * height * bytes_per_pixel;
+        const size_t raw_size = static_cast<size_t>(width) * height * bytes_per_pixel;
+        const uint8_t* src_ptr = raw_data;
         std::vector<uint8_t> uncompressed_data;
-        uncompressed_data.reserve(raw_size);
 
-        // Copy data row by row, handling stride
-        for (int y = 0; y < height; ++y) {
-            const uint8_t* row_start = raw_data + y * stride;
-            uncompressed_data.insert(uncompressed_data.end(), row_start,
-                                   row_start + width * bytes_per_pixel);
+        if (stride != width * bytes_per_pixel) {
+            uncompressed_data.reserve(raw_size);
+            for (int y = 0; y < height; ++y) {
+                const uint8_t* row_start = raw_data + static_cast<size_t>(y) * stride;
+                uncompressed_data.insert(uncompressed_data.end(), row_start,
+                                         row_start + width * bytes_per_pixel);
+            }
+            src_ptr = uncompressed_data.data();
         }
 
-        // Compress using miniz
-        mz_ulong compressed_size = mz_compressBound(raw_size);
+        uLongf compressed_size = compressBound(static_cast<uLong>(raw_size));
         std::vector<uint8_t> compressed_data(compressed_size);
 
-        int result = mz_compress2(compressed_data.data(), &compressed_size,
-                                 uncompressed_data.data(), raw_size, 6);
+        int result = compress2(compressed_data.data(), &compressed_size,
+                               src_ptr, static_cast<uLong>(raw_size), 6);
 
-        if (result != MZ_OK) {
+        if (result != Z_OK) {
             throw PDFException("Flate compression failed");
         }
 
-        // Resize to actual compressed size
         compressed_data.resize(compressed_size);
 
         return std::make_unique<ImageData>(std::move(compressed_data), width, height,
-                                          is_rgb, CompressionType::Flate, " /Filter /FlateDecode");
+                                           is_rgb, CompressionType::Flate, " /Filter /FlateDecode");
     }
 };
-#endif
 
-#ifdef ENABLE_TOOJPEG_COMPRESSION
-// JPEG compressor using toojpeg
+// JPEG compressor using shared libjpeg encoder
 class JPEGCompressor : public ImageCompressor {
-private:
-    // Helper class to collect JPEG bytes
-    struct JPEGDataCollector {
-        std::vector<uint8_t> data;
-
-        static void callback(unsigned char byte) {
-            auto* collector = static_cast<JPEGDataCollector*>(current_collector_);
-            if (collector) {
-                collector->data.push_back(byte);
-            }
-        }
-
-        static thread_local JPEGDataCollector* current_collector_;
-    };
-
 public:
     std::unique_ptr<ImageData> compress(const uint8_t* raw_data, int width, int height,
                                         int stride, bool is_rgb) override {
-        // Prepare image data for JPEG compression
         const int bytes_per_pixel = is_rgb ? 3 : 1;
-        std::vector<uint8_t> image_data;
-        image_data.reserve(width * height * bytes_per_pixel);
+        std::vector<uint8_t> rgb_data;
+        const uint8_t* rgb_ptr = raw_data;
 
-        // Copy data row by row, handling stride
-        for (int y = 0; y < height; ++y) {
-            const uint8_t* row_start = raw_data + y * stride;
-            image_data.insert(image_data.end(), row_start,
-                            row_start + width * bytes_per_pixel);
+        if (!is_rgb || stride != width * 3) {
+            rgb_data.resize(static_cast<size_t>(width) * height * 3);
+            for (int y = 0; y < height; ++y) {
+                const uint8_t* row_start = raw_data + static_cast<size_t>(y) * stride;
+                uint8_t* dst_row = rgb_data.data() + static_cast<size_t>(y) * width * 3;
+                if (is_rgb) {
+                    std::copy(row_start, row_start + width * 3, dst_row);
+                } else {
+                    for (int x = 0; x < width; ++x) {
+                        dst_row[x * 3 + 0] = row_start[x];
+                        dst_row[x * 3 + 1] = row_start[x];
+                        dst_row[x * 3 + 2] = row_start[x];
+                    }
+                }
+            }
+            rgb_ptr = rgb_data.data();
         }
 
-        // Compress using TooJpeg
-        JPEGDataCollector collector;
-        JPEGDataCollector::current_collector_ = &collector;
-
-        bool success = TooJpeg::writeJpeg(JPEGDataCollector::callback,
-                                         image_data.data(), width, height,
-                                         is_rgb, 85, false, nullptr);
-
-        JPEGDataCollector::current_collector_ = nullptr;
-
-        if (!success) {
+        auto jpeg_bytes = encode_jpeg(rgb_ptr, width, height, 85);
+        if (jpeg_bytes.empty()) {
             throw PDFException("JPEG compression failed");
         }
 
-        return std::make_unique<ImageData>(std::move(collector.data), width, height,
-                                          is_rgb, CompressionType::JPEG, " /Filter /DCTDecode");
+        return std::make_unique<ImageData>(std::move(jpeg_bytes), width, height,
+                                           true, CompressionType::JPEG, " /Filter /DCTDecode");
     }
 };
-
-// Thread-local storage for JPEG collector
-thread_local JPEGCompressor::JPEGDataCollector* JPEGCompressor::JPEGDataCollector::current_collector_ = nullptr;
-#endif
 
 // No compression compressor (identity)
 class NoCompressor : public ImageCompressor {
@@ -359,19 +331,11 @@ public:
 
         switch (compression) {
             case CompressionType::Flate:
-#ifdef ENABLE_MINIZ_COMPRESSION
                 compressor = std::make_unique<FlateCompressor>();
                 break;
-#else
-                throw PDFException("Flate compression not available (build with ENABLE_MINIZ_COMPRESSION)");
-#endif
             case CompressionType::JPEG:
-#ifdef ENABLE_TOOJPEG_COMPRESSION
                 compressor = std::make_unique<JPEGCompressor>();
                 break;
-#else
-                throw PDFException("JPEG compression not available (build with ENABLE_TOOJPEG_COMPRESSION)");
-#endif
             case CompressionType::None:
             default:
                 compressor = std::make_unique<NoCompressor>();
@@ -441,17 +405,9 @@ private:
 inline std::unique_ptr<ImageCompressor> create_compressor(CompressionType type) {
     switch (type) {
         case CompressionType::Flate:
-#ifdef ENABLE_MINIZ_COMPRESSION
             return std::make_unique<FlateCompressor>();
-#else
-            throw PDFException("Flate compression not available");
-#endif
         case CompressionType::JPEG:
-#ifdef ENABLE_TOOJPEG_COMPRESSION
             return std::make_unique<JPEGCompressor>();
-#else
-            throw PDFException("JPEG compression not available");
-#endif
         case CompressionType::None:
         default:
             return std::make_unique<NoCompressor>();
@@ -460,17 +416,7 @@ inline std::unique_ptr<ImageCompressor> create_compressor(CompressionType type) 
 
 // Utility function to get available compression methods
 inline std::vector<CompressionType> get_available_compression_methods() {
-    std::vector<CompressionType> methods = {CompressionType::None};
-
-#ifdef ENABLE_MINIZ_COMPRESSION
-    methods.push_back(CompressionType::Flate);
-#endif
-
-#ifdef ENABLE_TOOJPEG_COMPRESSION
-    methods.push_back(CompressionType::JPEG);
-#endif
-
-    return methods;
+    return {CompressionType::None, CompressionType::Flate, CompressionType::JPEG};
 }
 
 // Utility function to convert compression type to string
