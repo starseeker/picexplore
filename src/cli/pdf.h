@@ -160,7 +160,9 @@ public:
 private:
     static std::vector<uint8_t> resize_image_to_fit(const uint8_t* pixels,
                                                     int src_width, int src_height,
-                                                    int target_width, int target_height);
+                                                    int target_width, int target_height,
+                                                    int* out_width = nullptr,
+                                                    int* out_height = nullptr);
 
     static void composite_image(std::vector<uint8_t>& page_buffer, int page_width, int page_height,
                                 const std::vector<uint8_t>& image_data, int img_width, int img_height,

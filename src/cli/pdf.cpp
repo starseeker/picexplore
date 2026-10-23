@@ -364,9 +364,58 @@ LayoutEngine::LayoutResult PDFGenerator::calculate_treemap_layout(
     }
 }
 
+static bool load_entry_cached_rgb(const ImageEntry& entry, DatabaseManager* db,
+                                  std::vector<uint8_t>& raw_rgb, int& img_w, int& img_h) {
+    if (!entry.decoded.rgb_data.empty() && entry.decoded.width > 0 && entry.decoded.height > 0) {
+        raw_rgb = entry.decoded.rgb_data;
+        img_w = entry.decoded.width;
+        img_h = entry.decoded.height;
+        return true;
+    }
+    if (!entry.scaled.rgb_data.empty() && entry.scaled.width > 0 && entry.scaled.height > 0) {
+        raw_rgb = entry.scaled.rgb_data;
+        img_w = entry.scaled.width;
+        img_h = entry.scaled.height;
+        return true;
+    }
+    if (!entry.square_thumb.rgb_data.empty() && entry.square_thumb.width > 0 && entry.square_thumb.height > 0) {
+        raw_rgb = entry.square_thumb.rgb_data;
+        img_w = entry.square_thumb.width;
+        img_h = entry.square_thumb.height;
+        return true;
+    }
+    if (db) {
+        std::string hash = entry.content_hash;
+        if (hash.empty() && !entry.filepath.empty()) {
+            db->get_valid_hash_for_path(entry.filepath, hash);
+        }
+        if (!hash.empty()) {
+            std::vector<uint8_t> jpeg_bytes;
+            const int candidate_sizes[] = {512, 256, 128, 64};
+            for (int sz : candidate_sizes) {
+                std::string cand_key = hash + ":" + std::to_string(sz);
+                if (db->get_key_data_concurrent(cand_key, jpeg_bytes)) {
+                    int ch = 0;
+                    unsigned char* pix = stbi_load_from_memory(
+                        jpeg_bytes.data(), static_cast<int>(jpeg_bytes.size()), &img_w, &img_h, &ch, 3);
+                    if (pix) {
+                        raw_rgb.assign(pix, pix + img_w * img_h * 3);
+                        stbi_image_free(pix);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
 std::vector<uint8_t> PDFGenerator::resize_image_to_fit(const uint8_t* pixels,
                                                        int src_width, int src_height,
-                                                       int target_width, int target_height) {
+                                                       int target_width, int target_height,
+                                                       int* out_width, int* out_height) {
+    if (out_width) *out_width = 0;
+    if (out_height) *out_height = 0;
     if (!pixels || src_width <= 0 || src_height <= 0 || target_width <= 0 || target_height <= 0) {
         return {};
     }
@@ -381,6 +430,8 @@ std::vector<uint8_t> PDFGenerator::resize_image_to_fit(const uint8_t* pixels,
                                    resized.data(), new_w, new_h, 0, STBIR_RGB)) {
         return {};
     }
+    if (out_width) *out_width = new_w;
+    if (out_height) *out_height = new_h;
     return resized;
 }
 
@@ -388,6 +439,7 @@ void PDFGenerator::composite_image(std::vector<uint8_t>& page_buffer, int page_w
                                    const std::vector<uint8_t>& image_data, int img_width, int img_height,
                                    int x, int y, int box_width, int box_height) {
     if (image_data.empty() || img_width <= 0 || img_height <= 0) return;
+    if (image_data.size() < static_cast<size_t>(img_width) * img_height * 3) return;
 
     int offset_x = x + (box_width - img_width) / 2;
     int offset_y = y + (box_height - img_height) / 2;
@@ -463,14 +515,12 @@ std::vector<uint8_t> PDFGenerator::render_preview_page(
             int bh = std::max(1, static_cast<int>(box.h * scale));
 
             const auto& entry = store.get(store_idx);
-            if (!entry.decoded.rgb_data.empty()) {
-                auto resized = resize_image_to_fit(entry.decoded.rgb_data.data(),
-                                                   entry.decoded.width, entry.decoded.height,
-                                                   bw, bh);
-                composite_image(preview_buf, preview_w, preview_h, resized,
-                                std::max(1, static_cast<int>(entry.decoded.width * scale)),
-                                std::max(1, static_cast<int>(entry.decoded.height * scale)),
-                                bx, by, bw, bh);
+            std::vector<uint8_t> raw_rgb;
+            int img_w = 0, img_h = 0;
+            if (load_entry_cached_rgb(entry, db, raw_rgb, img_w, img_h)) {
+                int rw = 0, rh = 0;
+                auto resized = resize_image_to_fit(raw_rgb.data(), img_w, img_h, bw, bh, &rw, &rh);
+                composite_image(preview_buf, preview_w, preview_h, resized, rw, rh, bx, by, bw, bh);
             } else {
                 draw_filled_rect(preview_buf, preview_w, preview_h, bx, by, bw, bh, 220, 220, 220);
             }
@@ -509,14 +559,16 @@ std::vector<uint8_t> PDFGenerator::render_preview_page(
 
             const auto& entry = store.get(box.image_index);
 
-            if (options.treemap_render_style == PDFTreemapRenderStyle::ALL_THUMBNAILS && !entry.decoded.rgb_data.empty()) {
-                auto resized = resize_image_to_fit(entry.decoded.rgb_data.data(),
-                                                   entry.decoded.width, entry.decoded.height,
-                                                   bw, bh);
-                composite_image(preview_buf, preview_w, preview_h, resized,
-                                std::max(1, static_cast<int>(entry.decoded.width * scale)),
-                                std::max(1, static_cast<int>(entry.decoded.height * scale)),
-                                bx, by, bw, bh);
+            if (options.treemap_render_style == PDFTreemapRenderStyle::ALL_THUMBNAILS) {
+                std::vector<uint8_t> raw_rgb;
+                int img_w = 0, img_h = 0;
+                if (load_entry_cached_rgb(entry, db, raw_rgb, img_w, img_h)) {
+                    int rw = 0, rh = 0;
+                    auto resized = resize_image_to_fit(raw_rgb.data(), img_w, img_h, bw, bh, &rw, &rh);
+                    composite_image(preview_buf, preview_w, preview_h, resized, rw, rh, bx, by, bw, bh);
+                } else {
+                    draw_filled_rect(preview_buf, preview_w, preview_h, bx, by, bw, bh, 200, 200, 200);
+                }
             } else if (options.treemap_render_style == PDFTreemapRenderStyle::CUSHION_TREEMAP) {
                 draw_cushion(preview_buf, preview_w, preview_h, bx, by, bw, bh,
                              box.cushion_ax, box.cushion_bx, box.cushion_ay, box.cushion_by);
@@ -621,26 +673,7 @@ bool PDFGenerator::generate_from_store(
                         std::vector<uint8_t> raw_rgb;
                         int img_w = 0, img_h = 0;
 
-                        if (!entry.decoded.rgb_data.empty()) {
-                            raw_rgb = entry.decoded.rgb_data;
-                            img_w = entry.decoded.width;
-                            img_h = entry.decoded.height;
-                        } else if (db && !entry.content_hash.empty()) {
-                            std::vector<uint8_t> jpeg_bytes;
-                            std::vector<int> candidate_sizes = {512, 256, 128, 64};
-                            for (int sz : candidate_sizes) {
-                                std::string cand_key = entry.content_hash + ":" + std::to_string(sz);
-                                if (db->get_key_data_concurrent(cand_key, jpeg_bytes)) {
-                                    int ch = 0;
-                                    unsigned char* pix = stbi_load_from_memory(jpeg_bytes.data(), static_cast<int>(jpeg_bytes.size()), &img_w, &img_h, &ch, 3);
-                                    if (pix) {
-                                        raw_rgb.assign(pix, pix + img_w * img_h * 3);
-                                        stbi_image_free(pix);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                        load_entry_cached_rgb(entry, db, raw_rgb, img_w, img_h);
 
                         if (raw_rgb.empty()) {
                             FileStamp current;
@@ -656,10 +689,8 @@ bool PDFGenerator::generate_from_store(
                         }
 
                         if (!raw_rgb.empty()) {
-                            auto resized = resize_image_to_fit(raw_rgb.data(), img_w, img_h, bw, bh);
-                            double scale = std::min(static_cast<double>(bw) / img_w, static_cast<double>(bh) / img_h);
-                            int rw = static_cast<int>(img_w * scale);
-                            int rh = static_cast<int>(img_h * scale);
+                            int rw = 0, rh = 0;
+                            auto resized = resize_image_to_fit(raw_rgb.data(), img_w, img_h, bw, bh, &rw, &rh);
                             composite_image(page_buffer, page_w, page_h, resized, rw, rh, bx, by, bw, bh);
                         } else {
                             draw_filled_rect(page_buffer, page_w, page_h, bx, by, bw, bh, 220, 220, 220);
@@ -754,26 +785,7 @@ bool PDFGenerator::generate_from_store(
                         std::vector<uint8_t> raw_rgb;
                         int img_w = 0, img_h = 0;
 
-                        if (!entry.decoded.rgb_data.empty()) {
-                            raw_rgb = entry.decoded.rgb_data;
-                            img_w = entry.decoded.width;
-                            img_h = entry.decoded.height;
-                        } else if (db && !entry.content_hash.empty()) {
-                            std::vector<uint8_t> jpeg_bytes;
-                            std::vector<int> candidate_sizes = {512, 256, 128, 64};
-                            for (int sz : candidate_sizes) {
-                                std::string cand_key = entry.content_hash + ":" + std::to_string(sz);
-                                if (db->get_key_data_concurrent(cand_key, jpeg_bytes)) {
-                                    int ch = 0;
-                                    unsigned char* pix = stbi_load_from_memory(jpeg_bytes.data(), static_cast<int>(jpeg_bytes.size()), &img_w, &img_h, &ch, 3);
-                                    if (pix) {
-                                        raw_rgb.assign(pix, pix + img_w * img_h * 3);
-                                        stbi_image_free(pix);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                        load_entry_cached_rgb(entry, db, raw_rgb, img_w, img_h);
 
                         if (raw_rgb.empty()) {
                             FileStamp current;
@@ -789,10 +801,8 @@ bool PDFGenerator::generate_from_store(
                         }
 
                         if (!raw_rgb.empty() && bw >= 4 && bh >= 4) {
-                            auto resized = resize_image_to_fit(raw_rgb.data(), img_w, img_h, bw, bh);
-                            double scale = std::min(static_cast<double>(bw) / img_w, static_cast<double>(bh) / img_h);
-                            int rw = static_cast<int>(img_w * scale);
-                            int rh = static_cast<int>(img_h * scale);
+                            int rw = 0, rh = 0;
+                            auto resized = resize_image_to_fit(raw_rgb.data(), img_w, img_h, bw, bh, &rw, &rh);
                             composite_image(page_buffer, page_w, page_h, resized, rw, rh, bx, by, bw, bh);
                         } else {
                             draw_filled_rect(page_buffer, page_w, page_h, bx, by, bw, bh, 200, 200, 200);

@@ -158,13 +158,70 @@ void test_pdf_document_generation() {
         std::cout << "  Flat Treemap (File Type Colors) PDF exported successfully (" << fs::file_size(pdf_path) << " bytes)." << std::endl;
     }
 
-    // 5. Test In-Dialog Preview Buffer Generation
+    // 5. Test In-Dialog Preview Buffer Generation (decoded & DB snapshot)
     {
         PDFOptions options;
         options.set_paper_preset(PaperSize::LETTER);
         options.layout_type = LayoutEngine::LayoutType::JUSTIFIED;
-        auto preview = PDFGenerator::render_preview_page(store, options, 0, 300, 400);
+
+        // Large decoded buffer (512x512) to verify resize dimensions passed to composite_image
+        ImageStore large_store;
+        size_t lidx = large_store.add_image("/tmp/test_dir/large.jpg", 1.0, 512, 512, 102400, 1700000000);
+        auto& lentry = large_store.get(lidx);
+        lentry.content_hash = "hash_large";
+        lentry.decoded.width = 512;
+        lentry.decoded.height = 512;
+        lentry.decoded.rgb_data.resize(512 * 512 * 3, 0);
+        for (size_t p = 0; p < 512 * 512; ++p) {
+            lentry.decoded.rgb_data[p * 3 + 0] = 20;
+            lentry.decoded.rgb_data[p * 3 + 1] = 180;
+            lentry.decoded.rgb_data[p * 3 + 2] = 40;
+        }
+
+        auto preview = PDFGenerator::render_preview_page(large_store, options, 0, 300, 400);
         assert(preview.size() == 300 * 400 * 3);
+
+        // Snapshot strips decoded RGB buffers (as in PDFExportDialog); verify DB fallback renders thumbnails
+        DatabaseManager db;
+        assert(db.open(tmp_dir + "/preview_cache.db"));
+        auto thumb_jpeg = encode_jpeg(lentry.decoded.rgb_data.data(), 64, 64, 95);
+        assert(db.begin_transaction());
+        assert(db.store_key_data("hash_large:256", thumb_jpeg));
+        assert(db.commit_transaction());
+
+        ImageStore snap = large_store.snapshot();
+        assert(snap.get(lidx).decoded.rgb_data.empty());
+
+        auto snap_preview = PDFGenerator::render_preview_page(snap, options, 0, 300, 400, &db);
+        assert(snap_preview.size() == 300 * 400 * 3);
+        bool found_green = false;
+        for (size_t p = 0; p < 300 * 400; ++p) {
+            uint8_t r = snap_preview[p * 3 + 0];
+            uint8_t g = snap_preview[p * 3 + 1];
+            uint8_t b = snap_preview[p * 3 + 2];
+            if (g > 150 && r < 60 && b < 80) {
+                found_green = true;
+                break;
+            }
+        }
+        assert(found_green && "Snapshot preview failed to render thumbnail from database");
+
+        options.layout_type = LayoutEngine::LayoutType::TREEMAP;
+        options.treemap_render_style = PDFTreemapRenderStyle::ALL_THUMBNAILS;
+        auto snap_tm_preview = PDFGenerator::render_preview_page(snap, options, 0, 300, 400, &db);
+        bool found_tm_green = false;
+        for (size_t p = 0; p < 300 * 400; ++p) {
+            uint8_t r = snap_tm_preview[p * 3 + 0];
+            uint8_t g = snap_tm_preview[p * 3 + 1];
+            uint8_t b = snap_tm_preview[p * 3 + 2];
+            if (g > 150 && r < 60 && b < 80) {
+                found_tm_green = true;
+                break;
+            }
+        }
+        assert(found_tm_green && "Treemap snapshot preview failed to render thumbnail from database");
+
+        db.close();
         std::cout << "  In-dialog preview buffer rendered successfully (300x400)." << std::endl;
     }
 
