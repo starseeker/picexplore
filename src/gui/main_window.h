@@ -60,6 +60,7 @@ private:
     std::string directory_;
     bool recursive_ = true;
     bool has_explicit_files_ = false;
+    bool open_single_image_on_start_ = false;
     std::vector<std::string> explicit_files_;
     std::string db_path_;
     std::string explicit_db_path_;

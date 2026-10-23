@@ -377,6 +377,7 @@ void MainWindow::stop_session() {
 void MainWindow::set_scan_scope(bool recursive, std::vector<std::string> explicit_files) {
     recursive_ = recursive;
     has_explicit_files_ = !explicit_files.empty();
+    open_single_image_on_start_ = (explicit_files.size() == 1);
     explicit_files_ = std::move(explicit_files);
 }
 
@@ -430,6 +431,25 @@ void MainWindow::start() {
     resize(x(), y(), w(), h());
     update_statusbar();
     rebuild_menu();
+
+    if (open_single_image_on_start_ && explicit_files_.size() == 1 && store_.size() == 0) {
+        const std::string& single_path = explicit_files_[0];
+        FileStamp stamp;
+        int img_w = 0, img_h = 0;
+        if (read_file_stamp(single_path, stamp) && get_image_info(single_path, &img_w, &img_h) &&
+            img_w > 0 && img_h > 0) {
+            open_single_image_on_start_ = false;
+            std::string hash;
+            if (!db_ || !db_->is_open() || !db_->get_valid_hash_for_path(single_path, hash)) {
+                compute_file_hash(single_path, hash);
+            }
+            double ar = static_cast<double>(img_w) / img_h;
+            size_t idx = store_.add_image(single_path, ar, img_w, img_h, stamp.size,
+                                          stamp.modified_ns / 1000000000, hash, stamp);
+            recompute_layout(false);
+            enter_single_image_mode(idx, single_path);
+        }
+    }
 
     if (!timer_started_) {
         Fl::add_timeout(0.016, timer_cb, this);
@@ -664,6 +684,7 @@ void MainWindow::switch_directory(const std::string& new_dir) {
     directory_ = normalize_path(new_dir);
     recursive_ = true;
     has_explicit_files_ = false;
+    open_single_image_on_start_ = false;
     explicit_files_.clear();
     db_path_ = explicit_db_path_;
     directory_filter_.clear();
@@ -1321,14 +1342,19 @@ void MainWindow::poll_events() {
             background_error_ = ev.message;
             status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::IMAGE_DISCOVERED) {
+            const size_t existing_id = store_.find_by_filepath(ev.image.filepath);
+            const uint64_t prev_rev = store_.contains(existing_id) ? store_.get(existing_id).revision : 0;
             size_t idx = store_.add_image(ev.image.filepath, ev.image.aspect_ratio,
                                           ev.image.width, ev.image.height,
                                           ev.image.file_size, ev.image.file_timestamp,
                                           ev.image.content_hash, ev.image.stamp);
             
             store_.get(idx).best_quality = ev.image.best_quality;
-            if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
-                viewport_->current_single_image() == idx) {
+            if (open_single_image_on_start_ && explicit_files_.size() == 1) {
+                open_single_image_on_start_ = false;
+                enter_single_image_mode(idx, ev.image.filepath);
+            } else if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
+                       viewport_->current_single_image() == idx && store_.get(idx).revision != prev_rev) {
                 enter_single_image_mode(idx, ev.image.filepath);
             }
             layout_dirty_ = true;

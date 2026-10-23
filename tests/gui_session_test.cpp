@@ -171,6 +171,27 @@ struct MainWindowTestAccess {
             assert(win.store_.find_by_filepath(normalize_path(dir + "/nested/deep.jpg")) != static_cast<size_t>(-1));
             win.hide();
         }
+
+        // Single image argument opens directly in SINGLE_IMAGE viewer mode
+        {
+            auto sel = resolve_input_targets({dir + "/top1.jpg"}, false);
+            assert(sel.error.empty() && sel.files.size() == 1);
+            MainWindow win(640, 480, "Single image", sel.root_directory, base + "/scope.db");
+            win.set_scan_scope(sel.recursive, sel.files);
+            win.show();
+            win.start();
+            assert(win.viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE);
+            assert(win.viewport_->get_current_single_image_path() == normalize_path(dir + "/top1.jpg"));
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!win.viewport_->full_res_ready_ || !win.scan_complete_) {
+                assert(std::chrono::steady_clock::now() < deadline);
+                win.poll_events();
+                Fl::check();
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            assert(win.viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE);
+            win.hide();
+        }
     }
 
     static void watch_status(const std::string& base) {
