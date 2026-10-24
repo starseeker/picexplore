@@ -46,6 +46,7 @@ struct SiftKeypoint {
     float y = 0.0f;      /**< Subpixel y */
     float s = 0.0f;      /**< Subpixel s */
     float sigma = 0.0f;  /**< Effective scale sigma */
+    float contrast = 0.0f; /**< Interpolated DoG peak magnitude */
 };
 
 class SiftFilter {

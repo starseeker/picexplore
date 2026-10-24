@@ -134,14 +134,17 @@ void test_similarity_consistency() {
     SiftFeatureEngine::extract_from_rgb(img_b.data(), 256, 256, feat_b);
     SiftFeatureEngine::extract_from_rgb(img_c.data(), 256, 256, feat_c);
 
-    // Self-similarity should be 1.0
+    // Self-similarity should be 1.0 (including on periodic / symmetrical patterns)
     float sim_self_fast = SiftFeatureEngine::compute_fast_similarity(feat_a1.global_vector, feat_a1.global_vector);
     float sim_self_acc  = SiftFeatureEngine::compute_keypoint_similarity(feat_a1, feat_a1);
+    float sim_grid_acc  = SiftFeatureEngine::compute_keypoint_similarity(feat_b, feat_b);
 
     std::cout << "  Self-similarity (Fast): " << sim_self_fast << " (Expected ~1.0)" << std::endl;
     std::cout << "  Self-similarity (High Accuracy): " << sim_self_acc << " (Expected ~1.0)" << std::endl;
+    std::cout << "  Periodic grid self-similarity (High Accuracy): " << sim_grid_acc << " (Expected ~1.0)" << std::endl;
     assert(sim_self_fast > 0.99f);
     assert(sim_self_acc > 0.95f);
+    assert(sim_grid_acc > 0.95f && "Periodic pattern self-similarity failed");
 
     // Near duplicate (A1 vs A2) should be higher than dissimilar (A1 vs B)
     float sim_a1_a2_fast = SiftFeatureEngine::compute_fast_similarity(feat_a1.global_vector, feat_a2.global_vector);
@@ -155,6 +158,14 @@ void test_similarity_consistency() {
 
     assert(sim_a1_a2_fast > sim_a1_b_fast && "Fast similarity ranking violated");
     assert(sim_a1_a2_acc > sim_a1_b_acc && "High accuracy similarity ranking violated");
+
+    // Verify sparse/low-keypoint images do not get inflated High Accuracy scores
+    SiftFeatureData sparse_feat = feat_b;
+    if (sparse_feat.keypoints.size() > 2) {
+        sparse_feat.keypoints.resize(2);
+    }
+    float sim_sparse_vs_rich = SiftFeatureEngine::compute_keypoint_similarity(feat_a1, sparse_feat);
+    assert(sim_sparse_vs_rich < 0.5f && "Low-keypoint candidate should not get inflated match ratio");
 
     // Verify right-half pixel gradients populate quadrants 1 and 3
     std::vector<uint8_t> right_grad(64 * 64, 0);

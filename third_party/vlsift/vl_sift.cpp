@@ -402,10 +402,13 @@ void SiftFilter::detect() {
                 int i = maxi;
                 for (int jj = j; jj < 3; ++jj) {
                     double tmp = Aat(i, jj); Aat(i, jj) = Aat(j, jj); Aat(j, jj) = tmp;
-                    Aat(j, jj) /= Aat(j, j); // Note: Aat(j,j) is maxa
+                }
+                double maxa = Aat(j, j);
+                for (int jj = j; jj < 3; ++jj) {
+                    Aat(j, jj) /= maxa;
                 }
                 double tmp = b[j]; b[j] = b[i]; b[i] = tmp;
-                b[j] /= Aat(j, j);
+                b[j] /= maxa;
 
                 for (int ii = j + 1; ii < 3; ++ii) {
                     double mult = Aat(ii, j);
@@ -451,6 +454,7 @@ void SiftFilter::detect() {
             k.x = static_cast<float>(xn * xper);
             k.y = static_cast<float>(yn * xper);
             k.sigma = static_cast<float>(sigma0_ * std::pow(2.0, sn / S_) * xper);
+            k.contrast = static_cast<float>(std::abs(val));
             keys_.push_back(k);
         }
     }
@@ -472,9 +476,9 @@ void SiftFilter::update_gradient() {
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
                 float gx = 0.0f, gy = 0.0f;
-                if (x == 0) gx = src[1] - src[0];
-                else if (x == w - 1) gx = src[w - 1] - src[w - 2];
-                else gx = 0.5f * (src[x + 1] - src[x - 1]);
+                if (x == 0) gx = src[xo] - src[0];
+                else if (x == w - 1) gx = src[0] - src[-xo];
+                else gx = 0.5f * (src[xo] - src[-xo]);
 
                 if (y == 0) gy = src[yo] - src[0];
                 else if (y == h - 1) gy = src[0] - src[-yo];
@@ -590,9 +594,10 @@ void SiftFilter::calc_keypoint_descriptor(float* descr, const SiftKeypoint* k, d
     int const binyo = NBO * NBP;
     int const binxo = NBO;
 
-    if (xi < 0 || xi >= w || yi < 0 || yi >= h - 1) return;
-
     std::memset(descr, 0, sizeof(float) * NBO * NBP * NBP);
+    if (k->o != o_cur_ || xi < 0 || xi > w - 1 || yi < 0 || yi > h - 1 || si < s_min_ + 1 || si > s_max_ - 2) return;
+
+    update_gradient();
 
     const float* pt = grad_.data() + xi * xo + yi * yo + so * (si - s_min_ - 1);
     float* dpt = descr + (NBP / 2) * binyo + (NBP / 2) * binxo;

@@ -69,7 +69,7 @@ public:
     static float compute_similarity(const SiftFeatureData& a, const SiftFeatureData& b, bool high_accuracy = false);
 
 private:
-    static void build_global_vector(const uint8_t* gray, int width, int height,
+    static void build_global_vector(const uint8_t* gray, const uint8_t* rgb, int width, int height,
                                    const std::vector<SiftPoint>& kpts,
                                    std::array<float, SiftFeatureData::GLOBAL_DIM>& out_vec);
 };

@@ -361,6 +361,9 @@ bool ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
 
     std::string query_path = entries_[query_index].filepath;
     std::string query_hash = entries_[query_index].content_hash;
+    if (query_hash.empty() && db) {
+        db->get_valid_hash_for_path(query_path, query_hash);
+    }
 
     // Ensure query has SIFT features
     SiftFeatureData query_sift;
@@ -380,7 +383,11 @@ bool ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
             if (entries_[query_index].file_stamp.valid &&
                 (!read_file_stamp(query_path, current) || current != entries_[query_index].file_stamp)) return false;
             auto decoded = decode_image(query_path, preferred_size, preferred_size, stop_requested);
-            if (decoded) SiftFeatureEngine::extract_from_rgb(decoded.rgb.data(), decoded.width, decoded.height, query_sift);
+            if (decoded && SiftFeatureEngine::extract_from_rgb(decoded.rgb.data(), decoded.width, decoded.height, query_sift)) {
+                if (db && !query_hash.empty()) {
+                    db->store_sift_features(query_hash, query_sift);
+                }
+            }
         }
     }
 
@@ -423,11 +430,15 @@ bool ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
                 const auto& entry = at_position(i);
                 SiftFeatureData entry_sift;
                 bool has_sift = false;
+                std::string hash = entry.content_hash;
+                if (hash.empty() && db) {
+                    db->get_valid_hash_for_path(entry.filepath, hash);
+                }
 
-                if (db && !entry.content_hash.empty()) {
-                    if (db->get_sift_features(entry.content_hash, entry_sift)) {
+                if (db && !hash.empty()) {
+                    if (db->get_sift_features(hash, entry_sift)) {
                         has_sift = true;
-                    } else if (db->extract_sift_from_cached_thumbnail(entry.content_hash, entry_sift, preferred_size)) {
+                    } else if (db->extract_sift_from_cached_thumbnail(hash, entry_sift, preferred_size)) {
                         has_sift = true;
                     }
                 }
@@ -438,6 +449,24 @@ bool ImageStore::sort_by_similarity(size_t query_index, bool high_accuracy, Data
                                                            entry.decoded.height,
                                                            entry_sift)) {
                         has_sift = true;
+                    }
+                }
+
+                if (!has_sift && (!entry.sift_vector_loaded || high_accuracy)) {
+                    FileStamp current;
+                    bool stamp_ok = !entry.file_stamp.valid ||
+                                    (read_file_stamp(entry.filepath, current) && current == entry.file_stamp);
+                    if (stamp_ok) {
+                        auto decoded = decode_image(entry.filepath, preferred_size, preferred_size, stop_requested);
+                        if (decoded && SiftFeatureEngine::extract_from_rgb(decoded.rgb.data(),
+                                                                           decoded.width,
+                                                                           decoded.height,
+                                                                           entry_sift)) {
+                            has_sift = true;
+                            if (db && !hash.empty()) {
+                                db->store_sift_features(hash, entry_sift);
+                            }
+                        }
                     }
                 }
 
