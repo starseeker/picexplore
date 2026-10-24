@@ -499,6 +499,11 @@ void MainWindow::enter_single_image_mode(size_t raw_idx, const std::string& file
 
     if (pixels > 64000000 || entry.original_width > 8192 || entry.original_height > 8192) {
         // For very large images, use tile manager
+        if (entry.content_hash.empty()) {
+            if (!db_ || !db_->is_open() || !db_->get_valid_hash_for_path(filepath, entry.content_hash)) {
+                compute_file_hash(filepath, entry.content_hash);
+            }
+        }
         std::string label = "  Viewing: " + std::filesystem::path(filepath).filename().string() + "  [Generating Map...]";
         statusbar_->copy_label(label.c_str());
         viewport_->set_tile_manager(tile_manager_, entry.content_hash, entry.original_width, entry.original_height);
@@ -1522,7 +1527,7 @@ void MainWindow::poll_events() {
 
     // Admission control leaves excess background work as catalog IDs, not jobs
     // holding buffers; foreground misses are retried after capacity becomes free.
-    for (int admitted = 0; pipeline_ && admitted < 16 && !background_to_queue_.empty(); ++admitted) {
+    for (int admitted = 0; pipeline_ && scan_complete_ && admitted < 16 && !background_to_queue_.empty(); ++admitted) {
         auto it = background_to_queue_.begin();
         const auto id = *it;
         if (!store_.contains(id)) { background_to_queue_.erase(it); continue; }
@@ -1628,13 +1633,7 @@ void MainWindow::recompute_layout(bool reprioritize) {
         flat_items.reserve(indexed.size());
 
         for (const auto& [raw_idx, ar] : indexed) {
-            auto& entry = store_.get(raw_idx);
-            if (entry.content_hash.empty() && db_ && db_->is_open()) {
-                std::string h;
-                if (db_->get_hash_for_path(entry.filepath, h) && !h.empty()) {
-                    entry.content_hash = h;
-                }
-            }
+            const auto& entry = store_.get(raw_idx);
 
             if (!entry.content_hash.empty()) {
                 if (seen_hashes.insert(entry.content_hash).second) {

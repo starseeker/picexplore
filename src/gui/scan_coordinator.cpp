@@ -69,6 +69,7 @@ void ScanCoordinator::rename(DatabaseManager& db, const std::string& from, const
 // Returns true if a short retry is useful (e.g. a file was still being written).
 bool ScanCoordinator::reconcile(DatabaseManager& db) {
     std::unordered_set<std::string> seen;
+    std::vector<std::string> stale_db_paths;
     bool complete = true, retry = false;
     std::unordered_multimap<std::string, std::string> identities;
     auto identity = [](const FileStamp& stamp) {
@@ -77,8 +78,80 @@ bool ScanCoordinator::reconcile(DatabaseManager& db) {
     for (const auto& item : known_) if (item.second.stamp.valid)
         identities.emplace(identity(item.second.stamp), item.first);
 
+    struct UncachedFile {
+        std::string path;
+        FileStamp before;
+        int width = 0;
+        int height = 0;
+        bool identified = false;
+    };
+    std::vector<UncachedFile> uncached_batch;
+    uncached_batch.reserve(256);
+
+    auto flush_header_batch = [&]() -> bool {
+        if (uncached_batch.empty()) return true;
+        if (stop_requested_) return false;
+
+        if (uncached_batch.size() == 1) {
+            auto& item = uncached_batch[0];
+            item.identified = get_image_info(item.path, &item.width, &item.height);
+        } else {
+            const size_t num_workers = std::min<size_t>(WorkPermit::limit(), uncached_batch.size());
+            std::atomic<size_t> next_idx{0};
+            std::vector<std::thread> workers;
+            workers.reserve(num_workers);
+            for (size_t t = 0; t < num_workers; ++t) {
+                workers.emplace_back([&]() {
+                    while (!stop_requested_.load(std::memory_order_relaxed)) {
+                        size_t idx = next_idx.fetch_add(1, std::memory_order_relaxed);
+                        if (idx >= uncached_batch.size()) break;
+                        auto& item = uncached_batch[idx];
+                        item.identified = get_image_info(item.path, &item.width, &item.height);
+                    }
+                });
+            }
+            for (auto& w : workers) {
+                if (w.joinable()) w.join();
+            }
+        }
+
+        if (stop_requested_) return false;
+
+        for (auto& item : uncached_batch) {
+            FileStamp after;
+            if (!read_file_stamp(item.path, after) || item.before != after) {
+                retry = true;
+                continue;
+            }
+            Record record;
+            record.stamp = item.before;
+            record.width = item.width;
+            record.height = item.height;
+            bool ok = item.identified && record.width > 0 && record.height > 0;
+            if (!ok) {
+                record.width = record.height = 0;
+                retry = true;
+                error("Cannot identify " + item.path + ". The file may be incomplete or damaged; use File > Rescan to retry.");
+            }
+            auto known = known_.find(item.path);
+            bool changed = known == known_.end() || known->second.stamp != item.before ||
+                known->second.width != record.width || known->second.height != record.height;
+            known_[item.path] = record;
+            if (changed) {
+                auto event = UpdateEvent::make_image_discovered(item.path, "",
+                    record.width, record.height, record.height > 0 ? double(record.width) / record.height : 1.0,
+                    item.before.size, item.before.modified_ns / 1000000000,
+                    ok ? ThumbQuality::NONE : ThumbQuality::FAILED);
+                event.image.stamp = item.before;
+                update_queue_.enqueue(std::move(event));
+            }
+        }
+        uncached_batch.clear();
+        return !stop_requested_;
+    };
+
     auto process_file = [&](const std::string& path, bool is_explicit) -> bool {
-        FileStamp before, after;
+        FileStamp before;
         if (read_file_stamp(path, before)) {
             seen.insert(path);
             auto known = known_.find(path);
@@ -93,49 +166,38 @@ bool ScanCoordinator::reconcile(DatabaseManager& db) {
                     }
                 }
             }
-            if (known == known_.end() || known->second.stamp != before || known->second.width == 0) {
-                WorkPermit work(&stop_requested_);
-                if (!work) return false;
+            if (known != known_.end() && known->second.stamp == before && known->second.width > 0) {
+                return true;
+            }
+            std::string cached_hash;
+            ImageMetadata cached_meta{};
+            int best_thumb_size = 0;
+            bool had_stale = false;
+            if (db.is_open() && db.get_cached_file_record(path, before, cached_hash, cached_meta, best_thumb_size, &had_stale)) {
                 Record record;
                 record.stamp = before;
-                bool identified = get_image_info(path, &record.width, &record.height);
-                if (!db.is_open() || !db.get_valid_hash_for_path(path, record.hash))
-                    identified = identified && compute_file_hash(path, record.hash, &stop_requested_);
-                if (!read_file_stamp(path, after) || before != after) {
-                    retry = true;
-                } else {
-                    if (!identified) {
-                        record.width = record.height = 0;
-                        record.hash.clear();
-                        retry = true;
-                        error("Cannot identify " + path + ". The file may be incomplete or damaged; use File > Rescan to retry.");
-                    }
-                    bool changed = known == known_.end() || known->second.stamp != before ||
-                        known->second.width != record.width || known->second.hash != record.hash;
-                    if (identified && db.is_open()) {
-                        DatabaseManager::WriteTransaction tx(db);
-                        // Upgrade legacy thumbnails once to the shared orientation policy.
-                        std::string policy;
-                        if (tx && (!db.get_key_value(record.hash + ":render-policy", policy) || policy != "2")) {
-                            for (const auto* suffix : {"32", "64", "128", "256", "512", "1024", "2048", "4096", "8192", "sq64", "sq128", "sift"})
-                                db.delete_key(record.hash + ":" + suffix);
-                            db.store_key_value(record.hash + ":render-policy", "2");
-                        }
-                        ImageMetadata meta{before.size, static_cast<uint64_t>(before.modified_ns / 1000000000), record.width, record.height};
-                        if (!tx || !db.store_file_record(path, record.hash, before) ||
-                            !db.store_image_metadata(record.hash, meta) || !tx.commit())
-                            error("Could not save image metadata. Check disk space and use File > Rescan to retry.");
-                    }
-                    known_[path] = record;
-                    if (changed) {
-                        auto event = UpdateEvent::make_image_discovered(path, record.hash,
-                            record.width, record.height, record.height > 0 ? double(record.width) / record.height : 1,
-                            before.size, before.modified_ns / 1000000000,
-                            identified ? ThumbQuality::NONE : ThumbQuality::FAILED);
-                        event.image.stamp = before;
-                        update_queue_.enqueue(std::move(event));
-                    }
+                record.hash = cached_hash;
+                record.width = cached_meta.orig_width;
+                record.height = cached_meta.orig_height;
+                bool changed = known == known_.end() || known->second.stamp != before ||
+                    known->second.width != record.width || known->second.hash != record.hash;
+                known_[path] = record;
+                if (changed) {
+                    auto event = UpdateEvent::make_image_discovered(path, record.hash,
+                        record.width, record.height, record.height > 0 ? double(record.width) / record.height : 1.0,
+                        before.size, before.modified_ns / 1000000000,
+                        best_thumb_size > 0 ? ThumbQuality::SMALL : ThumbQuality::NONE);
+                    event.image.stamp = before;
+                    update_queue_.enqueue(std::move(event));
                 }
+                return true;
+            }
+            if (had_stale) {
+                stale_db_paths.push_back(path);
+            }
+            uncached_batch.push_back(UncachedFile{path, before});
+            if (uncached_batch.size() >= 256) {
+                return flush_header_batch();
             }
         } else if (!is_explicit || errno != ENOENT) {
             // A failed stat (other than ENOENT for an explicit target) is not proof of deletion.
@@ -199,28 +261,42 @@ bool ScanCoordinator::reconcile(DatabaseManager& db) {
             if (++found % 1000 == 0) update_queue_.enqueue(UpdateEvent::make_scan_progress(found));
         }
     }
-    if (stop_requested_) return false;
+    if (!flush_header_batch() || stop_requested_) return false;
+    std::vector<std::string> deleted_paths;
     if (complete) {
         // Include persisted paths on first scan, but never display them without validation.
         std::unordered_set<std::string> candidates;
         for (const auto& item : known_) candidates.insert(item.first);
-        if (db.is_open() && !has_explicit_files_) {
+        if (db.is_open() && !has_explicit_files_ && !initial_db_reconciled_) {
             for (const auto& image : db.get_images_for_directory(directory_)) {
                 if (!recursive_ && fs::path(image.path).parent_path().lexically_normal().string() != directory_) {
                     continue;
                 }
                 candidates.insert(image.path);
             }
+            initial_db_reconciled_ = true;
         }
         for (const auto& path : candidates) {
-            if (seen.count(path)) continue;
-            if (db.is_open()) {
-                DatabaseManager::WriteTransaction tx(db);
-                if (!tx || !db.remove_file_record(path) || !tx.commit())
-                    error("Could not remove a stale cache record. Use File > Rescan to retry.");
+            if (!seen.count(path)) {
+                deleted_paths.push_back(path);
             }
-            if (known_.erase(path)) update_queue_.enqueue(UpdateEvent::make_image_deleted(path));
         }
+    }
+    if (db.is_open() && (!stale_db_paths.empty() || !deleted_paths.empty())) {
+        DatabaseManager::WriteTransaction tx(db);
+        bool ok = static_cast<bool>(tx);
+        for (const auto& path : stale_db_paths) {
+            if (ok && !db.remove_file_record(path)) ok = false;
+        }
+        for (const auto& path : deleted_paths) {
+            if (ok && !db.remove_file_record(path)) ok = false;
+        }
+        if (!ok || !tx.commit()) {
+            error("Could not remove a stale cache record. Use File > Rescan to retry.");
+        }
+    }
+    for (const auto& path : deleted_paths) {
+        if (known_.erase(path)) update_queue_.enqueue(UpdateEvent::make_image_deleted(path));
     }
     update_queue_.enqueue(UpdateEvent::make_scan_complete());
     return retry;

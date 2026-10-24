@@ -46,7 +46,7 @@ size_t ImageStore::add_image(std::string filepath, double aspect_ratio,
     } else {
         auto& old = entries_.at(idx);
         if ((stamp.valid && old.file_stamp != stamp) ||
-            (!hash.empty() && old.content_hash != hash)) {
+            (!hash.empty() && !old.content_hash.empty() && old.content_hash != hash)) {
             const auto revision = old.revision + 1;
             decoded_rgb_memory_used_ -= old.decoded.rgb_data.size() + old.square_thumb.rgb_data.size();
             scaled_rgb_memory_used_ -= old.scaled.rgb_data.size();

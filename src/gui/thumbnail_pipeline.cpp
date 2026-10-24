@@ -56,8 +56,18 @@ uint64_t ThumbnailPipeline::get_generation() const { return current_generation_;
 bool ThumbnailPipeline::request_thumbnail(size_t id, const std::string& path, const std::string& hash,
         ThumbQuality quality, bool urgent, uint64_t generation, int w, int h, uint64_t revision) {
     std::lock_guard<std::mutex> lock(wake_mutex_);
+    if (stop_requested_) return false;
     const auto key = std::make_pair(id, urgent);
-    if (stop_requested_ || (requests_.size() >= MAX_REQUESTS && !requests_.count(key))) return false;
+    if (!requests_.count(key)) {
+        if (!urgent && requests_.size() >= 64) return false;
+        if (requests_.size() >= MAX_REQUESTS) {
+            if (!urgent) return false;
+            auto non_urgent = std::find_if(requests_.begin(), requests_.end(),
+                                           [](const auto& item) { return !item.first.second; });
+            if (non_urgent == requests_.end()) return false;
+            requests_.erase(non_urgent);
+        }
+    }
     requests_[key] = {id, path, quality, hash, generation, w, h, {update_queue_.session(), id, revision, 0}};
     wake_cv_.notify_one();
     return true;
@@ -88,7 +98,8 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
         FileStamp before, after;
         if (!read_file_stamp(req.filepath, before)) return false;
         std::string hash;
-        if (!db_.is_open() || !db_.get_valid_hash_for_path(req.filepath, hash)) {
+        bool had_valid_record = db_.is_open() && db_.get_valid_hash_for_path(req.filepath, hash);
+        if (!had_valid_record) {
             if (!compute_file_hash(req.filepath, hash, &stop_requested_)) return false;
         }
         // A request names a source version. Never decode new bytes under an old hash.
@@ -165,6 +176,15 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
             int dec_w = 0, dec_h = 0;
             if (decode_jpeg(jpeg_data.data(), jpeg_data.size(), rgb_decoded, dec_w, dec_h)) {
                 if (!read_file_stamp(req.filepath, after) || before != after) return false;
+                if (!had_valid_record && db_.is_open() && !hash.empty()) {
+                    DatabaseManager::WriteTransaction transaction(db_);
+                    FileStamp tx_stamp;
+                    if (transaction && read_file_stamp(req.filepath, tx_stamp) && tx_stamp == before) {
+                        db_.store_file_record(req.filepath, hash, before);
+                        db_.store_key_value(hash + ":render-policy", "2");
+                        transaction.commit();
+                    }
+                }
                 update_queue_.enqueue(UpdateEvent::make_thumb_rgb_ready(
                     req.image_index, req.filepath, hash, found_quality, std::vector<uint8_t>(rgb_decoded), dec_w, dec_h, req.generation
                 ), req.token);
@@ -265,13 +285,24 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
             DatabaseManager::WriteTransaction transaction(db_);
             bool cached = false;
             if (transaction) {
+                FileStamp tx_stamp;
+                if (!read_file_stamp(req.filepath, tx_stamp) || tx_stamp != before) {
+                    return false;
+                }
+                std::string policy;
+                if (!db_.get_key_value(hash + ":render-policy", policy) || policy != "2") {
+                    for (const auto* suffix : {"32", "64", "128", "256", "512", "1024", "2048", "4096", "8192", "sq64", "sq128", "sift"}) {
+                        db_.delete_key(hash + ":" + suffix);
+                    }
+                    db_.store_key_value(hash + ":render-policy", "2");
+                }
                 std::string key;
                 if (req.target_quality == ThumbQuality::SQUARE_128) key = hash + ":sq128";
                 else if (req.target_quality == ThumbQuality::SQUARE_64) key = hash + ":sq64";
                 else key = hash + ":" + std::to_string(static_cast<int>(req.target_quality));
 
-                if (db_.store_key_data(key, jpeg_data_out)) {
-                    // Only the reconciler owns path records; jobs write immutable content caches.
+                if (db_.store_key_data(key, jpeg_data_out) &&
+                    db_.store_file_record(req.filepath, hash, before)) {
 
                     // Also ensure square thumbnail is cached in DB if we didn't just write it
                     if (!sq128_jpeg.empty()) {
@@ -287,17 +318,8 @@ bool ThumbnailPipeline::process_request(const ThumbRequest& req, bool is_upgrade
                     int true_w = (orig_w > 0) ? orig_w : w;
                     int true_h = (orig_h > 0) ? orig_h : h;
                     if (!meta_exists || (true_w > meta.orig_width || true_h > meta.orig_height)) {
-                        uint64_t file_size = meta_exists ? meta.file_size : 0;
-                        uint64_t file_timestamp = meta_exists ? meta.file_timestamp : 0;
-                        if (!meta_exists || file_size == 0) {
-                            try {
-                                file_size = std::filesystem::file_size(req.filepath);
-                                file_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
-                                    std::filesystem::last_write_time(req.filepath).time_since_epoch()).count();
-                            } catch (...) {}
-                        }
-                        meta.file_size = file_size;
-                        meta.file_timestamp = file_timestamp;
+                        meta.file_size = before.size;
+                        meta.file_timestamp = static_cast<uint64_t>(before.modified_ns / 1000000000);
                         meta.orig_width = true_w;
                         meta.orig_height = true_h;
                         db_.store_image_metadata(hash, meta);

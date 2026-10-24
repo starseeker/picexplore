@@ -1052,6 +1052,74 @@ bool DatabaseManager::get_valid_hash_for_path(const std::string& filepath, std::
     return true;
 }
 
+bool DatabaseManager::get_cached_file_record(const std::string& filepath, const FileStamp& current_stamp,
+                                             std::string& hash_out, ImageMetadata& meta_out,
+                                             int& best_thumb_size_out, bool* had_stale_record) const {
+    if (had_stale_record) *had_stale_record = false;
+    if (!is_open_ || !env_ || !current_stamp.valid) return false;
+
+    ReadTransaction read(env_);
+    if (!read.txn) return false;
+
+    auto get_val = [&](const std::string& key_str, MDB_val& val) -> bool {
+        MDB_val key;
+        key.mv_data = const_cast<char*>(key_str.c_str());
+        key.mv_size = key_str.size();
+        return mdb_get(read.txn, dbi_, &key, &val) == 0;
+    };
+
+    MDB_val val{};
+    std::string hash;
+    bool has_fileinfo = get_val("fileinfo:" + filepath, val) && val.mv_size > 0;
+    if (has_fileinfo) {
+        std::istringstream input(std::string(static_cast<const char*>(val.mv_data), val.mv_size));
+        std::string version;
+        FileStamp stored;
+        if (!(input >> version >> hash >> stored.device >> stored.inode >> stored.size >>
+              stored.modified_ns >> stored.changed_ns) || version != "v1" || hash.empty()) {
+            if (had_stale_record) *had_stale_record = true;
+            return false;
+        }
+        stored.valid = true;
+        if (stored != current_stamp) {
+            if (had_stale_record) *had_stale_record = true;
+            return false;
+        }
+    } else if (get_val("file:" + filepath, val) && val.mv_size > 0) {
+        // Legacy DB fallback when fileinfo: was not yet recorded
+        hash.assign(static_cast<const char*>(val.mv_data), val.mv_size);
+    } else {
+        return false;
+    }
+
+    if (!get_val(hash + ":meta", val) || val.mv_size < sizeof(ImageMetadata)) {
+        return false;
+    }
+    std::memcpy(&meta_out, val.mv_data, sizeof(ImageMetadata));
+    if (meta_out.orig_width <= 0 || meta_out.orig_height <= 0) {
+        return false;
+    }
+    if (!has_fileinfo) {
+        uint64_t cur_mtime_sec = static_cast<uint64_t>(current_stamp.modified_ns / 1000000000);
+        if (meta_out.file_size != current_stamp.size ||
+            (meta_out.file_timestamp != 0 && meta_out.file_timestamp != cur_mtime_sec)) {
+            if (had_stale_record) *had_stale_record = true;
+            return false;
+        }
+    }
+
+    best_thumb_size_out = 0;
+    for (int sz : {2048, 1024, 512, 256, 128, 64, 32}) {
+        if (get_val(hash + ":" + std::to_string(sz), val) && val.mv_size > 0) {
+            best_thumb_size_out = sz;
+            break;
+        }
+    }
+
+    hash_out = std::move(hash);
+    return true;
+}
+
 bool DatabaseManager::store_file_record(const std::string& filepath, const std::string& hash,
                                         const FileStamp& stamp) {
     if (!txn_ || !stamp.valid || hash.empty()) return false;

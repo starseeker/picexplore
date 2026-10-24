@@ -46,6 +46,7 @@ private:
     bool dirty_ = false;
     bool recursive_ = true;
     bool has_explicit_files_ = false;
+    bool initial_db_reconciled_ = false;
     std::vector<std::string> explicit_files_;
     std::vector<std::pair<std::string, std::string>> renames_;
     std::unordered_map<std::string, Record> known_;

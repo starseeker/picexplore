@@ -21,9 +21,43 @@ int main() {
     moodycamel::ConcurrentQueue<UpdateEvent> queue;
     ImageStore catalog;
     ScanCoordinator scanner(root, queue, base + "/cache.db");
-    auto scan = [&] {
+    auto populate = [&] {
+        std::vector<size_t> need_hash;
+        for (auto id : catalog.order()) {
+            if (catalog.get(id).content_hash.empty() && catalog.get(id).original_width > 0) {
+                need_hash.push_back(id);
+            }
+        }
+        if (need_hash.empty()) return;
+        ThumbnailPipeline pipeline(queue, base + "/cache.db");
+        pipeline.start(1);
+        for (auto id : need_hash) {
+            const auto& entry = catalog.get(id);
+            pipeline.request_thumbnail(id, entry.filepath, "", ThumbQuality::SMALL, true, 1, 0, 0, entry.revision);
+        }
+        size_t done = 0;
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (std::chrono::steady_clock::now() < deadline) {
+        while (done < need_hash.size() && std::chrono::steady_clock::now() < deadline) {
+            UpdateEvent event;
+            while (queue.try_dequeue(event)) {
+                if (event.type == UpdateEvent::Type::THUMB_RGB_READY) {
+                    auto& entry = catalog.get(event.thumb_rgb.image_index);
+                    if (entry.content_hash.empty()) entry.content_hash = event.thumb_rgb.content_hash;
+                    catalog.set_thumbnail_rgb(event.thumb_rgb.image_index, event.thumb_rgb.filepath,
+                        event.thumb_rgb.quality, std::move(event.thumb_rgb.rgb_data),
+                        event.thumb_rgb.width, event.thumb_rgb.height, event.thumb_rgb.generation);
+                    ++done;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        pipeline.stop();
+        assert(done == need_hash.size());
+    };
+    auto scan = [&](bool auto_populate = true) {
+        bool scan_done = false;
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!scan_done && std::chrono::steady_clock::now() < deadline) {
             UpdateEvent event;
             while (queue.try_dequeue(event)) {
                 if (event.type == UpdateEvent::Type::IMAGE_DISCOVERED) {
@@ -32,18 +66,24 @@ int main() {
                         i.file_size, i.file_timestamp, i.content_hash, i.stamp);
                 }
                 if (event.type == UpdateEvent::Type::IMAGE_DELETED) catalog.remove_image(event.deletion.filepath);
-                if (event.type == UpdateEvent::Type::SCAN_COMPLETE) return;
+                if (event.type == UpdateEvent::Type::SCAN_COMPLETE) { scan_done = true; break; }
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            if (!scan_done) std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        assert(false && "reconciliation timed out");
+        assert(scan_done && "reconciliation timed out");
+        if (auto_populate) populate();
     };
-    scanner.start(); scan();
+    scanner.start(); scan(false);
     assert(catalog.size() == 1);
     const auto id = catalog.order().front();
+    // Placeholder has dimensions immediately before full-file hashing/thumbnailing runs.
+    assert(catalog.get(id).original_width == 100 && catalog.get(id).original_height == 80);
+    assert(catalog.get(id).content_hash.empty());
     const auto original_revision = catalog.get(id).revision;
+    populate();
+    assert(catalog.get(id).revision == original_revision);
     const std::string old_hash = catalog.get(id).content_hash;
-    catalog.set_thumbnail_rgb(id, file, ThumbQuality::SMALL, std::vector<uint8_t>(3, 42), 1, 1, 1);
+    assert(!old_hash.empty());
     DatabaseManager db;
     assert(db.open(base + "/cache.db"));
     std::string hash;
@@ -52,13 +92,11 @@ int main() {
     write_jpeg(file, 20, 10, 225);
     fs::last_write_time(file, timestamp); // mtime alone cannot validate a file
     assert(!db.get_valid_hash_for_path(file, hash));
-    scanner.request_rescan(); scan();
+    scanner.request_rescan(); scan(false);
     assert(catalog.get(id).revision > original_revision);
     assert(catalog.get(id).original_width == 20 && catalog.get(id).original_height == 10);
     assert(catalog.get(id).scaled.rgb_data.empty());
-    assert(catalog.get(id).content_hash != old_hash);
     assert(db.get_paths_for_hash(old_hash).empty());
-    assert(db.get_valid_hash_for_path(file, hash) && hash == catalog.get(id).content_hash);
     // A stale thumbnail request cannot publish the replacement under the original hash.
     {
         ThumbnailPipeline pipeline(queue, base + "/cache.db");
@@ -69,6 +107,9 @@ int main() {
         UpdateEvent event;
         while (queue.try_dequeue(event)) assert(event.type != UpdateEvent::Type::THUMB_RGB_READY);
     }
+    populate();
+    assert(catalog.get(id).content_hash != old_hash);
+    assert(db.get_valid_hash_for_path(file, hash) && hash == catalog.get(id).content_hash);
     // Atomic replacement is detected even with the same mtime and content dimensions.
     const auto revision = catalog.get(id).revision;
     write_jpeg(root + "/temp", 20, 10, 55);

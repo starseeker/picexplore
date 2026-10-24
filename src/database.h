@@ -163,6 +163,9 @@ class DatabaseManager {
 	bool get_hash_for_path_concurrent(const std::string& filepath, std::string& hash_out) const;
     bool get_valid_hash_for_path(const std::string& filepath, std::string& hash_out,
                                 FileStamp* stamp = nullptr) const;
+    bool get_cached_file_record(const std::string& filepath, const FileStamp& current_stamp,
+                                std::string& hash_out, ImageMetadata& meta_out,
+                                int& best_thumb_size_out, bool* had_stale_record = nullptr) const;
     // Called inside a write transaction. Both directions and file freshness change together.
     bool store_file_record(const std::string& filepath, const std::string& hash, const FileStamp& stamp);
     bool remove_file_record(const std::string& filepath);
