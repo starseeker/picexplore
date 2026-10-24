@@ -51,10 +51,14 @@ std::shared_ptr<const TileManager::Tile> TileManager::get_tile(const std::string
         cache_.splice(cache_.begin(), cache_, cached->second);
         return cached->second->tile;
     }
-    if (hash != active_.hash || !ready_.count(hash) || reads_.size() >= MAX_PENDING_READS ||
-        pending_reads_.count(key) || failed_reads_.count(key)) return {};
+    if (hash != active_.hash || !ready_.count(hash) || failed_reads_.count(key)) return {};
+    if (pending_reads_.count(key)) return {};
     pending_reads_.insert(key);
-    reads_.push_back({active_, key, cache_dir_ + "/" + hash + "/v2/" + name});
+    reads_.push_front({active_, key, cache_dir_ + "/" + hash + "/v2/" + name});
+    while (reads_.size() > MAX_PENDING_READS) {
+        pending_reads_.erase(reads_.back().key);
+        reads_.pop_back();
+    }
     wake_.notify_all();
     return {};
 }

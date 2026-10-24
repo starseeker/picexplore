@@ -218,6 +218,40 @@ static void fast_subrect_scale_image(const uint8_t* src, int sw, int sh,
     }
 }
 
+static void fast_scale_tile(const uint8_t* src, int sw, int sh,
+                            uint8_t* dst, int dw, int dh,
+                            std::vector<int>& x_coords_buf) {
+    if (!src || !dst || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+
+    x_coords_buf.resize(dw);
+    int* x_coords = x_coords_buf.data();
+    for (int x = 0; x < dw; ++x) {
+        int sx = (x * sw) / dw;
+        if (sx < 0) sx = 0;
+        if (sx >= sw) sx = sw - 1;
+        x_coords[x] = sx * 3;
+    }
+
+    int src_stride = sw * 3;
+    int dst_stride = dw * 3;
+
+    for (int y = 0; y < dh; ++y) {
+        int sy = (y * sh) / dh;
+        if (sy < 0) sy = 0;
+        if (sy >= sh) sy = sh - 1;
+
+        const uint8_t* src_row = src + sy * src_stride;
+        uint8_t* dst_row = dst + y * dst_stride;
+
+        for (int x = 0; x < dw; ++x) {
+            int sx_off = x_coords[x];
+            dst_row[x * 3 + 0] = src_row[sx_off + 0];
+            dst_row[x * 3 + 1] = src_row[sx_off + 1];
+            dst_row[x * 3 + 2] = src_row[sx_off + 2];
+        }
+    }
+}
+
 static void render_cushion_shading(
     uint8_t* dst, int dw, int dh,
     double origin_x, double origin_y,
@@ -1239,10 +1273,10 @@ void VirtualViewport::draw_single_image() {
         } else {
             // Custom zoom & pan: only resample the visible viewport sub-region!
             
-            int draw_w = (int)(target_orig_w * zoom_);
-            int draw_h = (int)(target_orig_h * zoom_);
-            int screen_x = x() + (int)pan_x_;
-            int screen_y = y() + (int)pan_y_;
+            int draw_w = static_cast<int>(std::round(target_orig_w * zoom_));
+            int draw_h = static_cast<int>(std::round(target_orig_h * zoom_));
+            int screen_x = static_cast<int>(std::round(x() + pan_x_));
+            int screen_y = static_cast<int>(std::round(y() + pan_y_));
 
             // Intersection between viewport [x(), y(), w(), h()] and drawn image rect [screen_x, screen_y, draw_w, draw_h]
             int clip_x0 = std::max(x(), screen_x);
@@ -1282,10 +1316,10 @@ void VirtualViewport::draw_single_image() {
         int ts = TileManager::TILE_SIZE;
         float scaled_ts = ts * scale;
         
-        int start_tx = std::max(0, (int)(-pan_x_ / scaled_ts));
-        int start_ty = std::max(0, (int)(-pan_y_ / scaled_ts));
-        int end_tx = std::min((tile_orig_w_ + ts - 1) / ts - 1, (int)((w() - pan_x_) / scaled_ts));
-        int end_ty = std::min((tile_orig_h_ + ts - 1) / ts - 1, (int)((h() - pan_y_) / scaled_ts));
+        int start_tx = std::max(0, static_cast<int>(std::floor(-pan_x_ / scaled_ts)));
+        int start_ty = std::max(0, static_cast<int>(std::floor(-pan_y_ / scaled_ts)));
+        int end_tx = std::min((tile_orig_w_ + ts - 1) / ts - 1, static_cast<int>(std::floor((w() - pan_x_) / scaled_ts)));
+        int end_ty = std::min((tile_orig_h_ + ts - 1) / ts - 1, static_cast<int>(std::floor((h() - pan_y_) / scaled_ts)));
 
         for (int ty = start_ty; ty <= end_ty; ty++) {
             for (int tx = start_tx; tx <= end_tx; tx++) {
@@ -1302,10 +1336,10 @@ void VirtualViewport::draw_single_image() {
                     
                     if (draw_w > 0 && draw_h > 0 && (draw_w != tw || draw_h != th)) {
                         draw_tmp_buf_.resize(static_cast<size_t>(draw_w) * draw_h * 3);
-                        stbir_resize_uint8_linear(
-                            rgb.data(), tw, th, 0,
-                            draw_tmp_buf_.data(), draw_w, draw_h, 0,
-                            (stbir_pixel_layout)3
+                        fast_scale_tile(
+                            rgb.data(), tw, th,
+                            draw_tmp_buf_.data(), draw_w, draw_h,
+                            x_coords_buf_
                         );
                         fl_draw_image(draw_tmp_buf_.data(), draw_x, draw_y, draw_w, draw_h, 3, 0);
                     } else if (draw_w > 0 && draw_h > 0) {

@@ -48,6 +48,6 @@ private:
     std::list<Cached> cache_;
     std::unordered_map<std::string, std::list<Cached>::iterator> cache_map_;
     size_t cache_bytes_ = 0;
-    static constexpr size_t MAX_CACHE_BYTES = 64 * 1024 * 1024;
-    static constexpr size_t MAX_PENDING_READS = 256;
+    static constexpr size_t MAX_CACHE_BYTES = 384 * 1024 * 1024;
+    static constexpr size_t MAX_PENDING_READS = 512;
 };

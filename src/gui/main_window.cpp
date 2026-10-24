@@ -1443,7 +1443,7 @@ void MainWindow::poll_events() {
             viewport_->set_load_error(background_error_);
             status_dirty = true;
         } else if (ev.type == UpdateEvent::Type::TILE_AVAILABLE) {
-            viewport_->redraw();
+            need_redraw = true;
         } else if (ev.type == UpdateEvent::Type::TILES_READY) {
             if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE &&
                 viewport_->current_single_image() == ev.job.image_id) viewport_->mark_full_res_ready();
@@ -1564,7 +1564,11 @@ void MainWindow::poll_events() {
             recompute_layout(true);
         }
     } else if (need_redraw) {
-        viewport_->apply_updates(changed);
+        if (viewport_->current_mode() == VirtualViewport::ViewMode::SINGLE_IMAGE) {
+            viewport_->redraw();
+        } else {
+            viewport_->apply_updates(changed);
+        }
     }
 
     if (reprioritize_pending_) {
