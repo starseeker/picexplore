@@ -25,6 +25,7 @@ int main() {
     };
     {
         TileManager tiles(queue, 3);
+        assert(tiles.max_cached_tiles() >= 512);
         tiles.init(root);
         tiles.request_tiles(5, path, hash, 1, 1);
         until([&] { return tiles.are_tiles_ready(hash); });
@@ -40,6 +41,7 @@ int main() {
     fs::remove(root + "/tiles/" + hash + "/v2/z0_1_1.jpg");
     {
         TileManager tiles(queue, 3);
+        assert(tiles.max_cached_tiles() >= 512);
         tiles.init(root);
         tiles.request_tiles(5, path, hash, 1, 2);
         until([&] { return tiles.are_tiles_ready(hash); });

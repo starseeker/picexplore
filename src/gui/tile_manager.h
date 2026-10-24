@@ -23,6 +23,7 @@ public:
     bool are_tiles_ready(const std::string& hash) const;
     // Cache lookup only. A miss schedules a bounded, deduplicated disk read.
     std::shared_ptr<const Tile> get_tile(const std::string& hash, int tx, int ty, int zoom_level);
+    size_t max_cached_tiles() const { return max_cache_bytes_ / (size_t(TILE_SIZE) * TILE_SIZE * 3); }
     static constexpr int TILE_SIZE = 512;
 private:
     friend struct TileTestAccess;
@@ -48,6 +49,6 @@ private:
     std::list<Cached> cache_;
     std::unordered_map<std::string, std::list<Cached>::iterator> cache_map_;
     size_t cache_bytes_ = 0;
-    static constexpr size_t MAX_CACHE_BYTES = 384 * 1024 * 1024;
-    static constexpr size_t MAX_PENDING_READS = 512;
+    size_t max_cache_bytes_ = 768 * 1024 * 1024;
+    size_t max_pending_reads_ = 2048;
 };

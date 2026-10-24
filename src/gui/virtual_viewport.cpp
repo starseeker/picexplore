@@ -180,40 +180,52 @@ static void fast_subrect_scale_image(const uint8_t* src, int sw, int sh,
                                      std::vector<int>& x_coords_buf) {
     if (!src || !dst || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
 
-    x_coords_buf.resize(dw);
-    int* x_coords = x_coords_buf.data();
+    x_coords_buf.resize(dw * 4);
+    int* lut = x_coords_buf.data();
 
     double src_x0 = s0 * sw;
-    double src_x1 = s1 * sw;
-    double src_span_x = src_x1 - src_x0;
+    double src_span_x = (s1 - s0) * sw;
 
     for (int x = 0; x < dw; ++x) {
-        int sx = static_cast<int>(src_x0 + (x * src_span_x) / dw);
-        if (sx < 0) sx = 0;
-        if (sx >= sw) sx = sw - 1;
-        x_coords[x] = sx * 3;
+        double fx = src_x0 + (x * src_span_x) / dw;
+        int ix0 = std::clamp(static_cast<int>(std::floor(fx)), 0, sw - 1);
+        int ix1 = std::min(sw - 1, ix0 + 1);
+        int wx1 = std::clamp(static_cast<int>((fx - ix0) * 256.0), 0, 256);
+        int wx0 = 256 - wx1;
+        lut[x * 4 + 0] = ix0 * 3;
+        lut[x * 4 + 1] = ix1 * 3;
+        lut[x * 4 + 2] = wx0;
+        lut[x * 4 + 3] = wx1;
     }
 
     double src_y0 = t0 * sh;
-    double src_y1 = t1 * sh;
-    double src_span_y = src_y1 - src_y0;
+    double src_span_y = (t1 - t0) * sh;
 
     int src_stride = sw * 3;
     int dst_stride = dw * 3;
 
     for (int y = 0; y < dh; ++y) {
-        int sy = static_cast<int>(src_y0 + (y * src_span_y) / dh);
-        if (sy < 0) sy = 0;
-        if (sy >= sh) sy = sh - 1;
+        double fy = src_y0 + (y * src_span_y) / dh;
+        int iy0 = std::clamp(static_cast<int>(std::floor(fy)), 0, sh - 1);
+        int iy1 = std::min(sh - 1, iy0 + 1);
+        int wy1 = std::clamp(static_cast<int>((fy - iy0) * 256.0), 0, 256);
+        int wy0 = 256 - wy1;
 
-        const uint8_t* src_row = src + sy * src_stride;
+        const uint8_t* r0 = src + iy0 * src_stride;
+        const uint8_t* r1 = src + iy1 * src_stride;
         uint8_t* dst_row = dst + y * dst_stride;
 
         for (int x = 0; x < dw; ++x) {
-            int sx_off = x_coords[x];
-            dst_row[x * 3 + 0] = src_row[sx_off + 0];
-            dst_row[x * 3 + 1] = src_row[sx_off + 1];
-            dst_row[x * 3 + 2] = src_row[sx_off + 2];
+            int x0_off = lut[x * 4 + 0];
+            int x1_off = lut[x * 4 + 1];
+            int wx0 = lut[x * 4 + 2];
+            int wx1 = lut[x * 4 + 3];
+
+            for (int c = 0; c < 3; ++c) {
+                int top = (r0[x0_off + c] * wx0 + r0[x1_off + c] * wx1) >> 8;
+                int bot = (r1[x0_off + c] * wx0 + r1[x1_off + c] * wx1) >> 8;
+                dst_row[x * 3 + c] = static_cast<uint8_t>((top * wy0 + bot * wy1) >> 8);
+            }
         }
     }
 }
@@ -223,31 +235,72 @@ static void fast_scale_tile(const uint8_t* src, int sw, int sh,
                             std::vector<int>& x_coords_buf) {
     if (!src || !dst || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
 
-    x_coords_buf.resize(dw);
-    int* x_coords = x_coords_buf.data();
-    for (int x = 0; x < dw; ++x) {
-        int sx = (x * sw) / dw;
-        if (sx < 0) sx = 0;
-        if (sx >= sw) sx = sw - 1;
-        x_coords[x] = sx * 3;
-    }
-
-    int src_stride = sw * 3;
-    int dst_stride = dw * 3;
-
-    for (int y = 0; y < dh; ++y) {
-        int sy = (y * sh) / dh;
-        if (sy < 0) sy = 0;
-        if (sy >= sh) sy = sh - 1;
-
-        const uint8_t* src_row = src + sy * src_stride;
-        uint8_t* dst_row = dst + y * dst_stride;
-
+    if (dw < sw || dh < sh) {
+        x_coords_buf.resize(dw * 2);
+        int* x_coords = x_coords_buf.data();
         for (int x = 0; x < dw; ++x) {
-            int sx_off = x_coords[x];
-            dst_row[x * 3 + 0] = src_row[sx_off + 0];
-            dst_row[x * 3 + 1] = src_row[sx_off + 1];
-            dst_row[x * 3 + 2] = src_row[sx_off + 2];
+            int sx0 = (x * sw) / dw;
+            int sx1 = ((x + 1) * sw) / dw - 1;
+            if (sx1 < sx0) sx1 = sx0;
+            int sx_mid0 = (sx0 * 3 + sx1) / 4;
+            int sx_mid1 = (sx0 + sx1 * 3) / 4;
+            x_coords[x * 2 + 0] = std::clamp(sx_mid0, 0, sw - 1) * 3;
+            x_coords[x * 2 + 1] = std::clamp(sx_mid1, 0, sw - 1) * 3;
+        }
+
+        int src_stride = sw * 3;
+        int dst_stride = dw * 3;
+
+        for (int y = 0; y < dh; ++y) {
+            int sy0 = (y * sh) / dh;
+            int sy1 = ((y + 1) * sh) / dh - 1;
+            if (sy1 < sy0) sy1 = sy0;
+            int sy_mid0 = std::clamp((sy0 * 3 + sy1) / 4, 0, sh - 1);
+            int sy_mid1 = std::clamp((sy0 + sy1 * 3) / 4, 0, sh - 1);
+
+            const uint8_t* r0 = src + sy_mid0 * src_stride;
+            const uint8_t* r1 = src + sy_mid1 * src_stride;
+            uint8_t* dst_row = dst + y * dst_stride;
+
+            for (int x = 0; x < dw; ++x) {
+                int off0 = x_coords[x * 2 + 0];
+                int off1 = x_coords[x * 2 + 1];
+                for (int c = 0; c < 3; ++c) {
+                    int p00 = r0[off0 + c];
+                    int p01 = r0[off1 + c];
+                    int p10 = r1[off0 + c];
+                    int p11 = r1[off1 + c];
+                    dst_row[x * 3 + c] = static_cast<uint8_t>((p00 + p01 + p10 + p11 + 2) >> 2);
+                }
+            }
+        }
+    } else {
+        x_coords_buf.resize(dw);
+        int* x_coords = x_coords_buf.data();
+        for (int x = 0; x < dw; ++x) {
+            int sx = (x * sw) / dw;
+            if (sx < 0) sx = 0;
+            if (sx >= sw) sx = sw - 1;
+            x_coords[x] = sx * 3;
+        }
+
+        int src_stride = sw * 3;
+        int dst_stride = dw * 3;
+
+        for (int y = 0; y < dh; ++y) {
+            int sy = (y * sh) / dh;
+            if (sy < 0) sy = 0;
+            if (sy >= sh) sy = sh - 1;
+
+            const uint8_t* src_row = src + sy * src_stride;
+            uint8_t* dst_row = dst + y * dst_stride;
+
+            for (int x = 0; x < dw; ++x) {
+                int sx_off = x_coords[x];
+                dst_row[x * 3 + 0] = src_row[sx_off + 0];
+                dst_row[x * 3 + 1] = src_row[sx_off + 1];
+                dst_row[x * 3 + 2] = src_row[sx_off + 2];
+            }
         }
     }
 }
@@ -1238,17 +1291,39 @@ void VirtualViewport::draw_single_image() {
         img_data = full_res_rgb_.data();
     }
 
-    bool draw_tiles = (tile_manager_ && full_res_ready_ && zoom_ >= 0.14f);
+    float target_orig_w = (orig_w > 0) ? (float)orig_w : (float)img_w;
+    float target_orig_h = (orig_h > 0) ? (float)orig_h : (float)img_h;
+    if (tile_manager_ && tile_orig_w_ > 0 && tile_orig_h_ > 0) {
+        target_orig_w = (float)tile_orig_w_;
+        target_orig_h = (float)tile_orig_h_;
+    }
+
+    int ts = TileManager::TILE_SIZE;
+    float scaled_ts = ts * zoom_;
+
+    int start_tx = 0, start_ty = 0, end_tx = -1, end_ty = -1;
+    int num_visible_tiles = 0;
+    if (tile_manager_ && zoom_ > 0.0f && scaled_ts > 0.0f) {
+        start_tx = std::max(0, static_cast<int>(std::floor(-pan_x_ / scaled_ts)));
+        start_ty = std::max(0, static_cast<int>(std::floor(-pan_y_ / scaled_ts)));
+        end_tx = std::min((tile_orig_w_ + ts - 1) / ts - 1, static_cast<int>(std::floor((w() - pan_x_) / scaled_ts)));
+        end_ty = std::min((tile_orig_h_ + ts - 1) / ts - 1, static_cast<int>(std::floor((h() - pan_y_) / scaled_ts)));
+        if (end_tx >= start_tx && end_ty >= start_ty) {
+            num_visible_tiles = (end_tx - start_tx + 1) * (end_ty - start_ty + 1);
+        }
+    }
+
+    bool magnified = (img_w > 0 && img_h > 0) &&
+        (target_orig_w * zoom_ > (float)img_w * 0.95f || target_orig_h * zoom_ > (float)img_h * 0.95f);
+
+    size_t tile_budget = tile_manager_ ? tile_manager_->max_cached_tiles() : 512;
+    bool draw_tiles = (tile_manager_ && full_res_ready_ && zoom_ > 0.0f &&
+                       scaled_ts >= 24.0f &&
+                       static_cast<size_t>(num_visible_tiles) <= tile_budget &&
+                       (magnified || zoom_ >= 0.14f));
 
     if (img_data && img_w > 0 && img_h > 0) {
         fl_push_clip(x(), y(), w(), h());
-
-        float target_orig_w = (orig_w > 0) ? (float)orig_w : (float)img_w;
-        float target_orig_h = (orig_h > 0) ? (float)orig_h : (float)img_h;
-        if (tile_manager_ && tile_orig_w_ > 0 && tile_orig_h_ > 0) {
-            target_orig_w = (float)tile_orig_w_;
-            target_orig_h = (float)tile_orig_h_;
-        }
 
         if (zoom_ == 0.0f) {
             // Fit to window
@@ -1313,14 +1388,6 @@ void VirtualViewport::draw_single_image() {
         fl_push_clip(x(), y(), w(), h());
         
         float scale = zoom_;
-        int ts = TileManager::TILE_SIZE;
-        float scaled_ts = ts * scale;
-        
-        int start_tx = std::max(0, static_cast<int>(std::floor(-pan_x_ / scaled_ts)));
-        int start_ty = std::max(0, static_cast<int>(std::floor(-pan_y_ / scaled_ts)));
-        int end_tx = std::min((tile_orig_w_ + ts - 1) / ts - 1, static_cast<int>(std::floor((w() - pan_x_) / scaled_ts)));
-        int end_ty = std::min((tile_orig_h_ + ts - 1) / ts - 1, static_cast<int>(std::floor((h() - pan_y_) / scaled_ts)));
-
         for (int ty = start_ty; ty <= end_ty; ty++) {
             for (int tx = start_tx; tx <= end_tx; tx++) {
                 auto tile = tile_manager_->get_tile(tile_hash_, tx, ty, 0);

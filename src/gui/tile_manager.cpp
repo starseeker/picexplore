@@ -9,6 +9,23 @@
 namespace fs = std::filesystem;
 TileManager::TileManager(moodycamel::ConcurrentQueue<UpdateEvent>& queue, uint64_t session)
     : publisher_(queue, session, &stop_) {
+#if defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGESIZE);
+    if (pages > 0 && page_size > 0) {
+        uint64_t total_ram = static_cast<uint64_t>(pages) * static_cast<uint64_t>(page_size);
+        if (total_ram >= 12ULL * 1024 * 1024 * 1024) {
+            max_cache_bytes_ = 1280ULL * 1024 * 1024; // 1.25 GB (~1,700 tiles)
+            max_pending_reads_ = 2048;
+        } else if (total_ram >= 6ULL * 1024 * 1024 * 1024) {
+            max_cache_bytes_ = 768ULL * 1024 * 1024;  // 768 MB (~1,024 tiles)
+            max_pending_reads_ = 1536;
+        } else {
+            max_cache_bytes_ = 384ULL * 1024 * 1024;  // 384 MB (~512 tiles)
+            max_pending_reads_ = 768;
+        }
+    }
+#endif
     generator_ = std::thread(&TileManager::generate_worker, this);
     reader_ = std::thread(&TileManager::read_worker, this);
 }
@@ -55,7 +72,7 @@ std::shared_ptr<const TileManager::Tile> TileManager::get_tile(const std::string
     if (pending_reads_.count(key)) return {};
     pending_reads_.insert(key);
     reads_.push_front({active_, key, cache_dir_ + "/" + hash + "/v2/" + name});
-    while (reads_.size() > MAX_PENDING_READS) {
+    while (reads_.size() > max_pending_reads_) {
         pending_reads_.erase(reads_.back().key);
         reads_.pop_back();
     }
@@ -92,7 +109,7 @@ void TileManager::read_worker() {
             else {
                 cache_bytes_ += tile->rgb.size();
                 cache_.push_front({read.key, tile}); cache_map_[read.key] = cache_.begin();
-                while (cache_bytes_ > MAX_CACHE_BYTES) {
+                while (cache_bytes_ > max_cache_bytes_) {
                     auto last = std::prev(cache_.end());
                     cache_bytes_ -= last->tile->rgb.size(); cache_map_.erase(last->key); cache_.erase(last);
                 }
