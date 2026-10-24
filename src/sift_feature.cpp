@@ -34,7 +34,7 @@
 
 namespace {
     constexpr uint32_t SIFT_MAGIC = 0x53494654; // 'SIFT'
-    constexpr uint16_t SIFT_VERSION = 3;
+    constexpr uint16_t SIFT_VERSION = 4;
     constexpr float PI_F = 3.14159265358979323846f;
 
     bool extract_keypoints_and_global(const uint8_t* gray_data, const uint8_t* rgb_data,

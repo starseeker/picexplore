@@ -1003,12 +1003,14 @@ bool DatabaseManager::extract_sift_from_cached_thumbnail(const std::string& hash
         return true;
     }
 
-    // Check candidate thumbnails in priority order based on user setting
+    // Check candidate uncropped thumbnails in priority order.
+    // Never use cropped square thumbnails (:sq128, :sq64) because center crops
+    // destroy aspect ratio and discard outer regions of panoramic drawings.
     std::vector<std::string> thumb_keys;
     if (preferred_size >= 512) {
-        thumb_keys = {hash + ":512", hash + ":256", hash + ":sq128", hash + ":128", hash + ":1024", hash + ":64"};
+        thumb_keys = {hash + ":512", hash + ":256", hash + ":1024", hash + ":2048", hash + ":128", hash + ":64"};
     } else {
-        thumb_keys = {hash + ":256", hash + ":512", hash + ":sq128", hash + ":128", hash + ":64"};
+        thumb_keys = {hash + ":256", hash + ":512", hash + ":1024", hash + ":2048", hash + ":128", hash + ":64"};
     }
 
     std::vector<uint8_t> jpeg_bytes;
