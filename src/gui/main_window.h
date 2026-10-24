@@ -131,6 +131,7 @@ private:
     void update_statusbar();
     void rebuild_menu();
     void recompute_layout(bool reprioritize = true);
+    void capture_zoom_anchor(int vx, int vy, bool from_cursor);
     void save_view_config();
     std::string get_sort_order_string() const;
     void apply_sort_order_string(const std::string& order_str);
@@ -184,6 +185,16 @@ private:
     LayoutEngine::TreemapMetric last_treemap_metric_ = LayoutEngine::TreemapMetric::FILE_SIZE;
     VirtualViewport::TreemapRenderStyle last_treemap_style_ = VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS;
     double target_height_ = 150.0;
+    bool zoom_anchor_valid_ = false;
+    bool zoom_anchor_pending_ = false;
+    size_t zoom_anchor_image_ = static_cast<size_t>(-1);
+    double zoom_anchor_box_frac_y_ = 0.5;
+    double zoom_anchor_viewport_y_ = 0.0;
+    int last_zoom_vx_ = -1;
+    int last_zoom_vy_ = -1;
+    int last_zoom_scroll_offset_ = -1;
+    bool last_zoom_from_cursor_ = false;
+    std::chrono::steady_clock::time_point last_zoom_time_{};
     uint64_t current_generation_ = 0;
     bool reprioritize_pending_ = false;
     std::chrono::steady_clock::time_point last_resize_time_;

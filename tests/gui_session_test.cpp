@@ -13,6 +13,57 @@
 #include <unistd.h>
 
 struct MainWindowTestAccess {
+    static void zoom_anchor_scroll(const std::string& base) {
+        MainWindow window(800, 600, "Zoom anchor", base + "/a", base + "/cache.db");
+        window.active_layout_ = LayoutEngine::LayoutType::JUSTIFIED;
+        window.resize(0, 0, 800, 600);
+        for (int i = 0; i < 200; ++i) {
+            window.store_.add_image(base + "/a/img_" + std::to_string(i) + ".jpg", 1.5, 300, 200);
+        }
+        window.scan_complete_ = true;
+        window.target_height_ = 150.0;
+        window.recompute_layout(false);
+        assert(window.layout_result_.total_height > 2000.0);
+
+        const int initial_scroll = 1200;
+        window.viewport_->set_scroll_offset(initial_scroll);
+        window.scrollbar_->value(initial_scroll);
+
+        const int cursor_vx = 250;
+        const int cursor_vy = 200;
+        window.capture_zoom_anchor(cursor_vx, cursor_vy, true);
+        assert(window.zoom_anchor_valid_);
+        const size_t anchor_id = window.zoom_anchor_image_;
+
+        // Zoom in 3 notches without moving the cursor
+        for (int step = 0; step < 3; ++step) {
+            window.capture_zoom_anchor(cursor_vx, cursor_vy, true);
+            assert(window.zoom_anchor_image_ == anchor_id);
+            window.target_height_ = std::min(window.target_height_ * 1.2, 800.0);
+            window.recompute_layout(false);
+
+            bool found = false;
+            for (const auto& box : window.layout_result_.boxes) {
+                if (box.image_index == anchor_id) {
+                    found = true;
+                    double screen_y = (box.y + window.zoom_anchor_box_frac_y_ * box.h) - window.viewport_->scroll_offset();
+                    assert(std::abs(screen_y - cursor_vy) <= 1.5);
+                    break;
+                }
+            }
+            assert(found);
+        }
+
+        // Zoom back out 3 notches without moving the cursor -> should return to initial_scroll
+        for (int step = 0; step < 3; ++step) {
+            window.capture_zoom_anchor(cursor_vx, cursor_vy, true);
+            assert(window.zoom_anchor_image_ == anchor_id);
+            window.target_height_ = std::max(window.target_height_ / 1.2, 50.0);
+            window.recompute_layout(false);
+        }
+        assert(std::abs(window.viewport_->scroll_offset() - initial_scroll) <= 1);
+    }
+
     static void dense_treemap(const std::string& base) {
         MainWindow window(640, 480, "Dense treemap", base + "/a", base + "/cache.db");
         window.active_layout_ = LayoutEngine::LayoutType::HIERARCHICAL_TREEMAP;
@@ -403,6 +454,7 @@ int main() {
     MainWindowTestAccess::run(base);
     MainWindowTestAccess::controls(base);
     MainWindowTestAccess::dense_treemap(base);
+    MainWindowTestAccess::zoom_anchor_scroll(base);
     MainWindowTestAccess::tile_seams(base);
     MainWindowTestAccess::external_editor(base);
     MainWindowTestAccess::scan_scope_modes(base);

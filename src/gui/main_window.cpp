@@ -636,6 +636,8 @@ void MainWindow::apply_directory_filter(const std::string& dir) {
     current_generation_++;
     if (pipeline_) pipeline_->set_generation(current_generation_);
     last_visible_.clear();
+    zoom_anchor_valid_ = false;
+    zoom_anchor_pending_ = false;
     layout_dirty_ = true;
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
@@ -648,6 +650,8 @@ void MainWindow::reset_directory_filter() {
     current_generation_++;
     if (pipeline_) pipeline_->set_generation(current_generation_);
     last_visible_.clear();
+    zoom_anchor_valid_ = false;
+    zoom_anchor_pending_ = false;
     layout_dirty_ = true;
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
@@ -717,6 +721,8 @@ void MainWindow::switch_directory(const std::string& new_dir) {
     scan_complete_ = false;
     current_generation_++;
     last_visible_.clear();
+    zoom_anchor_valid_ = false;
+    zoom_anchor_pending_ = false;
     layout_dirty_ = true;
 
     viewport_->set_selected_image((size_t)-1);
@@ -1583,6 +1589,8 @@ void MainWindow::set_layout_mode(LayoutEngine::LayoutType type) {
     current_generation_++;
     if (pipeline_) pipeline_->set_generation(current_generation_);
     last_visible_.clear();
+    zoom_anchor_valid_ = false;
+    zoom_anchor_pending_ = false;
     layout_dirty_ = true;
     viewport_->set_scroll_offset(0);
     scrollbar_->value(0);
@@ -1711,7 +1719,21 @@ void MainWindow::recompute_layout(bool reprioritize) {
         viewport_->set_layout(&layout_result_);
         
         int max_scroll = std::max(0, static_cast<int>(layout_result_.total_height) - viewport_->h());
-        int current_scroll = std::clamp(viewport_->scroll_offset(), 0, max_scroll);
+        int target_scroll = viewport_->scroll_offset();
+        if (zoom_anchor_pending_ && zoom_anchor_valid_) {
+            for (const auto& box : layout_result_.boxes) {
+                if (box.image_index == zoom_anchor_image_) {
+                    double new_doc_y = box.y + zoom_anchor_box_frac_y_ * box.h;
+                    target_scroll = static_cast<int>(std::llround(new_doc_y - zoom_anchor_viewport_y_));
+                    break;
+                }
+            }
+            zoom_anchor_pending_ = false;
+        }
+        int current_scroll = std::clamp(target_scroll, 0, max_scroll);
+        if (zoom_anchor_valid_) {
+            last_zoom_scroll_offset_ = current_scroll;
+        }
         
         viewport_->set_scroll_offset(current_scroll);
         scrollbar_->value(current_scroll, viewport_->h(), 0, layout_result_.total_height);
@@ -1723,6 +1745,100 @@ void MainWindow::recompute_layout(bool reprioritize) {
     
     if (reprioritize && viewport_->current_mode() == VirtualViewport::ViewMode::GRID) {
         reprioritize_thumbnails();
+    }
+}
+
+void MainWindow::capture_zoom_anchor(int vx, int vy, bool from_cursor) {
+    if (active_layout_ != LayoutEngine::LayoutType::JUSTIFIED ||
+        layout_result_.layout_type != LayoutEngine::LayoutType::JUSTIFIED ||
+        layout_result_.boxes.empty()) {
+        zoom_anchor_valid_ = false;
+        zoom_anchor_pending_ = false;
+        return;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    bool cursor_in_viewport = (vx >= 0 && vx < viewport_->w() && vy >= 0 && vy < viewport_->h());
+    if (!from_cursor || !cursor_in_viewport) {
+        vx = viewport_->w() / 2;
+        vy = viewport_->h() / 2;
+    }
+
+    if (zoom_anchor_valid_ &&
+        from_cursor == last_zoom_from_cursor_ &&
+        viewport_->scroll_offset() == last_zoom_scroll_offset_ &&
+        (!from_cursor || (std::abs(vx - last_zoom_vx_) <= 4 && std::abs(vy - last_zoom_vy_) <= 4))) {
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_zoom_time_).count();
+        if (zoom_anchor_pending_ || elapsed_ms < 1500) {
+            for (const auto& box : layout_result_.boxes) {
+                if (box.image_index == zoom_anchor_image_) {
+                    zoom_anchor_pending_ = true;
+                    last_zoom_time_ = now;
+                    return;
+                }
+            }
+        }
+    }
+
+    if (!from_cursor) {
+        size_t sel = viewport_->get_selected_image();
+        if (sel != static_cast<size_t>(-1)) {
+            int view_top = viewport_->scroll_offset();
+            int view_bot = view_top + viewport_->h();
+            for (const auto& box : layout_result_.boxes) {
+                if (box.image_index == sel && box.y + box.h > view_top && box.y < view_bot) {
+                    zoom_anchor_valid_ = true;
+                    zoom_anchor_pending_ = true;
+                    zoom_anchor_image_ = sel;
+                    zoom_anchor_box_frac_y_ = 0.5;
+                    zoom_anchor_viewport_y_ = std::clamp((box.y + 0.5 * box.h) - view_top,
+                                                         0.0, static_cast<double>(viewport_->h()));
+                    last_zoom_vx_ = vx;
+                    last_zoom_vy_ = vy;
+                    last_zoom_scroll_offset_ = viewport_->scroll_offset();
+                    last_zoom_from_cursor_ = false;
+                    last_zoom_time_ = now;
+                    return;
+                }
+            }
+        }
+    }
+
+    double doc_x = static_cast<double>(vx);
+    double doc_y = static_cast<double>(viewport_->scroll_offset() + vy);
+
+    const LayoutEngine::LayoutResult::Box* best_box = nullptr;
+    double best_dy = 1e300;
+    double best_dx = 1e300;
+    for (const auto& box : layout_result_.boxes) {
+        double dy = 0.0;
+        if (doc_y < box.y) dy = box.y - doc_y;
+        else if (doc_y > box.y + box.h) dy = doc_y - (box.y + box.h);
+
+        double dx = 0.0;
+        if (doc_x < box.x) dx = box.x - doc_x;
+        else if (doc_x > box.x + box.w) dx = doc_x - (box.x + box.w);
+
+        if (dy + 0.5 < best_dy || (std::abs(dy - best_dy) <= 0.5 && dx < best_dx)) {
+            best_dy = dy;
+            best_dx = dx;
+            best_box = &box;
+        }
+    }
+
+    if (best_box) {
+        zoom_anchor_valid_ = true;
+        zoom_anchor_pending_ = true;
+        zoom_anchor_image_ = best_box->image_index;
+        zoom_anchor_viewport_y_ = static_cast<double>(vy);
+        zoom_anchor_box_frac_y_ = (best_box->h > 0.0)
+            ? std::clamp((doc_y - best_box->y) / best_box->h, 0.0, 1.0)
+            : 0.5;
+        last_zoom_vx_ = vx;
+        last_zoom_vy_ = vy;
+        last_zoom_scroll_offset_ = viewport_->scroll_offset();
+        last_zoom_from_cursor_ = from_cursor;
+        last_zoom_time_ = now;
     }
 }
 
@@ -2125,9 +2241,21 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         case 25: win->set_treemap_style(VirtualViewport::TreemapRenderStyle::FILE_TYPE_COLORS); break;
         case 26: win->set_treemap_style(VirtualViewport::TreemapRenderStyle::ALL_THUMBNAILS); break;
         case 28: win->set_treemap_style(VirtualViewport::TreemapRenderStyle::CUSHION_TREEMAP); break;
-        case 7: win->target_height_ = std::min(win->target_height_ * 1.2, 800.0); win->layout_dirty_ = true; break;
-        case 8: win->target_height_ = std::max(win->target_height_ / 1.2,  50.0); win->layout_dirty_ = true; break;
-        case 9: win->target_height_ = 150.0; win->layout_dirty_ = true; break;
+        case 7:
+            win->capture_zoom_anchor(win->viewport_->w() / 2, win->viewport_->h() / 2, false);
+            win->target_height_ = std::min(win->target_height_ * 1.2, 800.0);
+            win->recompute_layout(true);
+            break;
+        case 8:
+            win->capture_zoom_anchor(win->viewport_->w() / 2, win->viewport_->h() / 2, false);
+            win->target_height_ = std::max(win->target_height_ / 1.2,  50.0);
+            win->recompute_layout(true);
+            break;
+        case 9:
+            win->capture_zoom_anchor(win->viewport_->w() / 2, win->viewport_->h() / 2, false);
+            win->target_height_ = 150.0;
+            win->recompute_layout(true);
+            break;
         case 10:
             win->toggle_info_panel();
             break;
@@ -2249,6 +2377,8 @@ void MainWindow::menu_cb(Fl_Widget* w, void* data) {
         win->sort_ascending_ = ascending;
         win->cancel_similarity();
         win->store_.sort_entries(criteria, ascending);
+        win->zoom_anchor_valid_ = false;
+        win->zoom_anchor_pending_ = false;
         win->layout_dirty_ = true;
         win->viewport_->set_scroll_offset(0);
         win->recompute_layout(true);
@@ -2314,6 +2444,8 @@ void MainWindow::poll_similarity() {
         current_generation_++;
         if (pipeline_) pipeline_->set_generation(current_generation_);
         last_visible_.clear();
+        zoom_anchor_valid_ = false;
+        zoom_anchor_pending_ = false;
         layout_dirty_ = true;
         viewport_->set_scroll_offset(0);
         recompute_layout(true);
@@ -2398,12 +2530,19 @@ int MainWindow::handle(int event) {
         }
         int dy = Fl::event_dy();
         if (Fl::event_state() & FL_CTRL) {
-            if (dy > 0) {
-                target_height_ = std::max(target_height_ / 1.2, 50.0);
-            } else if (dy < 0) {
-                target_height_ = std::min(target_height_ * 1.2, 800.0);
+            if (dy != 0) {
+                int vx = Fl::event_x() - viewport_->x();
+                int vy = Fl::event_y() - viewport_->y();
+                capture_zoom_anchor(vx, vy, true);
+                if (dy > 0) {
+                    target_height_ = std::max(target_height_ / 1.2, 50.0);
+                } else if (dy < 0) {
+                    target_height_ = std::min(target_height_ * 1.2, 800.0);
+                }
+                recompute_layout(false);
+                reprioritize_pending_ = true;
+                last_resize_time_ = std::chrono::steady_clock::now();
             }
-            layout_dirty_ = true;
             return 1;
         } else {
             int new_val = scrollbar_->value() + dy * 50;
@@ -2591,8 +2730,10 @@ bool MainWindow::queue_thumbnail(size_t id, const std::string& path, const std::
         ThumbQuality quality, bool urgent, uint64_t generation, int w, int h, uint64_t revision) {
     if (pipeline_ && pipeline_->request_thumbnail(id, path, hash, quality, urgent, generation, w, h, revision)) return true;
     if (store_.contains(id)) store_.get(id).last_requested_generation = 0;
-    reprioritize_pending_ = true;
-    last_resize_time_ = std::chrono::steady_clock::now();
+    if (urgent) {
+        reprioritize_pending_ = true;
+        last_resize_time_ = std::chrono::steady_clock::now();
+    }
     return false;
 }
 
