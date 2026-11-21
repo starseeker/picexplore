@@ -134,6 +134,7 @@ target_include_directories(pdf_test PRIVATE
     ${TIFF_INCLUDE_DIRS}
 )
 target_link_libraries(pdf_test
+    picexplore_fltk
     xxhash
     lmdb
     ${JPEG_LIBRARIES}
@@ -192,8 +193,8 @@ if(XVFB_RUN)
         ${CMAKE_SOURCE_DIR}/src/gui/app_settings.cpp
     )
     get_target_property(includes pdf_test INCLUDE_DIRECTORIES)
-    target_include_directories(gui_session_test PRIVATE ${includes} ${FLTK_INCLUDE_DIR})
-    target_link_libraries(gui_session_test PRIVATE catalog_test_support ${FLTK_LIBRARIES})
+    target_include_directories(gui_session_test PRIVATE ${includes})
+    target_link_libraries(gui_session_test PRIVATE catalog_test_support picexplore_fltk)
     target_compile_options(gui_session_test PRIVATE -UNDEBUG)
     add_test(NAME gui_session_test COMMAND ${XVFB_RUN} -a $<TARGET_FILE:gui_session_test>)
     set_tests_properties(gui_session_test PROPERTIES TIMEOUT 30)

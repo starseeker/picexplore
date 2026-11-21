@@ -10,6 +10,24 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Find required system packages
 find_package(FLTK REQUIRED)
 
+add_library(picexplore_fltk INTERFACE)
+target_include_directories(picexplore_fltk SYSTEM INTERFACE ${FLTK_INCLUDE_DIR})
+target_link_libraries(picexplore_fltk INTERFACE ${FLTK_LIBRARIES})
+
+# FindFLTK's module fallback finds the FLTK header directory but drops
+# additional compiler flags, such as the include path for Cairo-enabled FLTK.
+if(UNIX AND NOT CMAKE_CROSSCOMPILING AND FLTK_CONFIG_SCRIPT AND NOT TARGET fltk::fltk)
+    execute_process(
+        COMMAND "${FLTK_CONFIG_SCRIPT}" --cxxflags
+        RESULT_VARIABLE fltk_cxxflags_result
+        OUTPUT_VARIABLE fltk_cxxflags
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(fltk_cxxflags_result STREQUAL "0" AND fltk_cxxflags)
+        target_compile_options(picexplore_fltk INTERFACE "SHELL:${fltk_cxxflags}")
+    endif()
+endif()
+
 if(WIN32)
     # Windows: Use find_library and find_path for libjpeg
     find_path(JPEG_INCLUDE_DIR jpeglib.h)
@@ -93,7 +111,6 @@ add_executable(picexplore
 )
 
 target_include_directories(picexplore PRIVATE
-    ${FLTK_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/cli
     ${CMAKE_SOURCE_DIR}/src/gui
@@ -113,7 +130,7 @@ target_include_directories(picexplore PRIVATE
 )
 
 target_link_libraries(picexplore
-    ${FLTK_LIBRARIES}
+    picexplore_fltk
     xxhash
     lmdb
     ${JPEG_LIBRARIES}
